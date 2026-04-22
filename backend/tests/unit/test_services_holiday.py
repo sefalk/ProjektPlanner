@@ -231,9 +231,16 @@ def test_get_holidays_in_range_empty_when_none_in_period(mem_session):
     assert result == []
 
 
-def test_ensure_holidays_api_returns_empty_list_raises(mem_session):
-    """An API that returns {} (no holidays) is treated as a fetch failure."""
+def test_ensure_holidays_api_returns_empty_dict_is_valid(mem_session):
+    """An API returning {} (no holidays this year) is valid — returns empty list."""
     client = _make_client(primary_response={}, fallback_response=None)
+    result = ensure_holidays(2026, "DE", "BY", mem_session, client)
+    assert result == []
+
+
+def test_ensure_holidays_both_apis_return_error_raises(mem_session):
+    """Only raises HolidayFetchError when both APIs throw (network/HTTP error)."""
+    client = _make_client(primary_response=500, fallback_response=503)
     with pytest.raises(HolidayFetchError):
         ensure_holidays(2026, "DE", "BY", mem_session, client)
 
