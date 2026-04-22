@@ -1,0 +1,44 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment / config
+.env
+.env.*
+!.env.example
+
+# Database — NEVER commit (contains sensitive/DSGVO data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Real seed / production data — NEVER commit
+seed/real/
+data/
+
+# Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Alembic (generated files ok, but not local override)
+alembic/versions/*.pyc
