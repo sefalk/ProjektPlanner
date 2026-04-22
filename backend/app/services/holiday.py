@@ -153,25 +153,30 @@ def ensure_holidays(
 
     http = client or httpx.Client()
     holidays: list[Holiday] | None = None
+    primary_succeeded = False
 
     try:
         holidays = _fetch_primary(year, country, state, http)
+        primary_succeeded = True
     except (httpx.HTTPError, httpx.ConnectError):
         pass
 
-    if holidays is None:
+    if not primary_succeeded:
         try:
             holidays = _fetch_fallback(year, country, state, http)
         except (httpx.HTTPError, httpx.ConnectError):
             pass
 
-    if not holidays:
+    if holidays is None:
+        # Both APIs threw — no result at all
         raise HolidayFetchError(
             f"Could not fetch holidays for {year}/{country}/{state}. "
             "Both APIs unavailable and no cached data found."
         )
 
-    _store(holidays, session)
+    # holidays may be [] — valid when the year has no public holidays
+    if holidays:
+        _store(holidays, session)
     return holidays
 
 
