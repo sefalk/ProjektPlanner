@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.db import create_db_and_tables
-from app.routers import persons, programs, projects
+from app.routers import imports, persons, programs, projects
 
 
 @asynccontextmanager
@@ -30,6 +30,7 @@ app = FastAPI(
 app.include_router(programs.router)
 app.include_router(projects.router)
 app.include_router(persons.router)
+app.include_router(imports.router)
 
 
 @app.get("/health", tags=["meta"])
