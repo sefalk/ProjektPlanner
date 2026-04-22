@@ -1,0 +1,42 @@
+[project]
+name = "projektplanner-backend"
+version = "0.1.0"
+description = "ProjektPlanner backend API"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115",
+    "sqlmodel>=0.0.22",
+    "alembic>=1.14",
+    "pydantic-settings>=2.7",
+    "httpx>=0.28",
+    "python-multipart>=0.0.20",
+    "thefuzz[speedup]>=0.22",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.130",
+    "mutmut>=3.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=90"
+
+[tool.coverage.run]
+omit = ["seed/*", "alembic/*"]
+
+[tool.mutmut]
+paths_to_mutate = "app/"
+tests_dir = "tests/"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

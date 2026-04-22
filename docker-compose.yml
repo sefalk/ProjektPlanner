@@ -1,0 +1,20 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    volumes:
+      # Live-reload: source is mounted so changes take effect immediately
+      - ./backend:/app
+      # Persist SQLite DB between container restarts (gitignored)
+      - backend_data:/app/data
+    ports:
+      - "8000:8000"
+    env_file:
+      # Copy backend/.env.example → backend/.env and fill in values
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=sqlite:///./data/projektplanner.db
+
+volumes:
+  backend_data:

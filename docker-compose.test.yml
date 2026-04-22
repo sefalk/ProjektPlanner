@@ -1,0 +1,16 @@
+# Override for running the test suite.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm backend-test
+#
+# Tests use an in-memory SQLite DB — no persistent volume needed.
+
+services:
+  backend-test:
+    build:
+      context: ./backend
+      target: dev
+    volumes:
+      - ./backend:/app
+    environment:
+      - DATABASE_URL=sqlite:///:memory:
+      - DEBUG=false
+    command: pytest --cov=app --cov-report=term-missing tests/
