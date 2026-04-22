@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.db import create_db_and_tables
-from app.routers import imports, milestones, persons, programs, projects
+from app.routers import imports, milestones, persons, programs, projects, rebalancing
 
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ app.include_router(projects.router)
 app.include_router(persons.router)
 app.include_router(imports.router)
 app.include_router(milestones.router)
+app.include_router(rebalancing.router)
 
 
 @app.get("/health", tags=["meta"])
