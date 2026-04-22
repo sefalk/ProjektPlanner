@@ -1,0 +1,464 @@
+import { useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2 } from 'lucide-react'
+import {
+  projects, persons, invoices as invoiceApi,
+  type Project, type ProjectMembership, type Milestone,
+  type PersonDrift, type MilestoneSuggestion, type MonthlyInvoice, type BillingPosition,
+} from '../api'
+import Modal from '../components/Modal'
+import Table from '../components/Table'
+
+const MONTH_NAMES = [
+  '', 'Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez',
+]
+
+const STATUS_COLORS: Record<MonthlyInvoice['status'], string> = {
+  planned: 'bg-yellow-100 text-yellow-700',
+  invoiced: 'bg-blue-100 text-blue-700',
+  paid: 'bg-green-100 text-green-700',
+}
+
+const STATUS_LABELS: Record<MonthlyInvoice['status'], string> = {
+  planned: 'Geplant',
+  invoiced: 'Abgerechnet',
+  paid: 'Bezahlt',
+}
+
+type Tab = 'milestones' | 'rebalancing' | 'invoices' | 'members'
+
+export default function ProjectDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  const projectId = parseInt(id!)
+  const navigate = useNavigate()
+  const qc = useQueryClient()
+
+  const [tab, setTab] = useState<Tab>('milestones')
+  const [showCloseModal, setShowCloseModal] = useState(false)
+  const [showAddMember, setShowAddMember] = useState(false)
+  const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
+  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
+  const [error, setError] = useState<string | null>(null)
+
+  // Queries
+  const { data: project } = useQuery({ queryKey: ['project', projectId], queryFn: () => projects.get(projectId) })
+  const { data: milestones = [] } = useQuery({ queryKey: ['milestones', projectId], queryFn: () => projects.milestones(projectId) })
+  const { data: drift = [] } = useQuery({ queryKey: ['drift', projectId], queryFn: () => projects.drift(projectId) })
+  const { data: suggestions = [] } = useQuery({ queryKey: ['suggestions', projectId], queryFn: () => projects.suggestions(projectId) })
+  const { data: invoiceList = [] } = useQuery({ queryKey: ['invoices', projectId], queryFn: () => projects.invoices(projectId) })
+  const { data: memberships = [] } = useQuery({ queryKey: ['memberships', projectId], queryFn: () => projects.memberships(projectId) })
+  const { data: billingPositions = [] } = useQuery({ queryKey: ['billingPositions', projectId], queryFn: () => projects.billingPositions(projectId) })
+  const { data: personList = [] } = useQuery({ queryKey: ['persons'], queryFn: () => persons.list() })
+  const personName = (pid: number) => personList.find((p) => p.id === pid)?.name ?? String(pid)
+
+  // Mutations
+  const initMilestones = useMutation({
+    mutationFn: () => projects.initMilestones(projectId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['milestones', projectId] }),
+  })
+  const applyRebalancing = useMutation({
+    mutationFn: () => projects.applyRebalancing(projectId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['milestones', projectId] })
+      qc.invalidateQueries({ queryKey: ['suggestions', projectId] })
+    },
+  })
+  const closeMonth = useMutation({
+    mutationFn: () => projects.closeMonth(projectId, closeForm),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices', projectId] })
+      qc.invalidateQueries({ queryKey: ['milestones', projectId] })
+      setShowCloseModal(false)
+      setError(null)
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+  const reopenInvoice = useMutation({
+    mutationFn: (id: number) => invoiceApi.reopen(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices', projectId] })
+      qc.invalidateQueries({ queryKey: ['milestones', projectId] })
+    },
+  })
+  const advanceStatus = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: MonthlyInvoice['status'] }) =>
+      invoiceApi.setStatus(id, status),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['invoices', projectId] }),
+  })
+  const addMember = useMutation({
+    mutationFn: () => projects.addMembership(projectId, addMemberForm),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['memberships', projectId] })
+      setShowAddMember(false)
+      setError(null)
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+  const removeMember = useMutation({
+    mutationFn: (mid: number) => projects.deleteMembership(projectId, mid),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['memberships', projectId] }),
+  })
+
+  if (!project) return <div className="p-6 text-sm text-gray-400">Lade…</div>
+
+  const tabs: { id: Tab; label: string }[] = [
+    { id: 'milestones', label: 'Meilensteine' },
+    { id: 'rebalancing', label: 'Rebalancing' },
+    { id: 'invoices', label: 'Rechnungen' },
+    { id: 'members', label: 'Mitglieder' },
+  ]
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 px-6 py-5">
+        <button onClick={() => navigate('/projects')}
+          className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 mb-3">
+          <ChevronLeft size={14} /> Projekte
+        </button>
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-semibold text-gray-900">{project.name}</h2>
+              <span className="text-sm text-gray-400">{project.project_number}</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-0.5">{project.start_date} – {project.end_date} · {project.total_budget_hours.toLocaleString('de-DE')} Std.</p>
+          </div>
+        </div>
+        {/* Tabs */}
+        <div className="flex gap-0 mt-4 border-b border-gray-200 -mb-px">
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                tab === t.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {error && (
+        <div className="mx-6 mt-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200">{error}</div>
+      )}
+
+      <div className="p-6">
+
+        {/* ── Milestones ── */}
+        {tab === 'milestones' && (
+          <div>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
+              <button onClick={() => initMilestones.mutate()}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                <RefreshCw size={14} /> Initialisieren
+              </button>
+            </div>
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {['Monat', 'Plan (init.)', 'Aktuell', 'Status', ''].map((h) => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {milestones.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
+                  )}
+                  {milestones.map((ms) => (
+                    <tr key={ms.id}>
+                      <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[ms.month]} {ms.year}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{ms.initial_hours.toFixed(1)} h</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{ms.current_hours.toFixed(1)} h</td>
+                      <td className="px-4 py-3 text-sm">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
+                          {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-400">
+                        {ms.is_locked ? <Lock size={13} /> : <Unlock size={13} />}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── Rebalancing ── */}
+        {tab === 'rebalancing' && (
+          <div className="space-y-6">
+            {/* Drift summary */}
+            <div>
+              <h3 className="font-medium text-gray-700 mb-3">Abweichung (Ist vs. Plan)</h3>
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      {['Person', 'Geplant', 'Gebucht', 'Abweichung'].map((h) => (
+                        <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {drift.length === 0 && (
+                      <tr><td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-400">Keine Daten. Meilensteine initialisieren und Sage-Import durchführen.</td></tr>
+                    )}
+                    {drift.map((d) => (
+                      <tr key={d.person_id}>
+                        <td className="px-4 py-3 text-sm text-gray-700">{personName(d.person_id)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{d.planned_hours.toFixed(1)} h</td>
+                        <td className="px-4 py-3 text-sm text-gray-600">{d.actual_hours.toFixed(1)} h</td>
+                        <td className={`px-4 py-3 text-sm font-medium ${d.drift_hours > 0 ? 'text-red-600' : d.drift_hours < 0 ? 'text-amber-600' : 'text-gray-600'}`}>
+                          {d.drift_hours > 0 ? '+' : ''}{d.drift_hours.toFixed(1)} h
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Suggestions + apply */}
+            <div>
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-medium text-gray-700">Verteilungsvorschlag (offene Monate)</h3>
+                <button onClick={() => applyRebalancing.mutate()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                  <TrendingUp size={14} /> Anwenden
+                </button>
+              </div>
+              {suggestions.map((s) => (
+                <div key={s.milestone_id} className="mb-4 bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="px-4 py-2 bg-gray-50 text-sm font-medium text-gray-700 border-b">
+                    {MONTH_NAMES[s.month]} {s.year} · Gesamt: {s.total_current_hours.toFixed(1)} h
+                  </div>
+                  <table className="min-w-full divide-y divide-gray-100">
+                    <thead>
+                      <tr>
+                        {['Person', 'Aktuell', 'Vorschlag', 'Δ'].map((h) => (
+                          <th key={h} className="px-4 py-2 text-left text-xs text-gray-500">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {s.budgets.map((b) => (
+                        <tr key={b.budget_id}>
+                          <td className="px-4 py-2 text-sm text-gray-700">{personName(b.person_id)}</td>
+                          <td className="px-4 py-2 text-sm text-gray-600">{b.current_hours.toFixed(1)} h</td>
+                          <td className="px-4 py-2 text-sm text-blue-600 font-medium">{b.suggested_hours.toFixed(1)} h</td>
+                          <td className={`px-4 py-2 text-sm ${Math.abs(b.suggested_hours - b.current_hours) > 0.1 ? 'text-amber-600' : 'text-gray-400'}`}>
+                            {(b.suggested_hours - b.current_hours) > 0 ? '+' : ''}{(b.suggested_hours - b.current_hours).toFixed(1)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+              {suggestions.length === 0 && (
+                <p className="text-sm text-gray-400">Keine offenen Meilensteine vorhanden.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Invoices ── */}
+        {tab === 'invoices' && (
+          <div>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-medium text-gray-700">Monatliche Abrechnungen</h3>
+              <button onClick={() => { setCloseForm({ ...closeForm, billing_position_id: billingPositions[0]?.id ?? 0 }); setShowCloseModal(true) }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                <FileText size={14} /> Monat abschließen
+              </button>
+            </div>
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {['Monat', 'Stunden', 'Betrag', 'Status', 'Aktionen'].map((h) => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {invoiceList.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Abrechnungen.</td></tr>
+                  )}
+                  {invoiceList.map((inv) => (
+                    <tr key={inv.id}>
+                      <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[inv.month]} {inv.year}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{inv.total_hours.toFixed(1)} h</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">{inv.total_amount_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}</td>
+                      <td className="px-4 py-3 text-sm">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[inv.status]}`}>
+                          {STATUS_LABELS[inv.status]}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        <div className="flex gap-2">
+                          {inv.status === 'planned' && (
+                            <>
+                              <button onClick={() => advanceStatus.mutate({ id: inv.id, status: 'invoiced' })}
+                                className="text-xs text-blue-600 hover:underline">Abrechnen</button>
+                              <button onClick={() => reopenInvoice.mutate(inv.id)}
+                                className="text-xs text-gray-400 hover:text-red-500">Wiedereröffnen</button>
+                            </>
+                          )}
+                          {inv.status === 'invoiced' && (
+                            <button onClick={() => advanceStatus.mutate({ id: inv.id, status: 'paid' })}
+                              className="text-xs text-green-600 hover:underline">Als bezahlt markieren</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ── Members ── */}
+        {tab === 'members' && (
+          <div>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-medium text-gray-700">Projektmitglieder</h3>
+              <button onClick={() => setShowAddMember(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                <Plus size={14} /> Hinzufügen
+              </button>
+            </div>
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <Table
+                columns={[
+                  { key: 'person_id', header: 'Person', render: (m: ProjectMembership) => personName(m.person_id) },
+                  { key: 'from_date', header: 'Von' },
+                  { key: 'to_date', header: 'Bis' },
+                  { key: 'weekly_capacity_hours', header: 'h/Woche', render: (m: ProjectMembership) => `${m.weekly_capacity_hours} h` },
+                  { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => `${m.billing_rate_per_hour} €` },
+                  {
+                    key: 'actions', header: '',
+                    render: (m: ProjectMembership) => (
+                      <button onClick={() => removeMember.mutate(m.id)}
+                        className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                    ),
+                  },
+                ]}
+                rows={memberships}
+                keyFn={(m) => m.id}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Close month modal */}
+      {showCloseModal && (
+        <Modal title="Monat abschließen" onClose={() => { setShowCloseModal(false); setError(null) }}>
+          <form onSubmit={(e) => { e.preventDefault(); closeMonth.mutate() }} className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Jahr</label>
+                <input type="number" required min={2000} max={2100}
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={closeForm.year}
+                  onChange={(e) => setCloseForm({ ...closeForm, year: parseInt(e.target.value) })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Monat</label>
+                <select required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={closeForm.month}
+                  onChange={(e) => setCloseForm({ ...closeForm, month: parseInt(e.target.value) })}>
+                  {MONTH_NAMES.slice(1).map((name, i) => (
+                    <option key={i + 1} value={i + 1}>{name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">PSP-Position</label>
+              <select required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={closeForm.billing_position_id}
+                onChange={(e) => setCloseForm({ ...closeForm, billing_position_id: parseInt(e.target.value) })}>
+                <option value={0} disabled>— bitte wählen —</option>
+                {billingPositions.map((bp) => (
+                  <option key={bp.id} value={bp.id}>{bp.position_number} – {bp.description}</option>
+                ))}
+              </select>
+            </div>
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => { setShowCloseModal(false); setError(null) }}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              <button type="submit"
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Abschließen</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Add member modal */}
+      {showAddMember && (
+        <Modal title="Mitglied hinzufügen" onClose={() => { setShowAddMember(false); setError(null) }}>
+          <form onSubmit={(e) => { e.preventDefault(); addMember.mutate() }} className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Person</label>
+              <select required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={addMemberForm.person_id}
+                onChange={(e) => setAddMemberForm({ ...addMemberForm, person_id: parseInt(e.target.value) })}>
+                <option value={0} disabled>— bitte wählen —</option>
+                {personList.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Von</label>
+                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={addMemberForm.from_date}
+                  onChange={(e) => setAddMemberForm({ ...addMemberForm, from_date: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
+                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={addMemberForm.to_date}
+                  onChange={(e) => setAddMemberForm({ ...addMemberForm, to_date: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">h/Woche</label>
+                <input required type="number" min={1} max={60} step={0.5}
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={addMemberForm.weekly_capacity_hours}
+                  onChange={(e) => setAddMemberForm({ ...addMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
+                <input required type="number" min={0} step={0.25}
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={addMemberForm.billing_rate_per_hour}
+                  onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
+              </div>
+            </div>
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => { setShowAddMember(false); setError(null) }}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              <button type="submit"
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  )
+}
