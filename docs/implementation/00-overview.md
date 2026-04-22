@@ -23,8 +23,8 @@ main        production-ready snapshots (manual merge only)
 | 03 | `feature/holiday-service` | Holiday API fetch + cache service + tests | ✅ merged to dev |
 | 04 | `feature/planning-service` | Availability calc, vacation estimation (core math) | ✅ merged to dev |
 | 05 | `feature/crud-routers` | REST endpoints: programs, projects, persons, memberships, absences, contingents | ✅ merged to dev |
-| 06 | `feature/import-service` | Sage file parsing, project mapping, deduplication | 🔄 in progress |
-| 07 | `feature/milestone-service` | Milestone init from project setup + invariant enforcement | 🔲 planned |
+| 06 | `feature/import-service` | Sage file parsing, project mapping, deduplication | ✅ merged to dev |
+| 07 | `feature/milestone-service` | Milestone init from project setup + invariant enforcement | 🔄 in progress |
 | 08 | `feature/rebalancing-service` | Drift detection + suggestion engine | 🔲 planned |
 | 09 | `feature/invoice-service` | Month-close, lock/unlock, invoice creation | 🔲 planned |
 
