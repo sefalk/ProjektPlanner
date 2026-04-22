@@ -25,8 +25,8 @@ main        production-ready snapshots (manual merge only)
 | 05 | `feature/crud-routers` | REST endpoints: programs, projects, persons, memberships, absences, contingents | ✅ merged to dev |
 | 06 | `feature/import-service` | Sage file parsing, project mapping, deduplication | ✅ merged to dev |
 | 07 | `feature/milestone-service` | Milestone init from project setup + invariant enforcement | ✅ merged to dev |
-| 08 | `feature/rebalancing-service` | Drift detection + suggestion engine | 🔄 in progress |
-| 09 | `feature/invoice-service` | Month-close, lock/unlock, invoice creation | 🔲 planned |
+| 08 | `feature/rebalancing-service` | Drift detection + suggestion engine | ✅ merged to dev |
+| 09 | `feature/invoice-service` | Month-close, lock/unlock, invoice creation | 🔄 in progress |
 
 ## Status legend
 - 🔲 planned
