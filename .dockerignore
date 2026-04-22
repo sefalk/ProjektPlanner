@@ -1,0 +1,25 @@
+# Python
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.mutmut-cache
+
+# Data — never in image
+**/data/
+**/*.db
+**/*.sqlite
+
+# Secrets
+**/.env
+
+# Docs / git
+.git
+docs/
+*.md
+
+# Frontend (separate build context)
+frontend/
