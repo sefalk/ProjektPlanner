@@ -1,0 +1,33 @@
+"""
+Database engine and session management.
+
+get_session is a FastAPI dependency injected into all routers.
+Tests override it with an in-memory engine via app.dependency_overrides.
+"""
+
+from collections.abc import Generator
+
+from sqlmodel import Session, SQLModel, create_engine
+
+from app.config import settings
+
+engine = create_engine(
+    settings.database_url,
+    connect_args={"check_same_thread": False},  # required for SQLite
+    echo=settings.debug,
+)
+
+
+def create_db_and_tables() -> None:
+    """Create all tables. Called once on application startup."""
+    SQLModel.metadata.create_all(engine)
+
+
+def get_session() -> Generator[Session, None, None]:  # pragma: no cover
+    """FastAPI dependency that yields a database session per request.
+
+    Always overridden in tests via app.dependency_overrides — the real
+    implementation is infrastructure glue, not business logic to test here.
+    """
+    with Session(engine) as session:
+        yield session
