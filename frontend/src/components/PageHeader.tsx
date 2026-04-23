@@ -1,17 +1,23 @@
+import type { ReactNode } from 'react'
+
 interface Props {
   title: string
   subtitle?: string
-  actions?: React.ReactNode
+  actions?: ReactNode
+  back?: ReactNode
 }
 
-export default function PageHeader({ title, subtitle, actions }: Props) {
+export default function PageHeader({ title, subtitle, actions, back }: Props) {
   return (
-    <div className="flex items-start justify-between px-6 py-5 border-b border-gray-200 bg-white">
-      <div>
-        <h2 className="text-xl font-semibold text-gray-900">{title}</h2>
-        {subtitle && <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>}
+    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white sticky top-0 z-10">
+      <div className="flex items-center gap-3">
+        {back}
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 leading-tight">{title}</h2>
+          {subtitle && <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>}
+        </div>
       </div>
-      {actions && <div className="flex gap-2">{actions}</div>}
+      {actions && <div className="flex items-center gap-2 ml-4">{actions}</div>}
     </div>
   )
 }

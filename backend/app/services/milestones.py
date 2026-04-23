@@ -113,14 +113,15 @@ def initialize_milestones(project_id: int, session: Session) -> list[Milestone]:
         if existing:
             continue
 
-        # Compute per-person budgets
-        budgets: list[tuple[ProjectMembership, float]] = []
+        # Compute per-person budgets, aggregating across multiple memberships
+        # for the same person (different date ranges or allocations).
+        person_hours: dict[int, float] = {}
         for m in memberships:
             hours = _person_hours_in_month(m, year, month)
             if hours > 0:
-                budgets.append((m, hours))
+                person_hours[m.person_id] = person_hours.get(m.person_id, 0.0) + hours
 
-        total_hours = sum(h for _, h in budgets)
+        total_hours = sum(person_hours.values())
 
         milestone = Milestone(
             project_id=project_id,
@@ -132,10 +133,10 @@ def initialize_milestones(project_id: int, session: Session) -> list[Milestone]:
         session.add(milestone)
         session.flush()  # obtain milestone.id
 
-        for membership, hours in budgets:
+        for person_id, hours in person_hours.items():
             session.add(MilestonePersonBudget(
                 milestone_id=milestone.id,
-                person_id=membership.person_id,
+                person_id=person_id,
                 initial_hours=hours,
                 current_hours=hours,
             ))

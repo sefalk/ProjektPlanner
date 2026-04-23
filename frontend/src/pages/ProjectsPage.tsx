@@ -44,8 +44,8 @@ function ProjectForm({ initial, onSave, onCancel }: {
     >
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Projektnummer</label>
-          <input
+          <label htmlFor="proj-number" className="block text-xs font-medium text-gray-600 mb-1">Projektnummer</label>
+          <input id="proj-number"
             required
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.project_number}
@@ -53,9 +53,9 @@ function ProjectForm({ initial, onSave, onCancel }: {
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.)</label>
-          <input
-            required type="number" min={0.1} step={0.5}
+          <label htmlFor="proj-budget" className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.)</label>
+          <input id="proj-budget"
+            required type="number" min={0.5} step={0.5}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.total_budget_hours}
             onChange={(e) => setForm({ ...form, total_budget_hours: parseFloat(e.target.value) })}
@@ -63,8 +63,8 @@ function ProjectForm({ initial, onSave, onCancel }: {
         </div>
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
-        <input
+        <label htmlFor="proj-name" className="block text-xs font-medium text-gray-600 mb-1">Name</label>
+        <input id="proj-name"
           required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.name}
@@ -73,8 +73,8 @@ function ProjectForm({ initial, onSave, onCancel }: {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Start</label>
-          <input
+          <label htmlFor="proj-start" className="block text-xs font-medium text-gray-600 mb-1">Start</label>
+          <input id="proj-start"
             required type="date"
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.start_date}
@@ -82,8 +82,8 @@ function ProjectForm({ initial, onSave, onCancel }: {
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Ende</label>
-          <input
+          <label htmlFor="proj-end" className="block text-xs font-medium text-gray-600 mb-1">Ende</label>
+          <input id="proj-end"
             required type="date"
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.end_date}

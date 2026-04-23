@@ -14,22 +14,22 @@ function ProgramForm({ onSave, onCancel }: {
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Programmnummer</label>
-        <input required
+        <label htmlFor="prog-number" className="block text-xs font-medium text-gray-600 mb-1">Programmnummer</label>
+        <input id="prog-number" required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.program_number}
           onChange={(e) => setForm({ ...form, program_number: e.target.value })} />
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Name</label>
-        <input required
+        <label htmlFor="prog-name" className="block text-xs font-medium text-gray-600 mb-1">Name</label>
+        <input id="prog-name" required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })} />
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Kunde</label>
-        <input required
+        <label htmlFor="prog-customer" className="block text-xs font-medium text-gray-600 mb-1">Kunde</label>
+        <input id="prog-customer" required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.customer}
           onChange={(e) => setForm({ ...form, customer: e.target.value })} />
@@ -67,7 +67,7 @@ export default function ProgramsPage() {
     {
       key: 'actions', header: '',
       render: (p: Program) => (
-        <button onClick={(e) => { e.stopPropagation(); remove.mutate(p.id) }}
+        <button aria-label={`${p.name} löschen`} onClick={(e) => { e.stopPropagation(); remove.mutate(p.id) }}
           className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
       ),
     },

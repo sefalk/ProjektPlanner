@@ -20,8 +20,8 @@ function PersonForm({ initial, onSave, onCancel }: {
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Name (Anzeige)</label>
-        <input
+        <label htmlFor="person-name" className="block text-xs font-medium text-gray-600 mb-1">Name (Anzeige)</label>
+        <input id="person-name"
           required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.name}
@@ -29,8 +29,8 @@ function PersonForm({ initial, onSave, onCancel }: {
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Sage-Mitarbeitername</label>
-        <input
+        <label htmlFor="person-sage" className="block text-xs font-medium text-gray-600 mb-1">Sage-Mitarbeitername</label>
+        <input id="person-sage"
           required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.sage_employee_name}
@@ -38,8 +38,8 @@ function PersonForm({ initial, onSave, onCancel }: {
         />
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Wochenstunden (Standard)</label>
-        <input
+        <label htmlFor="person-hours" className="block text-xs font-medium text-gray-600 mb-1">Wochenstunden (Standard)</label>
+        <input id="person-hours"
           required type="number" min={1} max={60} step={0.5}
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.default_weekly_hours}
@@ -92,6 +92,7 @@ export default function PersonsPage() {
       key: 'actions', header: '',
       render: (p: Person) => (
         <button
+          aria-label={`${p.name} löschen`}
           onClick={(e) => { e.stopPropagation(); remove.mutate(p.id) }}
           className="text-gray-400 hover:text-red-500 transition-colors"
         >

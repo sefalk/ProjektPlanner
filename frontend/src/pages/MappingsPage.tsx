@@ -15,15 +15,15 @@ function MappingForm({ onSave, onCancel }: {
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Sage-Projektname</label>
-        <input required
+        <label htmlFor="map-sage-name" className="block text-xs font-medium text-gray-600 mb-1">Sage-Projektname</label>
+        <input id="map-sage-name" required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.sage_project_name}
           onChange={(e) => setForm({ ...form, sage_project_name: e.target.value })} />
       </div>
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Intern. Projekt</label>
-        <select required
+        <label htmlFor="map-project" className="block text-xs font-medium text-gray-600 mb-1">Intern. Projekt</label>
+        <select id="map-project" required
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.project_id}
           onChange={(e) => setForm({ ...form, project_id: parseInt(e.target.value) })}>
@@ -69,7 +69,7 @@ export default function MappingsPage() {
     {
       key: 'actions', header: '',
       render: (m: SageProjectMapping) => (
-        <button onClick={(e) => { e.stopPropagation(); remove.mutate(m.id) }}
+        <button aria-label={`Mapping ${m.sage_project_name} löschen`} onClick={(e) => { e.stopPropagation(); remove.mutate(m.id) }}
           className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
       ),
     },
