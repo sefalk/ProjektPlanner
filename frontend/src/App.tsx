@@ -1,16 +1,19 @@
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { FolderOpen, Users, Briefcase, Map, LayoutDashboard, CalendarDays } from 'lucide-react'
+import { FolderOpen, Users, Briefcase, Map, LayoutDashboard, CalendarDays, ArrowDownToLine } from 'lucide-react'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectDetailPage from './pages/ProjectDetailPage'
 import PersonsPage from './pages/PersonsPage'
 import ProgramsPage from './pages/ProgramsPage'
 import MappingsPage from './pages/MappingsPage'
 import CalendarPage from './pages/CalendarPage'
+import ImportPage from './pages/ImportPage'
+import PersonDetailPage from './pages/PersonDetailPage'
 
 const navItems = [
   { to: '/projects', label: 'Projekte', icon: FolderOpen },
   { to: '/persons', label: 'Personen', icon: Users },
   { to: '/calendar', label: 'Kalender', icon: CalendarDays },
+  { to: '/import', label: 'Sage-Import', icon: ArrowDownToLine },
   { to: '/programs', label: 'Programme', icon: Briefcase },
   { to: '/mappings', label: 'Sage-Mapping', icon: Map },
 ]
@@ -59,7 +62,9 @@ export default function App() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
           <Route path="/persons" element={<PersonsPage />} />
+          <Route path="/persons/:id" element={<PersonDetailPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/import" element={<ImportPage />} />
           <Route path="/programs" element={<ProgramsPage />} />
           <Route path="/mappings" element={<MappingsPage />} />
         </Routes>

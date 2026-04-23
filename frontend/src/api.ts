@@ -167,6 +167,23 @@ export const projects = {
     req<MonthlyInvoice>('POST', `/projects/${id}/invoices/close`, d),
 };
 
+export interface PersonAbsence {
+  id: number;
+  person_id: number;
+  start_date: string;
+  end_date: string | null;
+  absence_type: 'vacation' | 'sick' | 'training';
+  status: 'planned' | 'confirmed' | 'ongoing';
+  note: string;
+}
+
+export interface VacationContingent {
+  id: number;
+  person_id: number;
+  year: number;
+  total_days: number;
+}
+
 // ─── Persons ─────────────────────────────────────────────────────────────────
 
 export const persons = {
@@ -175,6 +192,18 @@ export const persons = {
   get: (id: number) => req<Person>('GET', `/persons/${id}`),
   update: (id: number, d: Omit<Person, 'id'>) => req<Person>('PUT', `/persons/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/persons/${id}`),
+  absences: (id: number) => req<PersonAbsence[]>('GET', `/persons/${id}/absences`),
+  addAbsence: (id: number, d: Omit<PersonAbsence, 'id' | 'person_id'>) =>
+    req<PersonAbsence>('POST', `/persons/${id}/absences`, d),
+  updateAbsence: (personId: number, absenceId: number, d: Omit<PersonAbsence, 'id' | 'person_id'>) =>
+    req<PersonAbsence>('PUT', `/persons/${personId}/absences/${absenceId}`, d),
+  deleteAbsence: (personId: number, absenceId: number) =>
+    req<void>('DELETE', `/persons/${personId}/absences/${absenceId}`),
+  vacationContingents: (id: number) => req<VacationContingent[]>('GET', `/persons/${id}/vacation-contingents`),
+  addVacationContingent: (id: number, d: Omit<VacationContingent, 'id' | 'person_id'>) =>
+    req<VacationContingent>('POST', `/persons/${id}/vacation-contingents`, d),
+  updateVacationContingent: (personId: number, contingentId: number, d: { year: number; total_days: number }) =>
+    req<VacationContingent>('PUT', `/persons/${personId}/vacation-contingents/${contingentId}`, d),
 };
 
 // ─── Invoices ────────────────────────────────────────────────────────────────
@@ -248,4 +277,10 @@ export interface CalendarResponse {
 export const calendar = {
   get: (year: number, month: number) =>
     req<CalendarResponse>('GET', `/calendar?year=${year}&month=${month}`),
+};
+
+// ─── Imports ─────────────────────────────────────────────────────────────────
+
+export const imports = {
+  list: () => req<ImportBatch[]>('GET', '/imports'),
 };

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2 } from 'lucide-react'
 import { persons, type Person } from '../api'
 import PageHeader from '../components/PageHeader'
@@ -62,6 +63,7 @@ function PersonForm({ initial, onSave, onCancel }: {
 
 export default function PersonsPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [showCreate, setShowCreate] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -124,7 +126,7 @@ export default function PersonsPage() {
           <p className="text-sm text-gray-400">Lade…</p>
         ) : (
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <Table columns={columns} rows={data} keyFn={(p) => p.id} />
+            <Table columns={columns} rows={data} keyFn={(p) => p.id} onRowClick={(p) => navigate(`/persons/${p.id}`)} />
           </div>
         )}
       </div>
