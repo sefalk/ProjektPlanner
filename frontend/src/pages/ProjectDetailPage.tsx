@@ -4,8 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2 } from 'lucide-react'
 import {
   projects, persons, invoices as invoiceApi,
-  type Project, type ProjectMembership, type Milestone,
-  type PersonDrift, type MilestoneSuggestion, type MonthlyInvoice, type BillingPosition,
+  type ProjectMembership, type MonthlyInvoice,
 } from '../api'
 import Modal from '../components/Modal'
 import Table from '../components/Table'

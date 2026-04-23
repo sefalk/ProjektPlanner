@@ -196,3 +196,56 @@ export const mappings = {
     req<SageProjectMapping>('PUT', `/sage-project-mappings/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/sage-project-mappings/${id}`),
 };
+
+// ─── Calendar ────────────────────────────────────────────────────────────────
+
+export interface CalendarHoliday {
+  holiday_date: string;
+  name: string;
+  is_workday: boolean;
+}
+
+export interface CalendarAbsence {
+  id: number;
+  start_date: string;
+  end_date: string | null;
+  absence_type: 'vacation' | 'sick' | 'training';
+  status: 'planned' | 'confirmed' | 'ongoing';
+}
+
+export interface CalendarMembership {
+  project_id: number;
+  project_number: string;
+  project_name: string;
+  from_date: string;
+  to_date: string;
+}
+
+export interface CalendarPerson {
+  id: number;
+  name: string;
+  absences: CalendarAbsence[];
+  memberships: CalendarMembership[];
+}
+
+export interface CalendarMilestone {
+  project_id: number;
+  project_number: string;
+  year: number;
+  month: number;
+  status: 'open' | 'closed';
+  is_locked: boolean;
+}
+
+export interface CalendarResponse {
+  year: number;
+  month: number;
+  holidays: CalendarHoliday[];
+  persons: CalendarPerson[];
+  milestones: CalendarMilestone[];
+}
+
+export const calendar = {
+  get: (year: number, month: number) =>
+    req<CalendarResponse>('GET', `/calendar?year=${year}&month=${month}`),
+};

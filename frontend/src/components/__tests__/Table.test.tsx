@@ -15,7 +15,7 @@ const rows = [
 
 describe('Table', () => {
   it('renders column headers', () => {
-    render(<Table columns={columns} rows={[]} keyFn={(r) => r.id} />)
+    render(<Table columns={columns} rows={[] as typeof rows} keyFn={(r) => r.id} />)
     expect(screen.getByRole('columnheader', { name: /name/i })).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: /wert/i })).toBeInTheDocument()
   })
@@ -27,12 +27,12 @@ describe('Table', () => {
   })
 
   it('shows empty state when rows is empty', () => {
-    render(<Table columns={columns} rows={[]} keyFn={(r) => r.id} />)
+    render(<Table columns={columns} rows={[] as typeof rows} keyFn={(r) => r.id} />)
     expect(screen.getByText(/keine einträge/i)).toBeInTheDocument()
   })
 
   it('shows custom empty message', () => {
-    render(<Table columns={columns} rows={[]} keyFn={(r) => r.id} emptyMessage="Nichts gefunden." />)
+    render(<Table columns={columns} rows={[] as typeof rows} keyFn={(r) => r.id} emptyMessage="Nichts gefunden." />)
     expect(screen.getByText('Nichts gefunden.')).toBeInTheDocument()
   })
 
