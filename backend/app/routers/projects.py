@@ -38,6 +38,13 @@ class MembershipCreate(SQLModel):
     billing_rate_per_hour: float = Field(ge=0)
 
 
+class MembershipUpdate(SQLModel):
+    from_date: str
+    to_date: str
+    weekly_capacity_hours: float = Field(gt=0, le=60)
+    billing_rate_per_hour: float = Field(ge=0)
+
+
 class MembershipWithWarnings(SQLModel):
     id: int
     project_id: int
@@ -258,6 +265,31 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         to_date=membership.to_date,
         weekly_capacity_hours=membership.weekly_capacity_hours,
         billing_rate_per_hour=membership.billing_rate_per_hour,
+        warnings=warnings,
+    )
+
+
+@router.put("/{project_id}/memberships/{membership_id}", response_model=MembershipWithWarnings)
+def update_membership(project_id: int, membership_id: int, body: MembershipUpdate, session: SessionDep):
+    m = session.get(ProjectMembership, membership_id)
+    if not m or m.project_id != project_id:
+        raise HTTPException(404, "Membership not found.")
+    m.from_date = date.fromisoformat(body.from_date)
+    m.to_date = date.fromisoformat(body.to_date)
+    m.weekly_capacity_hours = body.weekly_capacity_hours
+    m.billing_rate_per_hour = body.billing_rate_per_hour
+    session.add(m)
+    session.commit()
+    session.refresh(m)
+    warnings = _membership_overbooking_warnings(m, session)
+    return MembershipWithWarnings(
+        id=m.id,
+        project_id=m.project_id,
+        person_id=m.person_id,
+        from_date=m.from_date,
+        to_date=m.to_date,
+        weekly_capacity_hours=m.weekly_capacity_hours,
+        billing_rate_per_hour=m.billing_rate_per_hour,
         warnings=warnings,
     )
 

@@ -51,6 +51,7 @@ export default function MappingsPage() {
   const qc = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
   const [editMapping, setEditMapping] = useState<SageProjectMapping | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<SageProjectMapping | null>(null)
 
   const { data = [], isLoading } = useQuery({ queryKey: ['mappings'], queryFn: mappings.list })
   const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projects.list })
@@ -89,7 +90,7 @@ export default function MappingsPage() {
           </button>
           <button
             aria-label={`Mapping ${m.sage_project_name} löschen`}
-            onClick={() => remove.mutate(m.id)}
+            onClick={() => setConfirmDelete(m)}
             className="p-1 text-gray-400 hover:text-red-500 transition-colors"
           >
             <Trash2 size={13} />
@@ -132,6 +133,23 @@ export default function MappingsPage() {
             onSave={(d) => update.mutate({ id: editMapping.id, data: d })}
             onCancel={() => setEditMapping(null)}
           />
+        </Modal>
+      )}
+
+      {confirmDelete && (
+        <Modal title="Mapping löschen" onClose={() => setConfirmDelete(null)}>
+          <p className="text-sm text-gray-600 mb-4">
+            Mapping <strong>{confirmDelete.sage_project_name}</strong> löschen?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmDelete(null)}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+            <button
+              onClick={() => { remove.mutate(confirmDelete.id); setConfirmDelete(null) }}
+              className="px-4 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">
+              Löschen
+            </button>
+          </div>
         </Modal>
       )}
     </div>

@@ -212,3 +212,18 @@ def test_update_vacation_contingent(client):
     r = client.put(f"/persons/{person['id']}/vacation-contingents/{vc['id']}", json={"year": 2027, "total_days": 25.0})
     assert r.status_code == 200
     assert r.json()["total_days"] == 25.0
+
+
+def test_delete_vacation_contingent(client):
+    person = client.post("/persons", json=_person()).json()
+    vc = client.post(f"/persons/{person['id']}/vacation-contingents", json={"year": 2027, "total_days": 30.0}).json()
+    assert client.delete(f"/persons/{person['id']}/vacation-contingents/{vc['id']}").status_code == 204
+    r = client.get(f"/persons/{person['id']}/vacation-contingents")
+    assert all(c["id"] != vc["id"] for c in r.json())
+
+
+def test_delete_vacation_contingent_wrong_person(client):
+    p1 = client.post("/persons", json=_person("Alice")).json()
+    p2 = client.post("/persons", json=_person("Bob")).json()
+    vc = client.post(f"/persons/{p1['id']}/vacation-contingents", json={"year": 2027, "total_days": 30.0}).json()
+    assert client.delete(f"/persons/{p2['id']}/vacation-contingents/{vc['id']}").status_code == 404

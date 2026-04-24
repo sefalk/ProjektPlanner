@@ -289,3 +289,12 @@ def update_contingent(person_id: int, contingent_id: int, body: ContingentCreate
     session.commit()
     session.refresh(contingent)
     return contingent
+
+
+@router.delete("/{person_id}/vacation-contingents/{contingent_id}", status_code=204)
+def delete_contingent(person_id: int, contingent_id: int, session: SessionDep):
+    contingent = session.get(VacationContingent, contingent_id)
+    if not contingent or contingent.person_id != person_id:
+        raise HTTPException(404, "Vacation contingent not found.")
+    session.delete(contingent)
+    session.commit()

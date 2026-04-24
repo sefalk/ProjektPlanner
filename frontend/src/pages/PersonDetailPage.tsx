@@ -314,8 +314,10 @@ export default function PersonDetailPage() {
   const [tab, setTab] = useState<Tab>('absences')
   const [showEdit, setShowEdit] = useState(false)
   const [showAddAbsence, setShowAddAbsence] = useState(false)
+  const [editingAbsence, setEditingAbsence] = useState<PersonAbsence | null>(null)
   const [showAddContingent, setShowAddContingent] = useState(false)
   const [editingContingent, setEditingContingent] = useState<VacationContingent | null>(null)
+  const [confirmDeleteContingent, setConfirmDeleteContingent] = useState<VacationContingent | null>(null)
   const [showAddMembership, setShowAddMembership] = useState(false)
   const [confirmDeleteMembership, setConfirmDeleteMembership] = useState<PersonMembershipDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -347,6 +349,11 @@ export default function PersonDetailPage() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['absences', personId] }); setShowAddAbsence(false); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
+  const updateAbsence = useMutation({
+    mutationFn: (d: Omit<PersonAbsence, 'id' | 'person_id'>) => persons.updateAbsence(personId, editingAbsence!.id, d),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['absences', personId] }); setEditingAbsence(null); setError(null) },
+    onError: (e: Error) => setError(e.message),
+  })
   const deleteAbsence = useMutation({
     mutationFn: (absenceId: number) => persons.deleteAbsence(personId, absenceId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['absences', personId] }),
@@ -361,6 +368,10 @@ export default function PersonDetailPage() {
       persons.updateVacationContingent(personId, id, d),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setEditingContingent(null); setError(null) },
     onError: (e: Error) => setError(e.message),
+  })
+  const deleteContingent = useMutation({
+    mutationFn: (contingentId: number) => persons.deleteVacationContingent(personId, contingentId),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setConfirmDeleteContingent(null) },
   })
   const addMembership = useMutation({
     mutationFn: (d: Omit<ProjectMembership, 'id' | 'project_id'>) =>
@@ -460,13 +471,18 @@ export default function PersonDetailPage() {
                       <td className="px-4 py-3 text-sm text-gray-600">{STATUS_LABELS[a.status]}</td>
                       <td className="px-4 py-3 text-sm text-gray-400 max-w-[12rem] truncate">{a.note}</td>
                       <td className="px-4 py-3 text-sm">
-                        <button
-                          aria-label="Abwesenheit löschen"
-                          onClick={() => deleteAbsence.mutate(a.id)}
-                          className="text-gray-400 hover:text-red-500"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            aria-label="Abwesenheit bearbeiten"
+                            onClick={() => { setEditingAbsence(a); setError(null) }}
+                            className="text-gray-400 hover:text-blue-500"
+                          ><Pencil size={14} /></button>
+                          <button
+                            aria-label="Abwesenheit löschen"
+                            onClick={() => deleteAbsence.mutate(a.id)}
+                            className="text-gray-400 hover:text-red-500"
+                          ><Trash2 size={14} /></button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -504,13 +520,22 @@ export default function PersonDetailPage() {
                       <td className="px-4 py-3 text-sm font-medium text-gray-700">{c.year}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{c.total_days} Tage</td>
                       <td className="px-4 py-3 text-sm">
-                        <button
-                          aria-label={`Kontingent ${c.year} bearbeiten`}
-                          onClick={() => setEditingContingent(c)}
-                          className="text-gray-400 hover:text-blue-500 transition-colors"
-                        >
-                          <Pencil size={14} />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            aria-label={`Kontingent ${c.year} bearbeiten`}
+                            onClick={() => setEditingContingent(c)}
+                            className="text-gray-400 hover:text-blue-500 transition-colors"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            aria-label={`Kontingent ${c.year} löschen`}
+                            onClick={() => setConfirmDeleteContingent(c)}
+                            className="text-gray-400 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -592,6 +617,17 @@ export default function PersonDetailPage() {
         </Modal>
       )}
 
+      {/* Edit absence modal */}
+      {editingAbsence && (
+        <Modal title="Abwesenheit bearbeiten" onClose={() => { setEditingAbsence(null); setError(null) }}>
+          <AbsenceForm
+            initial={editingAbsence}
+            onSave={(d) => updateAbsence.mutate(d)}
+            onCancel={() => { setEditingAbsence(null); setError(null) }}
+          />
+        </Modal>
+      )}
+
       {/* Add contingent modal */}
       {showAddContingent && (
         <Modal title="Urlaubskontingent" onClose={() => { setShowAddContingent(false); setError(null) }}>
@@ -622,6 +658,24 @@ export default function PersonDetailPage() {
             onSave={(d) => addMembership.mutate(d)}
             onCancel={() => { setShowAddMembership(false); setError(null) }}
           />
+        </Modal>
+      )}
+
+      {/* Confirm delete contingent */}
+      {confirmDeleteContingent && (
+        <Modal title="Kontingent löschen" onClose={() => setConfirmDeleteContingent(null)}>
+          <p className="text-sm text-gray-600 mb-4">
+            Urlaubskontingent <strong>{confirmDeleteContingent.year}</strong> ({confirmDeleteContingent.total_days} Tage) löschen?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmDeleteContingent(null)}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+            <button
+              onClick={() => deleteContingent.mutate(confirmDeleteContingent.id)}
+              className="px-4 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">
+              Löschen
+            </button>
+          </div>
         </Modal>
       )}
 

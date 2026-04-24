@@ -37,6 +37,8 @@ export default function ProjectDetailPage() {
   const [tab, setTab] = useState<Tab>('milestones')
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
+  const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
+  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
   const [editBudget, setEditBudget] = useState<{ milestoneId: number; personId: number; personName: string; currentHours: number } | null>(null)
@@ -118,6 +120,16 @@ export default function ProjectDetailPage() {
       if (result.warnings && result.warnings.length > 0) {
         setMemberWarnings(result.warnings)
       }
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+  const updateMember = useMutation({
+    mutationFn: () => projects.updateMembership(projectId, editMember!.id, editMemberForm),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['memberships', projectId] })
+      setEditMember(null)
+      setError(null)
+      if (result.warnings && result.warnings.length > 0) setMemberWarnings(result.warnings)
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -498,8 +510,14 @@ export default function ProjectDetailPage() {
                   {
                     key: 'actions', header: '',
                     render: (m: ProjectMembership) => (
-                      <button onClick={() => removeMember.mutate(m.id)}
-                        className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour }); setError(null) }}
+                          className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
+                        ><Pencil size={14} /></button>
+                        <button onClick={() => removeMember.mutate(m.id)}
+                          className="text-gray-400 hover:text-red-500" aria-label="Entfernen"><Trash2 size={14} /></button>
+                      </div>
                     ),
                   },
                 ]}
@@ -652,6 +670,52 @@ export default function ProjectDetailPage() {
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={() => { setShowAddMember(false); setError(null) }}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              <button type="submit"
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Edit membership modal */}
+      {editMember && (
+        <Modal title="Zuweisung bearbeiten" onClose={() => { setEditMember(null); setError(null) }}>
+          <p className="text-xs text-gray-500 mb-3">Person: <strong>{personName(editMember.person_id)}</strong></p>
+          <form onSubmit={(e) => { e.preventDefault(); updateMember.mutate() }} className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Von</label>
+                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={editMemberForm.from_date}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, from_date: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
+                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={editMemberForm.to_date}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, to_date: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">h/Woche</label>
+                <input required type="number" min={1} max={60} step={0.5}
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={editMemberForm.weekly_capacity_hours}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
+                <input required type="number" min={0} step={0.25}
+                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                  value={editMemberForm.billing_rate_per_hour}
+                  onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
+              </div>
+            </div>
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => { setEditMember(null); setError(null) }}
                 className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
               <button type="submit"
                 className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
