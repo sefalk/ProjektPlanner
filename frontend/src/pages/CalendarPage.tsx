@@ -185,8 +185,8 @@ function MilestoneBadge({ ms }: { ms: CalendarMilestone }) {
       </Link>
       <div className="invisible group-hover:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-52 bg-gray-800 text-white text-xs rounded p-2 shadow-lg pointer-events-none">
         <p className="font-semibold mb-1">{ms.project_number}</p>
-        <p className="flex justify-between"><span>Plan:</span><span>{ms.initial_hours.toFixed(1)} h</span></p>
-        <p className="flex justify-between"><span>Aktuell:</span><span>{ms.current_hours.toFixed(1)} h</span></p>
+        <p className="flex justify-between"><span>Plan:</span><span>{(ms.initial_hours ?? 0).toFixed(1)} h</span></p>
+        <p className="flex justify-between"><span>Aktuell:</span><span>{(ms.current_hours ?? 0).toFixed(1)} h</span></p>
         <p className="flex justify-between mt-1"><span>Status:</span><span>{ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}{ms.is_locked ? ' · gesperrt' : ''}</span></p>
         <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800" />
       </div>

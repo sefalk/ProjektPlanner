@@ -316,8 +316,8 @@ export interface CalendarMilestone {
   month: number;
   status: 'open' | 'closed';
   is_locked: boolean;
-  initial_hours: number;
-  current_hours: number;
+  initial_hours: number | undefined;
+  current_hours: number | undefined;
 }
 
 export interface CalendarResponse {
