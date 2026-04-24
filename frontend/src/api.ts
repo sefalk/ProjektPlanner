@@ -222,9 +222,21 @@ export interface VacationContingent {
 
 // ─── Persons ─────────────────────────────────────────────────────────────────
 
+export interface PersonMembershipDetail {
+  id: number;
+  project_id: number;
+  project_number: string;
+  project_name: string;
+  from_date: string;
+  to_date: string;
+  weekly_capacity_hours: number;
+  billing_rate_per_hour: number;
+}
+
 export const persons = {
   list: () => req<Person[]>('GET', '/persons'),
   withProjects: () => req<PersonWithProjects[]>('GET', '/persons/with-projects'),
+  memberships: (id: number) => req<PersonMembershipDetail[]>('GET', `/persons/${id}/memberships`),
   create: (d: Omit<Person, 'id'>) => req<Person>('POST', '/persons', d),
   get: (id: number) => req<Person>('GET', `/persons/${id}`),
   update: (id: number, d: Omit<Person, 'id'>) => req<Person>('PUT', `/persons/${id}`, d),

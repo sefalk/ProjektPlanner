@@ -138,6 +138,46 @@ def delete_person(person_id: int, session: SessionDep):
 
 
 # ---------------------------------------------------------------------------
+# Memberships (read + delete from person perspective)
+# ---------------------------------------------------------------------------
+
+class PersonMembershipOut(SQLModel):
+    id: int
+    project_id: int
+    project_number: str
+    project_name: str
+    from_date: date
+    to_date: date
+    weekly_capacity_hours: float
+    billing_rate_per_hour: float
+
+
+@router.get("/{person_id}/memberships", response_model=list[PersonMembershipOut])
+def list_person_memberships(person_id: int, session: SessionDep):
+    if not session.get(Person, person_id):
+        raise HTTPException(404, "Person not found.")
+    memberships = session.exec(
+        select(ProjectMembership).where(ProjectMembership.person_id == person_id)
+        .order_by(ProjectMembership.from_date)
+    ).all()
+    result = []
+    for m in memberships:
+        proj = session.get(Project, m.project_id)
+        if proj:
+            result.append(PersonMembershipOut(
+                id=m.id,
+                project_id=proj.id,
+                project_number=proj.project_number,
+                project_name=proj.name,
+                from_date=m.from_date,
+                to_date=m.to_date,
+                weekly_capacity_hours=m.weekly_capacity_hours,
+                billing_rate_per_hour=m.billing_rate_per_hour,
+            ))
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Absences
 # ---------------------------------------------------------------------------
 

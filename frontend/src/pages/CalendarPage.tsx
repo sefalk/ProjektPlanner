@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ChartTooltip,
@@ -120,7 +121,7 @@ function DayCell({
     if (holidayName && showHolidays) title += ` · ${holidayName}`
     return (
       <td className={`h-8 min-w-[2rem] w-8 border-r border-gray-100 text-center text-[10px] font-medium leading-8 select-none ${bg}`} title={title}>
-        {label}
+        <Link to={`/persons/${person.id}`} className="block w-full h-full">{label}</Link>
       </td>
     )
   }
@@ -174,13 +175,14 @@ function LayerChip({ color, label, active, onToggle }: { color: string; label: s
 function MilestoneBadge({ ms }: { ms: CalendarMilestone }) {
   return (
     <span className="relative group cursor-default">
-      <span
+      <Link
+        to={`/projects/${ms.project_id}`}
         className={`px-2 py-0.5 rounded-full text-xs font-medium ${
           ms.is_locked ? 'bg-green-100 text-green-700' : ms.status === 'closed' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'
         }`}
       >
         {ms.project_number}
-      </span>
+      </Link>
       <div className="invisible group-hover:visible absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-52 bg-gray-800 text-white text-xs rounded p-2 shadow-lg pointer-events-none">
         <p className="font-semibold mb-1">{ms.project_number}</p>
         <p className="flex justify-between"><span>Plan:</span><span>{ms.initial_hours.toFixed(1)} h</span></p>
@@ -423,8 +425,10 @@ export default function CalendarPage() {
                   </tr>
                 ) : visiblePersons.map((person, idx) => (
                   <tr key={person.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
-                    <td className="sticky left-0 z-10 bg-inherit px-3 py-0 border-b border-r border-gray-100 text-sm font-medium text-gray-700 whitespace-nowrap">
-                      {person.name}
+                    <td className="sticky left-0 z-10 bg-inherit px-3 py-0 border-b border-r border-gray-100 text-sm font-medium whitespace-nowrap">
+                      <Link to={`/persons/${person.id}`} className="text-gray-700 hover:text-blue-600 hover:underline">
+                        {person.name}
+                      </Link>
                     </td>
                     {days.map((day) => {
                       const dateStr = isoDate(year, month, day)

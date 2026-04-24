@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, Pencil, Plus, Trash2 } from 'lucide-react'
-import { persons, type Person, type PersonAbsence, type VacationContingent } from '../api'
+import { persons, projects as projectsApi, type Person, type PersonAbsence, type VacationContingent, type PersonMembershipDetail, type ProjectMembership } from '../api'
 import Modal from '../components/Modal'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -225,7 +225,85 @@ function ContingentForm({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-type Tab = 'absences' | 'contingents'
+type Tab = 'absences' | 'contingents' | 'projects'
+
+// ─── Membership form ──────────────────────────────────────────────────────────
+
+function MembershipForm({
+  personId,
+  defaultBillingRate,
+  onSave,
+  onCancel,
+}: {
+  personId: number
+  defaultBillingRate: number | null
+  onSave: (d: Omit<ProjectMembership, 'id' | 'project_id'>) => void
+  onCancel: () => void
+}) {
+  const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list })
+  const [form, setForm] = useState({
+    person_id: personId,
+    from_date: '',
+    to_date: '',
+    weekly_capacity_hours: 40,
+    billing_rate_per_hour: defaultBillingRate ?? 0,
+    project_id: 0,
+  })
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
+      <div>
+        <label htmlFor="ms-project" className="block text-xs font-medium text-gray-600 mb-1">Projekt</label>
+        <select id="ms-project" required
+          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={form.project_id || ''}
+          onChange={(e) => setForm((f) => ({ ...f, project_id: parseInt(e.target.value) }))}>
+          <option value="">— Projekt wählen —</option>
+          {projectList.map((p) => (
+            <option key={p.id} value={p.id}>{p.project_number} – {p.name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label htmlFor="ms-from" className="block text-xs font-medium text-gray-600 mb-1">Von</label>
+          <input id="ms-from" required type="date"
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={form.from_date}
+            onChange={(e) => setForm((f) => ({ ...f, from_date: e.target.value }))} />
+        </div>
+        <div>
+          <label htmlFor="ms-to" className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
+          <input id="ms-to" required type="date"
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={form.to_date}
+            onChange={(e) => setForm((f) => ({ ...f, to_date: e.target.value }))} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label htmlFor="ms-hours" className="block text-xs font-medium text-gray-600 mb-1">Kapazität (h/Woche)</label>
+          <input id="ms-hours" required type="number" min={0.5} max={60} step={0.5}
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={form.weekly_capacity_hours}
+            onChange={(e) => setForm((f) => ({ ...f, weekly_capacity_hours: parseFloat(e.target.value) }))} />
+        </div>
+        <div>
+          <label htmlFor="ms-rate" className="block text-xs font-medium text-gray-600 mb-1">Verrechnungssatz (€/h)</label>
+          <input id="ms-rate" required type="number" min={0} step={1}
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={form.billing_rate_per_hour}
+            onChange={(e) => setForm((f) => ({ ...f, billing_rate_per_hour: parseFloat(e.target.value) }))} />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 pt-2">
+        <button type="button" onClick={onCancel}
+          className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+        <button type="submit"
+          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+      </div>
+    </form>
+  )
+}
 
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -238,6 +316,8 @@ export default function PersonDetailPage() {
   const [showAddAbsence, setShowAddAbsence] = useState(false)
   const [showAddContingent, setShowAddContingent] = useState(false)
   const [editingContingent, setEditingContingent] = useState<VacationContingent | null>(null)
+  const [showAddMembership, setShowAddMembership] = useState(false)
+  const [confirmDeleteMembership, setConfirmDeleteMembership] = useState<PersonMembershipDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const { data: person } = useQuery({
@@ -251,6 +331,10 @@ export default function PersonDetailPage() {
   const { data: contingents = [] } = useQuery({
     queryKey: ['contingents', personId],
     queryFn: () => persons.vacationContingents(personId),
+  })
+  const { data: memberships = [] } = useQuery({
+    queryKey: ['person-memberships', personId],
+    queryFn: () => persons.memberships(personId),
   })
 
   const updatePerson = useMutation({
@@ -277,6 +361,17 @@ export default function PersonDetailPage() {
       persons.updateVacationContingent(personId, id, d),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setEditingContingent(null); setError(null) },
     onError: (e: Error) => setError(e.message),
+  })
+  const addMembership = useMutation({
+    mutationFn: (d: Omit<ProjectMembership, 'id' | 'project_id'>) =>
+      projectsApi.addMembership((d as { project_id: number } & typeof d).project_id, d),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['person-memberships', personId] }); setShowAddMembership(false); setError(null) },
+    onError: (e: Error) => setError(e.message),
+  })
+  const deleteMembership = useMutation({
+    mutationFn: ({ projectId, membershipId }: { projectId: number; membershipId: number }) =>
+      projectsApi.deleteMembership(projectId, membershipId),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['person-memberships', personId] }); setConfirmDeleteMembership(null) },
   })
 
   if (!person) return <div className="p-6 text-sm text-gray-400">Lade…</div>
@@ -312,6 +407,7 @@ export default function PersonDetailPage() {
           {([
             { id: 'absences' as Tab, label: 'Abwesenheiten' },
             { id: 'contingents' as Tab, label: 'Urlaubskontingente' },
+            { id: 'projects' as Tab, label: 'Projekte' },
           ]).map((t) => (
             <button key={t.id} onClick={() => { setTab(t.id); setError(null) }}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -423,6 +519,56 @@ export default function PersonDetailPage() {
             </div>
           </div>
         )}
+        {/* ── Projects (memberships) ── */}
+        {tab === 'projects' && (
+          <div>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-medium text-gray-700">Projektzuweisungen</h3>
+              <button onClick={() => setShowAddMembership(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                <Plus size={14} /> Projekt zuweisen
+              </button>
+            </div>
+            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {['Projekt', 'Von', 'Bis', 'h/Woche', '€/h', ''].map((h) => (
+                      <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {memberships.length === 0 && (
+                    <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-400">Keine Projektzuweisungen vorhanden.</td></tr>
+                  )}
+                  {memberships.map((m) => (
+                    <tr key={m.id}>
+                      <td className="px-4 py-3 text-sm">
+                        <Link to={`/projects/${m.project_id}`} className="font-medium text-blue-600 hover:underline">
+                          {m.project_number}
+                        </Link>
+                        <span className="ml-2 text-gray-500">{m.project_name}</span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{m.from_date}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{m.to_date}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{m.weekly_capacity_hours}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{m.billing_rate_per_hour}</td>
+                      <td className="px-4 py-3 text-sm">
+                        <button
+                          aria-label="Zuweisung entfernen"
+                          onClick={() => setConfirmDeleteMembership(m)}
+                          className="text-gray-400 hover:text-red-500">
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Edit person modal */}
@@ -464,6 +610,36 @@ export default function PersonDetailPage() {
             onSave={(d) => updateContingent.mutate({ id: editingContingent.id, d })}
             onCancel={() => { setEditingContingent(null); setError(null) }}
           />
+        </Modal>
+      )}
+
+      {/* Add membership modal */}
+      {showAddMembership && (
+        <Modal title="Projekt zuweisen" onClose={() => { setShowAddMembership(false); setError(null) }}>
+          <MembershipForm
+            personId={personId}
+            defaultBillingRate={person.default_billing_rate ?? null}
+            onSave={(d) => addMembership.mutate(d)}
+            onCancel={() => { setShowAddMembership(false); setError(null) }}
+          />
+        </Modal>
+      )}
+
+      {/* Confirm delete membership */}
+      {confirmDeleteMembership && (
+        <Modal title="Zuweisung entfernen" onClose={() => setConfirmDeleteMembership(null)}>
+          <p className="text-sm text-gray-600 mb-4">
+            Person aus Projekt <strong>{confirmDeleteMembership.project_number}</strong> entfernen?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmDeleteMembership(null)}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+            <button
+              onClick={() => deleteMembership.mutate({ projectId: confirmDeleteMembership.project_id, membershipId: confirmDeleteMembership.id })}
+              className="px-4 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">
+              Entfernen
+            </button>
+          </div>
         </Modal>
       )}
     </div>
