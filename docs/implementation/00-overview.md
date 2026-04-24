@@ -45,11 +45,11 @@ Derived from the visual review on 2026-04-23. See individual plan documents for 
 
 ## Current state (dev branch)
 
-Phase 1 complete. Phase 2 complete (Steps 13–17), app version v0.2.0. E2E suite: 53 tests across 8 files.
+Phase 1 complete. Phase 2 complete (Steps 13–17), app version v0.2.0. E2E suite: 56 tests across 9 files.
 
 - **Backend**: 10 service layers, 35+ REST endpoints, SQLite (WAL mode)
 - **Frontend**: 8 pages, typed API client, Playwright E2E, Vitest unit tests
-- **Projekte**: edit + delete, Start column, Geplant + Geplant status, budget €, burn bar, milestone badges
+- **Projekte**: edit + delete, Start column, Geplant status, budget €, burn bar, milestone badges
 - **Personen**: edit + delete, projects column, work week patterns, default billing rate
 - **Hauptprojekte**: edit + delete + confirmation, expandable linked-projects sub-row
 - **Sage-Mapping**: edit per row
@@ -57,6 +57,7 @@ Phase 1 complete. Phase 2 complete (Steps 13–17), app version v0.2.0. E2E suit
 - **Meilensteine**: improved init (holidays + absences + vacation distribution), rebalanced column, inline editing, sum row, € consumed
 - **Kalender**: utilization bars, program/project filters, milestone tooltip, forecast chart (PLAN / Aktuell / Prognose)
 - **Einstellungen**: configurable default vacation days
+- **Stabilität**: CORS-Fix (dev-Proxy korrekt), CASCADE-Delete für Personen, Accessibility-Kontrast WCAG AA, Modal-Fokus-Trap
 
 ## Status legend
 

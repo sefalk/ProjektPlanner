@@ -1,4 +1,13 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type APIRequestContext } from '@playwright/test'
+
+const API = 'http://localhost:8000'
+
+async function deletePersonBySageName(request: APIRequestContext, sageName: string) {
+  const resp = await request.get(`${API}/persons`)
+  const all = await resp.json() as { id: number; sage_employee_name: string }[]
+  const found = all.find((p) => p.sage_employee_name === sageName)
+  if (found) await request.delete(`${API}/persons/${found.id}`)
+}
 
 test.describe('Personen-Verwaltung', () => {
   test.beforeEach(async ({ page }) => {
@@ -11,21 +20,24 @@ test.describe('Personen-Verwaltung', () => {
     await expect(page.getByRole('button', { name: /neu/i })).toBeVisible()
   })
 
-  test('legt eine neue Person an', async ({ page }) => {
-    const uid = Date.now()
+  test('legt eine neue Person an', async ({ page, request }) => {
+    const uid = `${Date.now()}_${Math.floor(Math.random() * 10000)}`
+    const sageName = `Person${uid}, Test`
     await page.getByRole('button', { name: /neu/i }).click()
 
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
 
     await dialog.getByLabel(/name \(anzeige\)/i).fill(`Test Person ${uid}`)
-    await dialog.getByLabel(/sage-mitarbeiter/i).fill(`Person${uid}, Test`)
+    await dialog.getByLabel(/sage-mitarbeiter/i).fill(sageName)
     await dialog.getByLabel(/wochenstunden/i).fill('40')
 
     await page.getByRole('button', { name: /speichern/i }).click()
     await expect(page.getByRole('dialog')).not.toBeVisible()
 
     await expect(page.getByText(`Test Person ${uid}`)).toBeVisible()
+
+    await deletePersonBySageName(request, sageName)
   })
 
   test('Formular-Felder haben korrekte Beschriftungen (Accessibility)', async ({ page }) => {
@@ -55,18 +67,20 @@ test.describe('Personen-Verwaltung', () => {
     await expect(dialog.getByLabel(/verrechnungssatz/i)).toBeVisible()
   })
 
-  test('Bearbeiten-Button pro Zeile vorhanden wenn Personen existieren', async ({ page }) => {
+  test('Bearbeiten-Button pro Zeile vorhanden wenn Personen existieren', async ({ page, request }) => {
     const uid = `${Date.now()}_${Math.floor(Math.random() * 10000)}`
+    const sageName = `EditPerson${uid}, Test`
     await page.getByRole('button', { name: /neu/i }).click()
     const dialog = page.getByRole('dialog')
     await dialog.getByLabel(/name \(anzeige\)/i).fill(`Test EditPerson ${uid}`)
-    await dialog.getByLabel(/sage-mitarbeiter/i).fill(`EditPerson${uid}, Test`)
+    await dialog.getByLabel(/sage-mitarbeiter/i).fill(sageName)
     await dialog.getByLabel(/wochenstunden/i).fill('40')
     await page.getByRole('button', { name: /speichern/i }).click()
     await expect(page.getByRole('dialog')).not.toBeVisible()
 
-    // Edit button should be visible
     const row = page.getByRole('row', { name: new RegExp(`Test EditPerson ${uid}`) })
     await expect(row.getByRole('button', { name: /bearbeiten/i })).toBeVisible()
+
+    await deletePersonBySageName(request, sageName)
   })
 })
