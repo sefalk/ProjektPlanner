@@ -56,17 +56,17 @@ test.describe('Personen-Verwaltung', () => {
   })
 
   test('Bearbeiten-Button pro Zeile vorhanden wenn Personen existieren', async ({ page }) => {
-    // Create a person first
+    const uid = `${Date.now()}_${Math.floor(Math.random() * 10000)}`
     await page.getByRole('button', { name: /neu/i }).click()
     const dialog = page.getByRole('dialog')
-    await dialog.getByLabel(/name \(anzeige\)/i).fill('Test EditPerson')
-    await dialog.getByLabel(/sage-mitarbeiter/i).fill('EditPerson, Test')
+    await dialog.getByLabel(/name \(anzeige\)/i).fill(`Test EditPerson ${uid}`)
+    await dialog.getByLabel(/sage-mitarbeiter/i).fill(`EditPerson${uid}, Test`)
     await dialog.getByLabel(/wochenstunden/i).fill('40')
     await page.getByRole('button', { name: /speichern/i }).click()
     await expect(page.getByRole('dialog')).not.toBeVisible()
 
     // Edit button should be visible
-    const row = page.getByRole('row', { name: /Test EditPerson/i })
+    const row = page.getByRole('row', { name: new RegExp(`Test EditPerson ${uid}`) })
     await expect(row.getByRole('button', { name: /bearbeiten/i })).toBeVisible()
   })
 })

@@ -334,6 +334,7 @@ export default function CalendarPage() {
       <div className="px-6 pt-3 pb-2 flex flex-wrap items-center gap-2 border-b border-gray-100">
         {/* Program filter */}
         <select
+          aria-label="Hauptprojekt filtern"
           className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
           value={selectedProgramId ?? ''}
           onChange={(e) => {
@@ -350,6 +351,7 @@ export default function CalendarPage() {
 
         {/* Project filter */}
         <select
+          aria-label="Projekt filtern"
           className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
           value={selectedProjectId ?? ''}
           onChange={(e) => {
@@ -405,7 +407,7 @@ export default function CalendarPage() {
                         key={day}
                         scope="col"
                         className={`w-8 min-w-[2rem] border-b border-r border-gray-200 py-1 text-center ${
-                          weekend ? 'bg-gray-100 text-gray-400' : holiday && showHolidays ? 'bg-red-50 text-red-700' : 'text-gray-600'
+                          weekend ? 'bg-gray-100 text-gray-600' : holiday && showHolidays ? 'bg-red-50 text-red-700' : 'text-gray-600'
                         }`}
                         title={holiday ?? undefined}
                       >

@@ -24,7 +24,7 @@ test.describe('Sage-Import', () => {
     await page.getByRole('button', { name: /text einfügen/i }).click()
     const textarea = page.getByRole('textbox')
     await expect(textarea).toBeVisible()
-    await expect(textarea).toHaveAttribute('placeholder', /buchungsdatum/i)
+    await expect(textarea).toHaveAttribute('placeholder', /Datum;Mitarbeiter/)
   })
 
   test('Importverlauf-Abschnitt ist sichtbar', async ({ page }) => {

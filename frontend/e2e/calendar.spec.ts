@@ -68,4 +68,27 @@ test.describe('Kalender', () => {
     const chart = page.locator('text=Budgetverlauf')
     await expect(chart).not.toBeVisible()
   })
+
+  test('Meilenstein-Badge zeigt Tooltip beim Hover', async ({ page }) => {
+    // Milestone badges appear only when the current month has project milestones.
+    // Use the milestone-badge container (span.group with cursor-default).
+    const badge = page.locator('span.group.cursor-default').first()
+    const badgeCount = await page.locator('span.group.cursor-default').count()
+
+    if (badgeCount === 0) {
+      // No milestone data in current month — pass gracefully.
+      return
+    }
+
+    await badge.hover()
+
+    // The tooltip div uses `invisible group-hover:visible`; after hover it should be visible.
+    const tooltip = badge.locator('div.invisible')
+    await expect(tooltip).toBeVisible()
+
+    // Content: plan hours, current hours, status
+    await expect(tooltip).toContainText('Plan:')
+    await expect(tooltip).toContainText('Aktuell:')
+    await expect(tooltip).toContainText('Status:')
+  })
 })

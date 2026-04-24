@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 
 interface Props {
@@ -15,6 +15,16 @@ const SIZE_CLASSES = {
 }
 
 export default function Modal({ title, onClose, children, size = 'md' }: Props) {
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  // Move focus inside the modal when it opens so Tab doesn't escape to the page.
+  useEffect(() => {
+    const firstFocusable = panelRef.current?.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )
+    firstFocusable?.focus()
+  }, [])
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -22,7 +32,7 @@ export default function Modal({ title, onClose, children, size = 'md' }: Props) 
       aria-modal="true"
       aria-labelledby="modal-title"
     >
-      <div className={`bg-white rounded-xl shadow-2xl w-full ${SIZE_CLASSES[size]} flex flex-col max-h-[90vh]`}>
+      <div ref={panelRef} className={`bg-white rounded-xl shadow-2xl w-full ${SIZE_CLASSES[size]} flex flex-col max-h-[90vh]`}>
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-200 flex-shrink-0">
           <h3 id="modal-title" className="text-base font-semibold text-gray-900">{title}</h3>
           <button

@@ -6,7 +6,7 @@ test.describe('Person-Detail', () => {
   let personId: number
 
   test.beforeEach(async ({ request }) => {
-    const uid = Date.now()
+    const uid = `${Date.now()}_${Math.floor(Math.random() * 100000)}`
     const resp = await request.post(`${API}/persons`, {
       data: {
         name: `Detail-Test ${uid}`,

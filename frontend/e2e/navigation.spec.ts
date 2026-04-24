@@ -10,7 +10,7 @@ test.describe('Navigation', () => {
   test('navigates to all main pages via sidebar', async ({ page }) => {
     await page.goto('/')
 
-    await page.getByRole('link', { name: 'Projekte' }).click()
+    await page.getByRole('link', { name: 'Projekte', exact: true }).click()
     await expect(page).toHaveURL(/\/projects/)
     await expect(page.getByRole('heading', { name: 'Projekte' })).toBeVisible()
 

@@ -130,9 +130,17 @@ def update_person(person_id: int, data: Person, session: SessionDep):
 
 @router.delete("/{person_id}", status_code=204)
 def delete_person(person_id: int, session: SessionDep):
+    from app.models.membership import ProjectMembership
     person = session.get(Person, person_id)
     if not person:
         raise HTTPException(404, "Person not found.")
+    # SQLite FK enforcement is off; manually cascade-delete related rows.
+    for obj in session.exec(select(PersonAbsence).where(PersonAbsence.person_id == person_id)).all():
+        session.delete(obj)
+    for obj in session.exec(select(VacationContingent).where(VacationContingent.person_id == person_id)).all():
+        session.delete(obj)
+    for obj in session.exec(select(ProjectMembership).where(ProjectMembership.person_id == person_id)).all():
+        session.delete(obj)
     session.delete(person)
     session.commit()
 
