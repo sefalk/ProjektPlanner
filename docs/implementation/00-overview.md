@@ -1,6 +1,6 @@
 # Implementation Overview
 
-_Last updated: 2026-04-23_
+_Last updated: 2026-04-24_
 
 Each backend step has its own detail document and its own Git feature branch.
 Branches merge to `dev` only when all tests pass.
@@ -43,9 +43,15 @@ Derived from the visual review on 2026-04-23. See individual plan documents for 
 | 16 | [16-v05-milestone-enhancements.md](16-v05-milestone-enhancements.md) | Per-person expandable milestone rows, improved init (holidays + absences + vacation distribution), rename "Aktuell", auto-rebalanced column, inline editing, sum row, budget € consumed | ✅ on dev |
 | 17 | [17-v06-calendar-enhancements.md](17-v06-calendar-enhancements.md) | Dynamic width, per-project utilization bars, project/Hauptprojekt filters, milestone tooltip, forecast chart (Volles Budget / PLAN / Aktuell / Prognose) | ✅ on dev |
 
+## Phase 3 — Calendar Utilization (Step 18)
+
+| # | Doc | Description | Status |
+|---|---|---|---|
+| 18 | [18-v07-calendar-utilization.md](18-v07-calendar-utilization.md) | Today indicator, utilization badge, overbooking cells, %/h toggle, project label in bars, overbooking validation | ✅ on dev |
+
 ## Current state (dev branch)
 
-Phase 1 complete. Phase 2 complete (Steps 13–17), app version v0.2.0. E2E suite: 56 tests across 9 files.
+Phase 1 complete. Phase 2 complete (Steps 13–17). Phase 3 complete (Step 18), app version v0.3.0. E2E suite: 56 tests across 9 files.
 
 - **Backend**: 10 service layers, 35+ REST endpoints, SQLite (WAL mode)
 - **Frontend**: 8 pages, typed API client, Playwright E2E, Vitest unit tests
@@ -55,9 +61,10 @@ Phase 1 complete. Phase 2 complete (Steps 13–17), app version v0.2.0. E2E suit
 - **Sage-Mapping**: edit per row
 - **Projekt-Detail**: Hauptprojekt in header, reopen confirmation, expandable milestone rows with per-person hours
 - **Meilensteine**: improved init (holidays + absences + vacation distribution), rebalanced column, inline editing, sum row, € consumed
-- **Kalender**: utilization bars, program/project filters, milestone tooltip, forecast chart (PLAN / Aktuell / Prognose)
+- **Kalender**: utilization bars, program/project filters, milestone tooltip, forecast chart (PLAN / Aktuell / Prognose), today indicator, utilization badge (green/amber/red), overbooking cells (red tint + top bar), %/h toggle, project label in bars
 - **Einstellungen**: configurable default vacation days
 - **Stabilität**: CORS-Fix (dev-Proxy korrekt), CASCADE-Delete für Personen, Accessibility-Kontrast WCAG AA, Modal-Fokus-Trap
+- **Überbuchungs-Warnung**: Backend berechnet Überbuchungsmonate bei Mitgliedschafts-Erstellung; Frontend zeigt gelbes Banner
 
 ## Status legend
 

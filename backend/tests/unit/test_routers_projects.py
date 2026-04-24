@@ -183,3 +183,45 @@ def test_delete_membership(client):
         "billing_rate_per_hour": 96.75,
     }).json()
     assert client.delete(f"/projects/{proj['id']}/memberships/{m['id']}").status_code == 204
+
+
+def test_create_membership_returns_warnings_field(client):
+    proj = client.post("/projects", json=_project()).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{proj['id']}/memberships", json={
+        "person_id": person["id"],
+        "from_date": "2026-01-01",
+        "to_date": "2026-06-30",
+        "weekly_capacity_hours": 32.0,
+        "billing_rate_per_hour": 90.0,
+    })
+    assert r.status_code == 201
+    data = r.json()
+    assert "warnings" in data
+    assert isinstance(data["warnings"], list)
+
+
+def test_create_membership_overbooking_produces_warning(client):
+    proj1 = client.post("/projects", json=_project("P00001")).json()
+    proj2 = client.post("/projects", json=_project("P00002")).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    # First membership: 40 h/week (100%)
+    client.post(f"/projects/{proj1['id']}/memberships", json={
+        "person_id": person["id"],
+        "from_date": "2026-01-01",
+        "to_date": "2026-06-30",
+        "weekly_capacity_hours": 40.0,
+        "billing_rate_per_hour": 90.0,
+    })
+    # Second membership overlapping: 10 h/week → total 125%
+    r = client.post(f"/projects/{proj2['id']}/memberships", json={
+        "person_id": person["id"],
+        "from_date": "2026-03-01",
+        "to_date": "2026-05-31",
+        "weekly_capacity_hours": 10.0,
+        "billing_rate_per_hour": 90.0,
+    })
+    assert r.status_code == 201
+    data = r.json()
+    assert len(data["warnings"]) > 0
+    assert "125%" in data["warnings"][0]

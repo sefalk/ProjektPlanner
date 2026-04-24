@@ -44,6 +44,7 @@ export default function ProjectDetailPage() {
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
   const [error, setError] = useState<string | null>(null)
+  const [memberWarnings, setMemberWarnings] = useState<string[]>([])
 
   // Queries
   const { data: project } = useQuery({ queryKey: ['project', projectId], queryFn: () => projects.get(projectId) })
@@ -110,10 +111,13 @@ export default function ProjectDetailPage() {
   })
   const addMember = useMutation({
     mutationFn: () => projects.addMembership(projectId, addMemberForm),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['memberships', projectId] })
       setShowAddMember(false)
       setError(null)
+      if (result.warnings && result.warnings.length > 0) {
+        setMemberWarnings(result.warnings)
+      }
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -463,6 +467,19 @@ export default function ProjectDetailPage() {
         {/* ── Members ── */}
         {tab === 'members' && (
           <div>
+            {memberWarnings.length > 0 && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <p className="font-medium mb-1">Überbuchung erkannt</p>
+                    <ul className="list-disc list-inside space-y-0.5 text-xs">
+                      {memberWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  </div>
+                  <button onClick={() => setMemberWarnings([])} className="text-amber-600 hover:text-amber-800 text-xs shrink-0">✕</button>
+                </div>
+              </div>
+            )}
             <div className="flex justify-between items-center mb-4">
               <h3 className="font-medium text-gray-700">Projektmitglieder</h3>
               <button onClick={() => setShowAddMember(true)}

@@ -61,6 +61,7 @@ export interface ProjectMembership {
   to_date: string;
   weekly_capacity_hours: number;
   billing_rate_per_hour: number;
+  warnings?: string[];
 }
 
 export interface BillingPosition {

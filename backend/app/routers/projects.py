@@ -38,6 +38,17 @@ class MembershipCreate(SQLModel):
     billing_rate_per_hour: float = Field(ge=0)
 
 
+class MembershipWithWarnings(SQLModel):
+    id: int
+    project_id: int
+    person_id: int
+    from_date: date
+    to_date: date
+    weekly_capacity_hours: float
+    billing_rate_per_hour: float
+    warnings: list[str] = []
+
+
 # ---------------------------------------------------------------------------
 # Projects
 # ---------------------------------------------------------------------------
@@ -183,11 +194,46 @@ def list_memberships(project_id: int, session: SessionDep):
     ).all()
 
 
-@router.post("/{project_id}/memberships", response_model=ProjectMembership, status_code=201)
+def _membership_overbooking_warnings(membership: ProjectMembership, session: Session) -> list[str]:
+    from app.models.person import Person
+    from calendar import monthrange
+
+    person = session.get(Person, membership.person_id)
+    if not person or person.default_weekly_hours <= 0:
+        return []
+
+    # The new membership is already committed; query all memberships including it.
+    all_memberships = session.exec(
+        select(ProjectMembership).where(ProjectMembership.person_id == membership.person_id)
+    ).all()
+
+    warnings: list[str] = []
+    cur = date(membership.from_date.year, membership.from_date.month, 1)
+    end_month = date(membership.to_date.year, membership.to_date.month, 1)
+    MONTH_DE = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+
+    while cur <= end_month:
+        last_day = date(cur.year, cur.month, monthrange(cur.year, cur.month)[1])
+        total_cap = sum(
+            m.weekly_capacity_hours
+            for m in all_memberships
+            if m.from_date <= last_day and m.to_date >= cur
+        )
+        pct = round(total_cap / person.default_weekly_hours * 100)
+        if pct > 100:
+            warnings.append(f"{MONTH_DE[cur.month - 1]} {cur.year}: {pct}% ({total_cap:.0f}/{person.default_weekly_hours:.0f} h/Woche)")
+        if cur.month == 12:
+            cur = date(cur.year + 1, 1, 1)
+        else:
+            cur = date(cur.year, cur.month + 1, 1)
+
+    return warnings
+
+
+@router.post("/{project_id}/memberships", response_model=MembershipWithWarnings, status_code=201)
 def create_membership(project_id: int, body: MembershipCreate, session: SessionDep):
     if not session.get(Project, project_id):
         raise HTTPException(404, "Project not found.")
-    from datetime import date
     membership = ProjectMembership(
         project_id=project_id,
         person_id=body.person_id,
@@ -203,7 +249,17 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
     except IntegrityError:
         session.rollback()
         raise HTTPException(409, "Membership already exists for this person and project.")
-    return membership
+    warnings = _membership_overbooking_warnings(membership, session)
+    return MembershipWithWarnings(
+        id=membership.id,
+        project_id=membership.project_id,
+        person_id=membership.person_id,
+        from_date=membership.from_date,
+        to_date=membership.to_date,
+        weekly_capacity_hours=membership.weekly_capacity_hours,
+        billing_rate_per_hour=membership.billing_rate_per_hour,
+        warnings=warnings,
+    )
 
 
 @router.delete("/{project_id}/memberships/{membership_id}", status_code=204)

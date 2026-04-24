@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ChartTooltip,
   Legend as ChartLegend, ReferenceLine, ResponsiveContainer,
@@ -47,7 +47,6 @@ const STATUS_NAME: Record<string, string> = {
   ongoing: 'laufend',
 }
 
-// Deterministic project colors from a palette
 const PROJECT_PALETTE = [
   'bg-slate-300', 'bg-sky-300', 'bg-violet-300', 'bg-rose-300',
   'bg-amber-300', 'bg-teal-300', 'bg-pink-300', 'bg-lime-300',
@@ -80,80 +79,190 @@ function absenceOnDay(absence: CalendarAbsence, dateStr: string): boolean {
   return absence.start_date <= dateStr && end >= dateStr
 }
 
-function membershipOnDay(m: CalendarMembership, dateStr: string): boolean {
-  return m.from_date <= dateStr && m.to_date >= dateStr
+// Clamp membership dates to the visible month, returning 1-based day numbers
+function membershipStartDay(fromDate: string, year: number, month: number): number {
+  if (fromDate <= isoDate(year, month, 1)) return 1
+  return parseInt(fromDate.split('-')[2], 10)
 }
 
-// ─── DayCell ─────────────────────────────────────────────────────────────────
+function membershipEndDay(toDate: string, year: number, month: number, numDays: number): number {
+  if (toDate >= isoDate(year, month, numDays)) return numDays
+  return parseInt(toDate.split('-')[2], 10)
+}
 
-function DayCell({
-  dateStr,
-  weekend,
-  holidayName,
-  person,
-  showHolidays,
-  showAbsences,
-  showProjects,
+// ─── PersonRow ───────────────────────────────────────────────────────────────
+
+function PersonRow({
+  person, year, month, days, numDays, todayStr, holidayMap,
+  showHolidays, showAbsences, showProjects, rowClass,
 }: {
-  dateStr: string
-  weekend: boolean
-  holidayName: string | undefined
   person: CalendarPerson
-  showHolidays: boolean
-  showAbsences: boolean
-  showProjects: boolean
+  year: number; month: number; days: number[]; numDays: number; todayStr: string
+  holidayMap: Record<string, string>
+  showHolidays: boolean; showAbsences: boolean; showProjects: boolean
+  rowClass: string
 }) {
-  const absence = showAbsences
-    ? person.absences.find((a) => absenceOnDay(a, dateStr))
-    : undefined
-  const activeMemberships = showProjects && !absence && !weekend
-    ? person.memberships.filter((m) => membershipOnDay(m, dateStr))
-    : []
+  const [expanded, setExpanded] = useState(false)
+  const totalCap = person.default_weekly_hours > 0 ? person.default_weekly_hours : 40
+  const firstDay = isoDate(year, month, 1)
+  const lastDay = isoDate(year, month, numDays)
 
-  if (weekend) {
-    return <td className="h-8 min-w-[2rem] w-8 border-r border-gray-100 bg-gray-100" />
+  // Utilization badge
+  const activeCap = person.memberships
+    .filter((m) => m.from_date <= lastDay && m.to_date >= firstDay)
+    .reduce((sum, m) => sum + m.weekly_capacity_hours, 0)
+  const utilPct = Math.round((activeCap / totalCap) * 100)
+  const badgeCls = utilPct > 100 ? 'bg-red-100 text-red-700'
+    : utilPct >= 80 ? 'bg-green-100 text-green-700'
+    : 'bg-gray-100 text-gray-500'
+
+  // Pre-compute stacked membership bars (bottom → top)
+  type Bar = { m: CalendarMembership; startDay: number; endDay: number; frac: number; bottom: number }
+  const bars: Bar[] = []
+  if (showProjects) {
+    let stackBottom = 0
+    for (const m of person.memberships) {
+      if (m.from_date > lastDay || m.to_date < firstDay) continue
+      const startDay = membershipStartDay(m.from_date, year, month)
+      const endDay = membershipEndDay(m.to_date, year, month, numDays)
+      const frac = Math.min(1, m.weekly_capacity_hours / totalCap)
+      bars.push({ m, startDay, endDay, frac, bottom: stackBottom })
+      stackBottom += frac * 100
+    }
   }
+  const totalFrac = activeCap / totalCap
+  const overbooked = totalFrac > 1.005
 
-  if (absence) {
-    const bg = ABSENCE_BG[absence.absence_type] ?? 'bg-gray-200'
-    const label = ABSENCE_LABEL[absence.absence_type] ?? '?'
-    let title = `${ABSENCE_NAME[absence.absence_type]} (${STATUS_NAME[absence.status]})`
-    if (holidayName && showHolidays) title += ` · ${holidayName}`
-    return (
-      <td className={`h-8 min-w-[2rem] w-8 border-r border-gray-100 text-center text-[10px] font-medium leading-8 select-none ${bg}`} title={title}>
-        <Link to={`/persons/${person.id}`} className="block w-full h-full">{label}</Link>
-      </td>
-    )
-  }
+  return (
+    <>
+      <tr className={rowClass}>
+        {/* Sticky person name + expand toggle + utilization badge */}
+        <td className="sticky left-0 z-10 bg-inherit px-2 py-0 h-8 border-b border-r border-gray-100 text-sm font-medium whitespace-nowrap">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="mr-1 text-gray-400 hover:text-gray-600 inline-flex items-center"
+            aria-label={expanded ? 'Einklappen' : 'Ausklappen'}
+          >
+            <ChevronDown size={12} className={`transition-transform ${expanded ? '' : '-rotate-90'}`} />
+          </button>
+          <Link to={`/persons/${person.id}`} className="text-gray-700 hover:text-blue-600 hover:underline">
+            {person.name}
+          </Link>
+          <span
+            className={`ml-1.5 inline-block rounded px-1 py-0.5 text-[9px] font-semibold leading-none ${badgeCls}`}
+            title={`${activeCap} h/Woche von ${totalCap} h/Woche`}
+          >
+            {utilPct}%
+          </span>
+        </td>
 
-  if (holidayName && showHolidays) {
-    return (
-      <td className="h-8 min-w-[2rem] w-8 border-r border-gray-100 bg-red-100 text-center text-[10px] font-medium leading-8 select-none" title={holidayName}>
-        •
-      </td>
-    )
-  }
+        {/* Single cell spanning all day columns — three absolute layers */}
+        <td colSpan={numDays} className="p-0 h-8 border-b border-gray-100 relative overflow-hidden">
 
-  if (activeMemberships.length > 0) {
-    const totalCap = person.default_weekly_hours > 0 ? person.default_weekly_hours : 40
-    return (
-      <td className="h-8 min-w-[2rem] w-8 border-r border-gray-100 relative overflow-hidden bg-white select-none">
-        {activeMemberships.map((m) => {
-          const frac = Math.min(1, m.weekly_capacity_hours / totalCap)
-          return (
+          {/* Layer 0: per-day background (weekends · holidays · today indicator) */}
+          <div className="absolute inset-0 flex pointer-events-none" aria-hidden="true">
+            {days.map((day) => {
+              const dateStr = isoDate(year, month, day)
+              const weekend = isWeekend(year, month, day)
+              const holiday = holidayMap[dateStr]
+              const isToday = dateStr === todayStr
+              return (
+                <div
+                  key={day}
+                  className={`flex-shrink-0 border-r border-gray-100 ${
+                    isToday    ? 'bg-blue-50 border-l-2 border-l-blue-400'
+                    : weekend  ? 'bg-gray-100'
+                    : holiday && showHolidays ? 'bg-red-50'
+                    : 'bg-white'
+                  }`}
+                  style={{ width: '2rem', height: '100%' }}
+                  title={holiday ?? undefined}
+                />
+              )
+            })}
+          </div>
+
+          {/* Layer 1: continuous membership bars */}
+          {bars.map(({ m, startDay, endDay, frac, bottom }) => (
             <div
               key={m.project_id}
-              className={`absolute bottom-0 left-0 right-0 ${projectColor(m.project_id)}`}
-              style={{ height: `${frac * 100}%` }}
-              title={`${m.project_number}: ${m.weekly_capacity_hours} h/Woche`}
-            />
-          )
-        })}
-      </td>
-    )
-  }
+              className={`absolute ${projectColor(m.project_id)} flex items-center px-1.5 overflow-hidden`}
+              style={{
+                left: `calc(${startDay - 1} * 2rem)`,
+                width: `calc(${endDay - startDay + 1} * 2rem)`,
+                bottom: `${bottom}%`,
+                height: `${frac * 100}%`,
+              }}
+              title={`${m.project_number}: ${m.weekly_capacity_hours} h/Woche · ${Math.round(frac * 100)}%`}
+            >
+              <span className="text-[9px] font-semibold text-gray-700 leading-none truncate whitespace-nowrap select-none">
+                {m.project_number} · {Math.round(frac * 100)}%
+              </span>
+            </div>
+          ))}
 
-  return <td className="h-8 min-w-[2rem] w-8 border-r border-gray-100 bg-white" />
+          {/* Overbooking: thin red stripe at top */}
+          {overbooked && (
+            <div
+              className="absolute top-0 left-0 right-0 h-1 bg-red-500 opacity-70 z-10 pointer-events-none"
+              title={`Überbuchung: ${Math.round(totalFrac * 100)}%`}
+            />
+          )}
+
+          {/* Layer 2: absence overlays — per day, on top of bars */}
+          {showAbsences && days.map((day) => {
+            const dateStr = isoDate(year, month, day)
+            const absence = person.absences.find((a) => absenceOnDay(a, dateStr))
+            if (!absence) return null
+            const bg = ABSENCE_BG[absence.absence_type] ?? 'bg-gray-200'
+            const label = ABSENCE_LABEL[absence.absence_type] ?? '?'
+            const title = `${ABSENCE_NAME[absence.absence_type]} (${STATUS_NAME[absence.status]})`
+            return (
+              <div
+                key={day}
+                className={`absolute top-0 bottom-0 ${bg} flex items-center justify-center text-[10px] font-medium z-20`}
+                style={{ left: `calc(${day - 1} * 2rem)`, width: '2rem' }}
+                title={title}
+              >
+                <Link to={`/persons/${person.id}`} className="flex items-center justify-center w-full h-full">
+                  {label}
+                </Link>
+              </div>
+            )
+          })}
+        </td>
+      </tr>
+
+      {/* Expanded sub-rows: one per membership */}
+      {expanded && person.memberships.map((m) => {
+        const frac = m.weekly_capacity_hours / totalCap
+        const color = projectColor(m.project_id)
+        return (
+          <tr key={m.project_id} className="bg-gray-50/70">
+            <td className="sticky left-0 z-10 bg-gray-50 pl-8 pr-3 py-1 border-b border-r border-gray-100 whitespace-nowrap">
+              <span className={`inline-block w-2.5 h-2.5 rounded-sm mr-2 ${color}`} />
+              <Link
+                to={`/projects/${m.project_id}`}
+                className="text-xs font-medium text-gray-600 hover:text-blue-600 hover:underline"
+              >
+                {m.project_number}
+              </Link>
+              <span className="ml-1.5 text-xs text-gray-400 truncate max-w-[8rem] inline-block align-bottom" title={m.project_name}>
+                {m.project_name}
+              </span>
+            </td>
+            <td colSpan={numDays} className="px-3 py-1 border-b border-gray-100 text-xs text-gray-500">
+              <span className="font-medium text-gray-700">{m.weekly_capacity_hours} h/Woche</span>
+              <span className="mx-1.5 text-gray-300">·</span>
+              <span>{Math.round(frac * 100)}% Kapazität</span>
+              <span className="mx-1.5 text-gray-300">·</span>
+              <span>{m.from_date} – {m.to_date}</span>
+            </td>
+          </tr>
+        )
+      })}
+    </>
+  )
 }
 
 // ─── Layer toggle chip ────────────────────────────────────────────────────────
@@ -263,6 +372,8 @@ export default function CalendarPage() {
   const [selectedProgramId, setSelectedProgramId] = useState<number | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
 
+  const todayStr = isoDate(today.getFullYear(), today.getMonth() + 1, today.getDate())
+
   const { data, isLoading } = useQuery({
     queryKey: ['calendar', year, month],
     queryFn: () => calendar.get(year, month),
@@ -295,16 +406,13 @@ export default function CalendarPage() {
 
   const milestones: CalendarMilestone[] = data?.milestones ?? []
 
-  // Project filter: IDs of projects belonging to selected program, or just the one selected project
   const programProjectIds = selectedProgramId != null
     ? projectList.filter((p) => p.program_id === selectedProgramId).map((p) => p.id)
     : null
 
   const activeFilterIds: number[] | null =
-    selectedProjectId != null ? [selectedProjectId]
-    : programProjectIds
+    selectedProjectId != null ? [selectedProjectId] : programProjectIds
 
-  // Filter persons: hide those without memberships in active filter
   const visiblePersons: CalendarPerson[] = data?.persons.filter((p) => {
     if (!activeFilterIds) return true
     return p.memberships.some((m) => activeFilterIds.includes(m.project_id))
@@ -332,7 +440,6 @@ export default function CalendarPage() {
 
       {/* Filters + layer chips */}
       <div className="px-6 pt-3 pb-2 flex flex-wrap items-center gap-2 border-b border-gray-100">
-        {/* Program filter */}
         <select
           aria-label="Hauptprojekt filtern"
           className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -349,7 +456,6 @@ export default function CalendarPage() {
           ))}
         </select>
 
-        {/* Project filter */}
         <select
           aria-label="Projekt filtern"
           className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -402,12 +508,16 @@ export default function CalendarPage() {
                     const weekend = isWeekend(year, month, day)
                     const holiday = holidayMap[dateStr]
                     const wd = weekdayIndex(year, month, day)
+                    const isToday = dateStr === todayStr
                     return (
                       <th
                         key={day}
                         scope="col"
                         className={`w-8 min-w-[2rem] border-b border-r border-gray-200 py-1 text-center ${
-                          weekend ? 'bg-gray-100 text-gray-600' : holiday && showHolidays ? 'bg-red-50 text-red-700' : 'text-gray-600'
+                          isToday   ? 'bg-blue-50 text-blue-700 border-t-2 border-t-blue-400'
+                          : weekend ? 'bg-gray-100 text-gray-600'
+                          : holiday && showHolidays ? 'bg-red-50 text-red-700'
+                          : 'text-gray-600'
                         }`}
                         title={holiday ?? undefined}
                       >
@@ -426,29 +536,20 @@ export default function CalendarPage() {
                     </td>
                   </tr>
                 ) : visiblePersons.map((person, idx) => (
-                  <tr key={person.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
-                    <td className="sticky left-0 z-10 bg-inherit px-3 py-0 border-b border-r border-gray-100 text-sm font-medium whitespace-nowrap">
-                      <Link to={`/persons/${person.id}`} className="text-gray-700 hover:text-blue-600 hover:underline">
-                        {person.name}
-                      </Link>
-                    </td>
-                    {days.map((day) => {
-                      const dateStr = isoDate(year, month, day)
-                      const weekend = isWeekend(year, month, day)
-                      return (
-                        <DayCell
-                          key={day}
-                          dateStr={dateStr}
-                          weekend={weekend}
-                          holidayName={holidayMap[dateStr]}
-                          person={person}
-                          showHolidays={showHolidays}
-                          showAbsences={showAbsences}
-                          showProjects={showProjects}
-                        />
-                      )
-                    })}
-                  </tr>
+                  <PersonRow
+                    key={person.id}
+                    person={person}
+                    year={year}
+                    month={month}
+                    days={days}
+                    numDays={numDays}
+                    todayStr={todayStr}
+                    holidayMap={holidayMap}
+                    showHolidays={showHolidays}
+                    showAbsences={showAbsences}
+                    showProjects={showProjects}
+                    rowClass={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}
+                  />
                 ))}
               </tbody>
             </table>
@@ -465,7 +566,6 @@ export default function CalendarPage() {
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-gray-100 border border-gray-200" /> Wochenende</span>
         </div>
 
-        {/* Forecast chart — only when a specific project is selected */}
         {selectedProjectId != null && (
           <ForecastChart projectId={selectedProjectId} />
         )}
