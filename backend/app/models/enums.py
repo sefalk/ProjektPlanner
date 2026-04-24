@@ -4,6 +4,7 @@ from enum import Enum
 
 
 class ProjectStatus(str, Enum):
+    planned = "planned"
     active = "active"
     completed = "completed"
     archived = "archived"

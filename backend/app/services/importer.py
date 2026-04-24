@@ -1,10 +1,18 @@
 """Sage ERP CSV import service.
 
 Workflow:
-  1. parse_rows()         — decode CSV, normalize column names, coerce types
+  1. parse_rows()         — decode CSV, detect delimiter, normalize column names, coerce types
   2. fuzzy_match_persons() — match employee names to Person.sage_employee_name
   3. resolve_project_mappings() — look up SageProjectMapping rows
   4. import_bookings()    — create ImportBatch + TimeBooking records; dedup via savepoints
+
+Supported Sage export format (current / "echtes" Sage format):
+    Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung
+    02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Qlik/Python;1:30h;
+
+Duration field "Dauer" is parsed as h:mm (e.g. "1:30h" → 1.5 h).
+Legacy column names (Buchungsdatum, Nettozeit, Sage-Projekt, …) are still accepted
+for backward compatibility. Delimiters: semicolon, tab, or comma (auto-detected).
 """
 
 from __future__ import annotations
@@ -29,8 +37,19 @@ FUZZY_THRESHOLD = 80
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class ParseErrorDetail:
+    row: int
+    column: str | None
+    message: str
+
+
 class ParseError(Exception):
     """Raised when the file content cannot be parsed."""
+
+    def __init__(self, message: str, details: list[ParseErrorDetail] | None = None) -> None:
+        self.details: list[ParseErrorDetail] = details or []
+        super().__init__(message)
 
 
 class UnmatchedPersonsError(Exception):
@@ -66,30 +85,48 @@ class ImportResult:
 # ---------------------------------------------------------------------------
 
 # Maps canonical field names to lists of accepted (lowercase) column header variants.
+# Priority: first matching alias wins per canonical key.
 _COLUMN_ALIASES: dict[str, list[str]] = {
-    "booking_date": ["buchungsdatum", "datum", "date", "booking date", "booking_date"],
-    "sage_employee_name": ["mitarbeiter", "employee", "person", "name", "sage_employee_name"],
+    "booking_date": [
+        "datum", "buchungsdatum", "date", "booking date", "booking_date",
+    ],
+    "sage_employee_name": [
+        "mitarbeiter", "employee", "person", "name", "sage_employee_name",
+    ],
     "sage_project_name": [
-        "sage-projekt", "sage projekt", "projekt", "project",
+        "projektname", "sage-projekt", "sage projekt", "projekt", "project",
         "sage_project_name", "sageprojekt",
     ],
     "sage_project_level": [
-        "projektebene", "level", "ebene", "project level", "sage_project_level",
+        "projektebene 1", "projektebene", "level", "ebene", "project level",
+        "sage_project_level",
     ],
+    # "Dauer" (new format, h:mm) is listed first so it takes priority over
+    # legacy "Nettozeit" when only the new format columns are present.
+    # When both appear (old format), whichever is last in the row wins —
+    # _parse_hours handles both decimal and h:mm gracefully.
     "net_hours": [
-        "nettozeit", "net hours", "nethours", "nettostunden",
+        "dauer", "nettozeit", "net hours", "nethours", "nettostunden",
         "stunden", "hours", "net_hours",
     ],
-    "duration_raw": ["dauer", "duration", "duration_raw"],
+    "duration_raw": ["duration", "duration_raw"],
     "break_duration": ["pause", "break", "break duration", "break_duration"],
+    "note": ["bemerkung", "note", "comment"],
 }
 
-_REQUIRED_COLUMNS = {"booking_date", "sage_employee_name", "sage_project_name",
-                     "sage_project_level", "net_hours"}
+_REQUIRED_COLUMNS = {
+    "booking_date", "sage_employee_name", "sage_project_name",
+    "sage_project_level", "net_hours",
+}
 
 
 def _detect_delimiter(sample: str) -> str:
-    return ";" if sample.count(";") > sample.count(",") else ","
+    counts: dict[str, int] = {
+        ";": sample.count(";"),
+        "\t": sample.count("\t"),
+        ",": sample.count(","),
+    }
+    return max(counts, key=lambda k: counts[k])
 
 
 def _build_key_map(header_keys: list[str]) -> dict[str, str]:
@@ -113,20 +150,33 @@ def _parse_date(value: str) -> date:
     raise ParseError(f"Cannot parse date: {value!r}")
 
 
-def _parse_float(value: str) -> float:
+def _parse_hours(value: str) -> float:
+    """Parse hours from decimal ('4.5', '4,5') or h:mm format ('1:30h', '1:30').
+
+    Raises ParseError on unrecognisable input.
+    """
+    v = value.strip().rstrip("h").strip()
+    if ":" in v:
+        parts = v.split(":", 1)
+        try:
+            return int(parts[0]) + int(parts[1]) / 60
+        except ValueError:
+            raise ParseError(f"Cannot parse hours: {value!r}") from None
     try:
-        return float(value.replace(",", ".").strip())
+        return float(v.replace(",", "."))
     except ValueError:
-        raise ParseError(f"Cannot parse number: {value!r}") from None
+        raise ParseError(f"Cannot parse hours: {value!r}") from None
 
 
 def parse_rows(content: str | bytes) -> list[dict[str, Any]]:
     """Parse a Sage ERP CSV export into canonical row dicts with typed values.
 
-    Supports comma and semicolon delimiters, UTF-8 BOM, DD.MM.YYYY and ISO
-    date formats, and both German and English column headers.
+    Supports semicolon, tab, and comma delimiters; UTF-8 BOM; DD.MM.YYYY and
+    ISO date formats; German and English column headers; and both decimal and
+    h:mm duration formats.
 
     Raises ParseError on missing required columns or unparseable values.
+    The exception carries a `details` list with per-row context when available.
     """
     if isinstance(content, bytes):
         content = content.decode("utf-8-sig")  # strip BOM if present
@@ -145,9 +195,15 @@ def parse_rows(content: str | bytes) -> list[dict[str, Any]]:
     key_map = _build_key_map(list(raw_rows[0].keys()))
     missing = _REQUIRED_COLUMNS - set(key_map.values())
     if missing:
-        raise ParseError(f"Missing required columns: {sorted(missing)}")
+        raise ParseError(
+            f"Missing required columns: {sorted(missing)}. "
+            f"Expected columns (Sage format): Datum, Mitarbeiter, Projektname, "
+            f"Projektebene 1, Dauer"
+        )
 
     result: list[dict[str, Any]] = []
+    errors: list[ParseErrorDetail] = []
+
     for i, raw in enumerate(raw_rows, start=2):
         row: dict[str, Any] = {}
         for orig_key, value in raw.items():
@@ -159,13 +215,20 @@ def parse_rows(content: str | bytes) -> list[dict[str, Any]]:
                 "booking_date": _parse_date(row["booking_date"]),
                 "sage_employee_name": row["sage_employee_name"],
                 "sage_project_name": row["sage_project_name"],
-                "sage_project_level": row["sage_project_level"],
-                "net_hours": _parse_float(row["net_hours"]),
+                "sage_project_level": row.get("sage_project_level", ""),
+                "net_hours": _parse_hours(row["net_hours"]),
                 "duration_raw": row.get("duration_raw", ""),
                 "break_duration": row.get("break_duration", ""),
             })
         except ParseError as exc:
-            raise ParseError(f"Row {i}: {exc}") from exc
+            col = "Dauer" if "hours" in str(exc).lower() else "Datum"
+            errors.append(ParseErrorDetail(row=i, column=col, message=str(exc)))
+
+    if errors:
+        raise ParseError(
+            f"{len(errors)} row(s) could not be parsed.",
+            details=errors,
+        )
 
     return result
 
@@ -254,7 +317,7 @@ def import_bookings(
     Duplicate bookings (matching the UNIQUE constraint) are silently skipped.
 
     Raises:
-        ParseError: malformed file content
+        ParseError: malformed file content (carries .details list for row-level errors)
         UnmatchedPersonsError: employee names with no fuzzy match
         UnresolvedProjectsError: sage_project_names with no SageProjectMapping
     """

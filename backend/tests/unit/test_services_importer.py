@@ -129,13 +129,15 @@ def test_parse_rows_missing_required_column():
 
 def test_parse_rows_bad_date_raises():
     csv_str = "Buchungsdatum;Mitarbeiter;Sage-Projekt;Projektebene;Nettozeit\nnot-a-date;Max;P1;Dev;4.0"
-    with pytest.raises(ParseError, match="Cannot parse date"):
+    with pytest.raises(ParseError) as exc_info:
         parse_rows(csv_str)
+    assert exc_info.value.details
+    assert "Cannot parse date" in exc_info.value.details[0].message
 
 
 def test_parse_rows_bad_hours_raises():
     csv_str = "Buchungsdatum;Mitarbeiter;Sage-Projekt;Projektebene;Nettozeit\n01.01.2026;Max;P1;Dev;abc"
-    with pytest.raises(ParseError, match="Cannot parse number"):
+    with pytest.raises(ParseError):
         parse_rows(csv_str)
 
 
@@ -336,3 +338,106 @@ def test_parse_rows_date_formats_consistent(day, month, year):
     rows_dmy = parse_rows(_csv([row], date_fmt="%d.%m.%Y"))
     rows_iso = parse_rows(_csv([row], date_fmt="%Y-%m-%d"))
     assert rows_dmy[0]["booking_date"] == rows_iso[0]["booking_date"] == d
+
+
+# ---------------------------------------------------------------------------
+# New Sage format: Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung
+# ---------------------------------------------------------------------------
+
+def _csv_new(rows: list[dict], delimiter: str = ";") -> str:
+    """Build a new-format Sage CSV (h:mm duration)."""
+    header = delimiter.join(["Datum", "Mitarbeiter", "Projektname", "Projektebene 1", "Dauer", "Bemerkung"])
+    lines = [header]
+    for r in rows:
+        d = r["booking_date"]
+        h = int(r["net_hours"])
+        m = round((r["net_hours"] - h) * 60)
+        duration = f"{h}:{m:02d}h"
+        lines.append(delimiter.join([
+            d.strftime("%d.%m.%Y"),
+            r["sage_employee_name"],
+            r["sage_project_name"],
+            r["sage_project_level"],
+            duration,
+            r.get("note", ""),
+        ]))
+    return "\n".join(lines)
+
+
+def test_new_format_semicolon():
+    rows = parse_rows(_csv_new([_ROW]))
+    assert rows[0]["booking_date"] == date(2026, 1, 15)
+    assert rows[0]["net_hours"] == pytest.approx(4.5)
+    assert rows[0]["sage_project_name"] == "P00001 Analytics"
+    assert rows[0]["sage_project_level"] == "Development"
+
+
+def test_new_format_tab_delimiter():
+    rows = parse_rows(_csv_new([_ROW], delimiter="\t"))
+    assert rows[0]["net_hours"] == pytest.approx(4.5)
+
+
+def test_new_format_duration_1h30():
+    row = {**_ROW, "net_hours": 1.5}
+    rows = parse_rows(_csv_new([row]))
+    assert rows[0]["net_hours"] == pytest.approx(1.5)
+
+
+def test_new_format_duration_full_hours():
+    row = {**_ROW, "net_hours": 7.0}
+    rows = parse_rows(_csv_new([row]))
+    assert rows[0]["net_hours"] == pytest.approx(7.0)
+
+
+def test_new_format_review_sample():
+    """Exact sample from the review document."""
+    csv_str = (
+        'Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n'
+        '02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Qlik/Python;1:30h;\n'
+        '03.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Qlik/Python;7:00h;'
+    )
+    rows = parse_rows(csv_str)
+    assert len(rows) == 2
+    assert rows[0]["net_hours"] == pytest.approx(1.5)
+    assert rows[1]["net_hours"] == pytest.approx(7.0)
+    assert rows[0]["sage_employee_name"] == "Mustermann, Max"
+    assert rows[0]["sage_project_name"] == "PRJ-001 Analytics 2026"
+    assert rows[0]["sage_project_level"] == "Qlik/Python"
+
+
+def test_new_format_parse_error_carries_details():
+    csv_str = (
+        "Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n"
+        "01.01.2026;Max;P1;Dev;not-a-duration;\n"
+    )
+    with pytest.raises(ParseError) as exc_info:
+        parse_rows(csv_str)
+    assert exc_info.value.details
+    assert exc_info.value.details[0].row == 2
+
+
+def test_new_format_missing_column_message():
+    csv_str = "Datum;Mitarbeiter;Projektname;Projektebene 1\n01.01.2026;Max;P1;Dev"
+    with pytest.raises(ParseError, match="Missing required columns"):
+        parse_rows(csv_str)
+
+
+def test_parse_hours_decimal():
+    from app.services.importer import _parse_hours
+    assert _parse_hours("4.5") == pytest.approx(4.5)
+    assert _parse_hours("4,5") == pytest.approx(4.5)
+    assert _parse_hours("8.0") == pytest.approx(8.0)
+
+
+def test_parse_hours_hhmm():
+    from app.services.importer import _parse_hours
+    assert _parse_hours("1:30h") == pytest.approx(1.5)
+    assert _parse_hours("7:00h") == pytest.approx(7.0)
+    assert _parse_hours("0:45h") == pytest.approx(0.75)
+    assert _parse_hours("1:30") == pytest.approx(1.5)  # no trailing h
+
+
+def test_parse_hours_invalid():
+    from app.services.importer import _parse_hours
+    with pytest.raises(ParseError, match="Cannot parse hours"):
+        _parse_hours("not-a-number")

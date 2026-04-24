@@ -4,7 +4,10 @@ import AxeBuilder from '@axe-core/playwright'
 const PAGES = [
   { name: 'Projekte', path: '/projects' },
   { name: 'Personen', path: '/persons' },
-  { name: 'Programme', path: '/programs' },
+  { name: 'Kalender', path: '/calendar' },
+  { name: 'Sage-Import', path: '/import' },
+  { name: 'Hauptprojekte', path: '/programs' },
+  { name: 'Einstellungen', path: '/settings' },
   { name: 'Sage-Mapping', path: '/mappings' },
 ]
 

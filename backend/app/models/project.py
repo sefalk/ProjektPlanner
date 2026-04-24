@@ -20,6 +20,7 @@ class Project(ValidatedSQLModel, table=True):
     start_date: date
     end_date: date
     total_budget_hours: float = Field(gt=0)
+    total_budget_euros: float | None = Field(default=None, gt=0)
     holiday_country: str = "DE"
     holiday_state: str = "BY"
     status: ProjectStatus = ProjectStatus.active

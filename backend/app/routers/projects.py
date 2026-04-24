@@ -1,13 +1,19 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.db import get_session
 from app.models.billing import BillingPosition
+from app.models.enums import MilestoneStatus
 from app.models.membership import ProjectMembership
+from app.models.milestone import Milestone
 from app.models.project import Project
+from app.models.timebooking import TimeBooking
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -36,9 +42,46 @@ class MembershipCreate(SQLModel):
 # Projects
 # ---------------------------------------------------------------------------
 
+class ProjectStats(BaseModel):
+    project_id: int
+    booked_hours: float
+    open_milestones: int
+    overdue_milestones: int
+
+
 @router.get("", response_model=list[Project])
 def list_projects(session: SessionDep, skip: int = 0, limit: int = 100):
     return session.exec(select(Project).offset(skip).limit(limit)).all()
+
+
+@router.get("/stats", response_model=list[ProjectStats])
+def get_project_stats(session: SessionDep):
+    today = date.today()
+
+    booked_rows = session.exec(
+        select(TimeBooking.project_id, func.sum(TimeBooking.net_hours))
+        .group_by(TimeBooking.project_id)
+    ).all()
+    booked_map: dict[int, float] = {pid: float(hrs) for pid, hrs in booked_rows}
+
+    open_ms = session.exec(select(Milestone).where(Milestone.status == MilestoneStatus.open)).all()
+    open_count: dict[int, int] = {}
+    overdue_count: dict[int, int] = {}
+    for ms in open_ms:
+        open_count[ms.project_id] = open_count.get(ms.project_id, 0) + 1
+        if (ms.year, ms.month) < (today.year, today.month):
+            overdue_count[ms.project_id] = overdue_count.get(ms.project_id, 0) + 1
+
+    projects_all = session.exec(select(Project)).all()
+    return [
+        ProjectStats(
+            project_id=p.id,
+            booked_hours=booked_map.get(p.id, 0.0),
+            open_milestones=open_count.get(p.id, 0),
+            overdue_milestones=overdue_count.get(p.id, 0),
+        )
+        for p in projects_all
+    ]
 
 
 @router.post("", response_model=Project, status_code=201)

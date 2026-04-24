@@ -172,31 +172,43 @@ def test_update_contingent_not_found(client):
 # ---------------------------------------------------------------------------
 
 def test_create_vacation_contingent(client):
+    # Person creation auto-creates a contingent for current year (2026).
+    # Use 2027 to avoid the conflict.
     person = client.post("/persons", json=_person()).json()
     r = client.post(f"/persons/{person['id']}/vacation-contingents", json={
-        "year": 2026, "total_days": 30.0
+        "year": 2027, "total_days": 30.0
     })
     assert r.status_code == 201
     assert r.json()["total_days"] == 30.0
 
 
+def test_create_person_auto_creates_vacation_contingent(client):
+    person = client.post("/persons", json=_person()).json()
+    r = client.get(f"/persons/{person['id']}/vacation-contingents")
+    assert r.status_code == 200
+    contingents = r.json()
+    assert len(contingents) == 1
+    assert contingents[0]["year"] == 2026  # current year
+
+
 def test_create_duplicate_contingent_returns_409(client):
     person = client.post("/persons", json=_person()).json()
-    client.post(f"/persons/{person['id']}/vacation-contingents", json={"year": 2026, "total_days": 30.0})
+    # Auto-create already made 2026; duplicate should return 409.
     r = client.post(f"/persons/{person['id']}/vacation-contingents", json={"year": 2026, "total_days": 25.0})
     assert r.status_code == 409
 
 
 def test_list_vacation_contingents(client):
     person = client.post("/persons", json=_person()).json()
-    client.post(f"/persons/{person['id']}/vacation-contingents", json={"year": 2026, "total_days": 30.0})
+    # Auto-create made 1 for 2026; add another for 2027.
+    client.post(f"/persons/{person['id']}/vacation-contingents", json={"year": 2027, "total_days": 30.0})
     r = client.get(f"/persons/{person['id']}/vacation-contingents")
-    assert len(r.json()) == 1
+    assert len(r.json()) == 2
 
 
 def test_update_vacation_contingent(client):
     person = client.post("/persons", json=_person()).json()
-    vc = client.post(f"/persons/{person['id']}/vacation-contingents", json={"year": 2026, "total_days": 30.0}).json()
-    r = client.put(f"/persons/{person['id']}/vacation-contingents/{vc['id']}", json={"year": 2026, "total_days": 25.0})
+    vc = client.post(f"/persons/{person['id']}/vacation-contingents", json={"year": 2027, "total_days": 30.0}).json()
+    r = client.put(f"/persons/{person['id']}/vacation-contingents/{vc['id']}", json={"year": 2027, "total_days": 25.0})
     assert r.status_code == 200
     assert r.json()["total_days"] == 25.0

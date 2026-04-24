@@ -184,3 +184,95 @@ def test_update_budget_milestone_not_found(client):
         json={"current_hours": 10.0},
     )
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /projects/{id}/milestones/detail
+# ---------------------------------------------------------------------------
+
+
+def test_get_milestones_detail_project_not_found(client):
+    assert client.get("/projects/9999/milestones/detail").status_code == 404
+
+
+def test_get_milestones_detail_empty_before_init(client):
+    proj_id, _ = _setup(client)
+    r = client.get(f"/projects/{proj_id}/milestones/detail")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_get_milestones_detail_after_init(client):
+    proj_id, _ = _setup(client)
+    client.post(f"/projects/{proj_id}/milestones/initialize")
+    r = client.get(f"/projects/{proj_id}/milestones/detail")
+    assert r.status_code == 200
+    details = r.json()
+    assert len(details) == 3  # Jan, Feb, Mar
+    # Each detail has milestone and persons list
+    for d in details:
+        assert "milestone" in d
+        assert "persons" in d
+        assert len(d["persons"]) == 1  # one member
+        p = d["persons"][0]
+        assert "person_id" in p
+        assert "initial_hours" in p
+        assert "work_days" in p
+        assert "absence_days" in p
+        assert "holiday_days" in p
+        assert "billing_rate_per_hour" in p
+
+
+def test_get_milestones_detail_initial_hours_positive(client):
+    proj_id, _ = _setup(client)
+    client.post(f"/projects/{proj_id}/milestones/initialize")
+    details = client.get(f"/projects/{proj_id}/milestones/detail").json()
+    for d in details:
+        for p in d["persons"]:
+            assert p["initial_hours"] > 0
+
+
+# ---------------------------------------------------------------------------
+# PUT /projects/{id}/milestones/{mid}/persons/{pid}
+# ---------------------------------------------------------------------------
+
+
+def test_put_person_budget_by_person_id(client):
+    proj_id, person_id = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}",
+        json={"current_hours": 42.0},
+    )
+    assert r.status_code == 200
+    assert r.json()["current_hours"] == 42.0
+
+
+def test_put_person_budget_syncs_milestone(client):
+    proj_id, person_id = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}",
+        json={"current_hours": 33.0},
+    )
+    updated = client.get(f"/projects/{proj_id}/milestones/{ms['id']}").json()
+    assert updated["current_hours"] == 33.0
+
+
+def test_put_person_budget_milestone_not_found(client):
+    proj_id, person_id = _setup(client)
+    r = client.put(
+        f"/projects/{proj_id}/milestones/9999/persons/{person_id}",
+        json={"current_hours": 10.0},
+    )
+    assert r.status_code == 404
+
+
+def test_put_person_budget_person_not_in_milestone(client):
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/persons/9999",
+        json={"current_hours": 10.0},
+    )
+    assert r.status_code == 404

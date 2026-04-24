@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 
 from app.models.enums import AbsenceStatus, AbsenceType
 from app.models.membership import ProjectMembership
-from app.models.person import PersonAbsence, VacationContingent
+from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
 from app.services.holiday import get_holidays_in_range
 
@@ -160,6 +160,22 @@ def available_days(
     return float(wdays) - holiday_deduction - absences - estimate
 
 
+def _parse_work_week_pattern(pattern: str) -> list[float]:
+    """Parse 'h1,h2,h3,h4,h5' → list of 5 floats (Mon–Fri daily hours)."""
+    parts = [p.strip() for p in pattern.split(",")]
+    if len(parts) != 5:
+        raise ValueError(f"work_week_pattern must have exactly 5 values, got: {pattern!r}")
+    return [float(p) for p in parts]
+
+
+def _hours_per_day_from_pattern(pattern: list[float], weekday: int, weekly_capacity: float) -> float:
+    """Scale pattern hours by the person's weekly_capacity_hours / sum(pattern)."""
+    total = sum(pattern)
+    if total <= 0 or weekday >= 5:
+        return 0.0
+    return pattern[weekday] * (weekly_capacity / total)
+
+
 def capacity_hours(
     person_id: int,
     project_id: int,
@@ -173,6 +189,9 @@ def capacity_hours(
     Uses the active ProjectMembership for weekly_capacity_hours and the
     project's holiday_country/state for the availability calc.
     Returns 0.0 if no membership exists for this person+project.
+
+    If the person has a work_week_pattern set, hours are computed by summing
+    pattern-scaled hours per working day instead of uniform hours_per_day.
     """
     membership = session.exec(
         select(ProjectMembership).where(
@@ -187,6 +206,36 @@ def capacity_hours(
     country = project.holiday_country if project else "DE"
     state = project.holiday_state if project else "BY"
 
-    avail = available_days(person_id, start, end, country, state, session, client)
-    hours_per_day = membership.weekly_capacity_hours / 5.0
-    return max(0.0, avail * hours_per_day)
+    person = session.get(Person, person_id)
+    pattern: list[float] | None = None
+    if person and person.work_week_pattern:
+        try:
+            pattern = _parse_work_week_pattern(person.work_week_pattern)
+        except ValueError:
+            pattern = None
+
+    if pattern is None:
+        avail = available_days(person_id, start, end, country, state, session, client)
+        return max(0.0, avail * (membership.weekly_capacity_hours / 5.0))
+
+    # Pattern-aware: sum hours for each working day not covered by holidays/absences.
+    holidays = get_holidays_in_range(start, end, country, state, session, client)
+    holiday_dates = {h.holiday_date for h in holidays if h.is_workday}
+    absence_count = absence_days_in_range(person_id, start, end, session)
+    vacation_estimate = estimated_vacation_days(person_id, start, end, session)
+    # Compute available fraction: (working_days - absences - vacations) / working_days
+    wdays = working_days(start, end)
+    net_working_days = max(0.0, wdays - absence_count - vacation_estimate)
+    if wdays == 0:
+        return 0.0
+    availability_fraction = net_working_days / wdays
+
+    total = 0.0
+    day = start
+    while day <= end:
+        wd = day.weekday()
+        if wd < 5 and day not in holiday_dates:
+            h = _hours_per_day_from_pattern(pattern, wd, membership.weekly_capacity_hours)
+            total += h * availability_fraction
+        day += timedelta(days=1)
+    return max(0.0, total)

@@ -1,17 +1,21 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { mappings, projects, type SageProjectMapping } from '../api'
 import PageHeader from '../components/PageHeader'
 import Table from '../components/Table'
 import Modal from '../components/Modal'
 
-function MappingForm({ onSave, onCancel }: {
+function MappingForm({ initial, onSave, onCancel }: {
+  initial?: SageProjectMapping
   onSave: (d: { sage_project_name: string; project_id: number }) => void
   onCancel: () => void
 }) {
   const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projects.list })
-  const [form, setForm] = useState({ sage_project_name: '', project_id: 0 })
+  const [form, setForm] = useState({
+    sage_project_name: initial?.sage_project_name ?? '',
+    project_id: initial?.project_id ?? 0,
+  })
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
       <div>
@@ -46,6 +50,7 @@ function MappingForm({ onSave, onCancel }: {
 export default function MappingsPage() {
   const qc = useQueryClient()
   const [showCreate, setShowCreate] = useState(false)
+  const [editMapping, setEditMapping] = useState<SageProjectMapping | null>(null)
 
   const { data = [], isLoading } = useQuery({ queryKey: ['mappings'], queryFn: mappings.list })
   const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projects.list })
@@ -54,6 +59,11 @@ export default function MappingsPage() {
   const create = useMutation({
     mutationFn: mappings.create,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['mappings'] }); setShowCreate(false) },
+  })
+  const update = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: { sage_project_name: string; project_id: number } }) =>
+      mappings.update(id, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['mappings'] }); setEditMapping(null) },
   })
   const remove = useMutation({
     mutationFn: mappings.delete,
@@ -69,15 +79,31 @@ export default function MappingsPage() {
     {
       key: 'actions', header: '',
       render: (m: SageProjectMapping) => (
-        <button aria-label={`Mapping ${m.sage_project_name} löschen`} onClick={(e) => { e.stopPropagation(); remove.mutate(m.id) }}
-          className="text-gray-400 hover:text-red-500"><Trash2 size={14} /></button>
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <button
+            aria-label={`Mapping ${m.sage_project_name} bearbeiten`}
+            onClick={() => setEditMapping(m)}
+            className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+          >
+            <Pencil size={13} />
+          </button>
+          <button
+            aria-label={`Mapping ${m.sage_project_name} löschen`}
+            onClick={() => remove.mutate(m.id)}
+            className="p-1 text-gray-400 hover:text-red-500 transition-colors"
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
       ),
     },
   ]
 
   return (
     <div>
-      <PageHeader title="Sage-Projekt-Mapping" subtitle="Verknüpfung von Sage-Namen mit internen Projekten"
+      <PageHeader
+        title="Sage-Projekt-Mapping"
+        subtitle="Verknüpfung von Sage-Projektnamen mit internen Projekten"
         actions={
           <button onClick={() => setShowCreate(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
@@ -92,9 +118,20 @@ export default function MappingsPage() {
           </div>
         )}
       </div>
+
       {showCreate && (
         <Modal title="Neues Mapping" onClose={() => setShowCreate(false)}>
           <MappingForm onSave={(d) => create.mutate(d)} onCancel={() => setShowCreate(false)} />
+        </Modal>
+      )}
+
+      {editMapping && (
+        <Modal title="Mapping bearbeiten" onClose={() => setEditMapping(null)}>
+          <MappingForm
+            initial={editMapping}
+            onSave={(d) => update.mutate({ id: editMapping.id, data: d })}
+            onCancel={() => setEditMapping(null)}
+          />
         </Modal>
       )}
     </div>

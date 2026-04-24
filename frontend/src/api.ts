@@ -33,9 +33,10 @@ export interface Project {
   start_date: string;
   end_date: string;
   total_budget_hours: number;
+  total_budget_euros: number | null;
   holiday_country: string;
   holiday_state: string;
-  status: 'active' | 'completed' | 'archived';
+  status: 'planned' | 'active' | 'completed' | 'archived';
   program_id: number | null;
 }
 
@@ -44,6 +45,12 @@ export interface Person {
   name: string;
   sage_employee_name: string;
   default_weekly_hours: number;
+  work_week_pattern: string | null;
+  default_billing_rate: number | null;
+}
+
+export interface PersonWithProjects extends Person {
+  project_numbers: string[];
 }
 
 export interface ProjectMembership {
@@ -81,6 +88,23 @@ export interface MilestonePersonBudget {
   person_id: number;
   initial_hours: number;
   current_hours: number;
+}
+
+export interface MilestonePersonDetail {
+  person_id: number;
+  person_name: string;
+  budget_id: number;
+  initial_hours: number;
+  current_hours: number;
+  work_days: number;
+  absence_days: number;
+  holiday_days: number;
+  billing_rate_per_hour: number;
+}
+
+export interface MilestoneDetail {
+  milestone: Milestone;
+  persons: MilestonePersonDetail[];
 }
 
 export interface PersonDrift {
@@ -139,12 +163,21 @@ export const programs = {
   get: (id: number) => req<Program>('GET', `/programs/${id}`),
   update: (id: number, d: Omit<Program, 'id'>) => req<Program>('PUT', `/programs/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/programs/${id}`),
+  projects: (id: number) => req<Project[]>('GET', `/programs/${id}/projects`),
 };
+
+export interface ProjectStats {
+  project_id: number;
+  booked_hours: number;
+  open_milestones: number;
+  overdue_milestones: number;
+}
 
 // ─── Projects ────────────────────────────────────────────────────────────────
 
 export const projects = {
   list: () => req<Project[]>('GET', '/projects'),
+  stats: () => req<ProjectStats[]>('GET', '/projects/stats'),
   create: (d: Omit<Project, 'id'>) => req<Project>('POST', '/projects', d),
   get: (id: number) => req<Project>('GET', `/projects/${id}`),
   update: (id: number, d: Omit<Project, 'id'>) => req<Project>('PUT', `/projects/${id}`, d),
@@ -158,7 +191,10 @@ export const projects = {
   addBillingPosition: (id: number, d: Omit<BillingPosition, 'id' | 'project_id'>) =>
     req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
   milestones: (id: number) => req<Milestone[]>('GET', `/projects/${id}/milestones`),
+  milestonesDetail: (id: number) => req<MilestoneDetail[]>('GET', `/projects/${id}/milestones/detail`),
   initMilestones: (id: number) => req<Milestone[]>('POST', `/projects/${id}/milestones/initialize`),
+  updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}`, { current_hours: hours }),
   drift: (id: number) => req<PersonDrift[]>('GET', `/projects/${id}/rebalancing/drift`),
   suggestions: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/rebalancing/suggestions`),
   applyRebalancing: (id: number) => req<unknown[]>('POST', `/projects/${id}/rebalancing/apply`),
@@ -188,6 +224,7 @@ export interface VacationContingent {
 
 export const persons = {
   list: () => req<Person[]>('GET', '/persons'),
+  withProjects: () => req<PersonWithProjects[]>('GET', '/persons/with-projects'),
   create: (d: Omit<Person, 'id'>) => req<Person>('POST', '/persons', d),
   get: (id: number) => req<Person>('GET', `/persons/${id}`),
   update: (id: number, d: Omit<Person, 'id'>) => req<Person>('PUT', `/persons/${id}`, d),
@@ -246,13 +283,16 @@ export interface CalendarMembership {
   project_id: number;
   project_number: string;
   project_name: string;
+  program_id: number | null;
   from_date: string;
   to_date: string;
+  weekly_capacity_hours: number;
 }
 
 export interface CalendarPerson {
   id: number;
   name: string;
+  default_weekly_hours: number;
   absences: CalendarAbsence[];
   memberships: CalendarMembership[];
 }
@@ -264,6 +304,8 @@ export interface CalendarMilestone {
   month: number;
   status: 'open' | 'closed';
   is_locked: boolean;
+  initial_hours: number;
+  current_hours: number;
 }
 
 export interface CalendarResponse {
@@ -277,6 +319,14 @@ export interface CalendarResponse {
 export const calendar = {
   get: (year: number, month: number) =>
     req<CalendarResponse>('GET', `/calendar?year=${year}&month=${month}`),
+};
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+export const settings = {
+  get: () => req<Record<string, string>>('GET', '/settings'),
+  update: (key: string, value: string) =>
+    req<{ key: string; value: string }>('PUT', `/settings/${key}`, { value }),
 };
 
 // ─── Imports ─────────────────────────────────────────────────────────────────

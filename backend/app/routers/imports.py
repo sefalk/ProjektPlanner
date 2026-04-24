@@ -15,6 +15,8 @@ from app.services.importer import (
     import_bookings,
 )
 
+
+
 router = APIRouter(tags=["imports"])
 
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -54,6 +56,14 @@ async def post_import(file: UploadFile, session: SessionDep):
             content, session, source_filename=file.filename
         )
     except ParseError as exc:
+        if exc.details:
+            raise HTTPException(422, {
+                "detail": str(exc),
+                "parse_errors": [
+                    {"row": d.row, "column": d.column, "message": d.message}
+                    for d in exc.details
+                ],
+            }) from exc
         raise HTTPException(422, str(exc)) from exc
     except UnresolvedProjectsError as exc:
         raise HTTPException(

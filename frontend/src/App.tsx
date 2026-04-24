@@ -1,5 +1,5 @@
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { FolderOpen, Users, Briefcase, Map, LayoutDashboard, CalendarDays, ArrowDownToLine } from 'lucide-react'
+import { FolderOpen, Users, Briefcase, Map, LayoutDashboard, CalendarDays, ArrowDownToLine, Settings } from 'lucide-react'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectDetailPage from './pages/ProjectDetailPage'
 import PersonsPage from './pages/PersonsPage'
@@ -8,13 +8,14 @@ import MappingsPage from './pages/MappingsPage'
 import CalendarPage from './pages/CalendarPage'
 import ImportPage from './pages/ImportPage'
 import PersonDetailPage from './pages/PersonDetailPage'
+import SettingsPage from './pages/SettingsPage'
 
 const navItems = [
+  { to: '/calendar', label: 'Kalender', icon: CalendarDays },
   { to: '/projects', label: 'Projekte', icon: FolderOpen },
   { to: '/persons', label: 'Personen', icon: Users },
-  { to: '/calendar', label: 'Kalender', icon: CalendarDays },
   { to: '/import', label: 'Sage-Import', icon: ArrowDownToLine },
-  { to: '/programs', label: 'Programme', icon: Briefcase },
+  { to: '/programs', label: 'Hauptprojekte', icon: Briefcase },
   { to: '/mappings', label: 'Sage-Mapping', icon: Map },
 ]
 
@@ -50,15 +51,28 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="px-4 py-3 border-t border-slate-700">
-          <p className="text-xs text-slate-400">v0.1.0</p>
+        <div className="px-2 py-2 border-t border-slate-700">
+          <NavLink
+            to="/settings"
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isActive
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`
+            }
+          >
+            <Settings size={15} />
+            Einstellungen
+          </NavLink>
+          <p className="text-xs text-slate-400 px-3 pt-2">v0.2.0</p>
         </div>
       </aside>
 
       {/* Main content area */}
       <main className="flex-1 overflow-auto">
         <Routes>
-          <Route path="/" element={<Navigate to="/projects" replace />} />
+          <Route path="/" element={<Navigate to="/calendar" replace />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectDetailPage />} />
           <Route path="/persons" element={<PersonsPage />} />
@@ -67,6 +81,7 @@ export default function App() {
           <Route path="/import" element={<ImportPage />} />
           <Route path="/programs" element={<ProgramsPage />} />
           <Route path="/mappings" element={<MappingsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
     </div>

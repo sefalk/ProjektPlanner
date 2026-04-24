@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2 } from 'lucide-react'
+import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
 import {
-  projects, persons, invoices as invoiceApi,
-  type ProjectMembership, type MonthlyInvoice,
+  projects, persons, programs, invoices as invoiceApi,
+  type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type MilestoneSuggestion,
 } from '../api'
 import Modal from '../components/Modal'
 import Table from '../components/Table'
@@ -37,13 +37,23 @@ export default function ProjectDetailPage() {
   const [tab, setTab] = useState<Tab>('milestones')
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
+  const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
+  const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
+  const [editBudget, setEditBudget] = useState<{ milestoneId: number; personId: number; personName: string; currentHours: number } | null>(null)
+  const [editHours, setEditHours] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
   const [error, setError] = useState<string | null>(null)
 
   // Queries
   const { data: project } = useQuery({ queryKey: ['project', projectId], queryFn: () => projects.get(projectId) })
+  const { data: program } = useQuery({
+    queryKey: ['program', project?.program_id],
+    queryFn: () => programs.get(project!.program_id!),
+    enabled: !!project?.program_id,
+  })
   const { data: milestones = [] } = useQuery({ queryKey: ['milestones', projectId], queryFn: () => projects.milestones(projectId) })
+  const { data: milestonesDetail = [] } = useQuery({ queryKey: ['milestones-detail', projectId], queryFn: () => projects.milestonesDetail(projectId) })
   const { data: drift = [] } = useQuery({ queryKey: ['drift', projectId], queryFn: () => projects.drift(projectId) })
   const { data: suggestions = [] } = useQuery({ queryKey: ['suggestions', projectId], queryFn: () => projects.suggestions(projectId) })
   const { data: invoiceList = [] } = useQuery({ queryKey: ['invoices', projectId], queryFn: () => projects.invoices(projectId) })
@@ -53,9 +63,21 @@ export default function ProjectDetailPage() {
   const personName = (pid: number) => personList.find((p) => p.id === pid)?.name ?? String(pid)
 
   // Mutations
+  const invalidateMilestones = () => {
+    qc.invalidateQueries({ queryKey: ['milestones', projectId] })
+    qc.invalidateQueries({ queryKey: ['milestones-detail', projectId] })
+  }
+
   const initMilestones = useMutation({
     mutationFn: () => projects.initMilestones(projectId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['milestones', projectId] }),
+    onSuccess: invalidateMilestones,
+  })
+
+  const updatePersonBudget = useMutation({
+    mutationFn: ({ milestoneId, personId, hours }: { milestoneId: number; personId: number; hours: number }) =>
+      projects.updatePersonBudget(projectId, milestoneId, personId, hours),
+    onSuccess: () => { invalidateMilestones(); setEditBudget(null) },
+    onError: (e: Error) => setError(e.message),
   })
   const applyRebalancing = useMutation({
     mutationFn: () => projects.applyRebalancing(projectId),
@@ -68,7 +90,7 @@ export default function ProjectDetailPage() {
     mutationFn: () => projects.closeMonth(projectId, closeForm),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['invoices', projectId] })
-      qc.invalidateQueries({ queryKey: ['milestones', projectId] })
+      invalidateMilestones()
       setShowCloseModal(false)
       setError(null)
     },
@@ -123,7 +145,15 @@ export default function ProjectDetailPage() {
               <h2 className="text-xl font-semibold text-gray-900">{project.name}</h2>
               <span className="text-sm text-gray-400">{project.project_number}</span>
             </div>
-            <p className="text-sm text-gray-500 mt-0.5">{project.start_date} – {project.end_date} · {project.total_budget_hours.toLocaleString('de-DE')} Std.</p>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {project.start_date} – {project.end_date} · {project.total_budget_hours.toLocaleString('de-DE')} Std.
+              {project.total_budget_euros != null && (
+                <> · {project.total_budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })}</>
+              )}
+            </p>
+            {program && (
+              <p className="text-xs text-gray-400 mt-0.5">Hauptprojekt: {program.program_number} – {program.name}</p>
+            )}
           </div>
         </div>
         {/* Tabs */}
@@ -146,48 +176,154 @@ export default function ProjectDetailPage() {
       <div className="p-6">
 
         {/* ── Milestones ── */}
-        {tab === 'milestones' && (
-          <div>
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
-              <button onClick={() => initMilestones.mutate()}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                <RefreshCw size={14} /> Initialisieren
-              </button>
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    {['Monat', 'Plan (init.)', 'Aktuell', 'Status', ''].map((h) => (
-                      <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {milestones.length === 0 && (
-                    <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
-                  )}
-                  {milestones.map((ms) => (
-                    <tr key={ms.id}>
-                      <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[ms.month]} {ms.year}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{ms.initial_hours.toFixed(1)} h</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{ms.current_hours.toFixed(1)} h</td>
-                      <td className="px-4 py-3 text-sm">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
-                          {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-400">
-                        {ms.is_locked ? <Lock size={13} /> : <Unlock size={13} />}
-                      </td>
+        {tab === 'milestones' && (() => {
+          const suggMap: Record<number, number> = {}
+          suggestions.forEach((s: MilestoneSuggestion) => {
+            suggMap[s.milestone_id] = s.total_current_hours
+          })
+          const toggleExpand = (id: number) => {
+            setExpandedMilestones((prev) => {
+              const next = new Set(prev)
+              next.has(id) ? next.delete(id) : next.add(id)
+              return next
+            })
+          }
+          const totals = milestonesDetail.reduce(
+            (acc, d: MilestoneDetail) => ({
+              initial: acc.initial + d.milestone.initial_hours,
+              current: acc.current + d.milestone.current_hours,
+              euros: acc.euros + d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0),
+            }),
+            { initial: 0, current: 0, euros: 0 },
+          )
+          return (
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
+                <button onClick={() => initMilestones.mutate()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                  <RefreshCw size={14} /> Initialisieren
+                </button>
+              </div>
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-6"></th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monat</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan (init.)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Aktuell (angepasst)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rebalanciert</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Budget (€)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {milestonesDetail.length === 0 && (
+                      <tr><td colSpan={8} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
+                    )}
+                    {milestonesDetail.map((d: MilestoneDetail) => {
+                      const ms = d.milestone
+                      const expanded = expandedMilestones.has(ms.id)
+                      const euros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+                      const rebalanced = suggMap[ms.id]
+                      return [
+                        <tr key={ms.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(ms.id)}>
+                          <td className="px-4 py-3 text-gray-400">
+                            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          </td>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[ms.month]} {ms.year}</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{ms.initial_hours.toFixed(1)} h</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">{ms.current_hours.toFixed(1)} h</td>
+                          <td className="px-4 py-3 text-sm text-blue-600">
+                            {rebalanced != null ? `${rebalanced.toFixed(1)} h` : <span className="text-gray-300">–</span>}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-600">
+                            {euros > 0 ? euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : <span className="text-gray-300">–</span>}
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
+                              {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-2">
+                              {ms.is_locked ? <Lock size={13} className="text-gray-400" /> : <Unlock size={13} className="text-gray-300" />}
+                              {ms.status === 'open' && !ms.is_locked && (
+                                <button
+                                  onClick={() => {
+                                    setCloseForm({ year: ms.year, month: ms.month, billing_position_id: billingPositions[0]?.id ?? 0 })
+                                    setShowCloseModal(true)
+                                  }}
+                                  className="text-xs text-blue-600 hover:underline whitespace-nowrap">
+                                  Abschließen
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>,
+                        expanded && d.persons.length > 0 && (
+                          <tr key={`${ms.id}-persons`}>
+                            <td colSpan={8} className="p-0">
+                              <table className="w-full bg-slate-50 border-t border-slate-100">
+                                <thead>
+                                  <tr className="text-xs text-gray-400 border-b border-slate-100">
+                                    <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
+                                    <th className="px-4 py-1.5 text-left font-normal">Plan</th>
+                                    <th className="px-4 py-1.5 text-left font-normal">Aktuell</th>
+                                    <th className="px-4 py-1.5 text-left font-normal">Arbeitstage</th>
+                                    <th className="px-4 py-1.5 text-left font-normal">Abwesenheit</th>
+                                    <th className="px-4 py-1.5 text-left font-normal">Feiertage</th>
+                                    <th className="px-4 py-1.5"></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {d.persons.map((p) => (
+                                    <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
+                                      <td className="pl-12 pr-4 py-2 text-gray-700">{p.person_name}</td>
+                                      <td className="px-4 py-2 text-gray-500">{p.initial_hours.toFixed(1)} h</td>
+                                      <td className="px-4 py-2 text-gray-700 font-medium">{p.current_hours.toFixed(1)} h</td>
+                                      <td className="px-4 py-2 text-gray-500">{p.work_days} T</td>
+                                      <td className="px-4 py-2 text-gray-500">{p.absence_days} T</td>
+                                      <td className="px-4 py-2 text-gray-500">{p.holiday_days} T</td>
+                                      <td className="px-4 py-2">
+                                        {ms.status === 'open' && !ms.is_locked && (
+                                          <button
+                                            onClick={() => { setEditBudget({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
+                                            className="p-1 text-gray-400 hover:text-blue-600">
+                                            <Pencil size={12} />
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        ),
+                      ]
+                    })}
+                    {milestonesDetail.length > 0 && (
+                      <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200">
+                        <td></td>
+                        <td className="px-4 py-3 text-gray-700">Gesamt</td>
+                        <td className="px-4 py-3 text-gray-700">{totals.initial.toFixed(1)} h</td>
+                        <td className="px-4 py-3 text-gray-700">{totals.current.toFixed(1)} h</td>
+                        <td></td>
+                        <td className="px-4 py-3 text-gray-700">
+                          {totals.euros > 0 ? totals.euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : '–'}
+                        </td>
+                        <td colSpan={2}></td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         {/* ── Rebalancing ── */}
         {tab === 'rebalancing' && (
@@ -306,7 +442,7 @@ export default function ProjectDetailPage() {
                             <>
                               <button onClick={() => advanceStatus.mutate({ id: inv.id, status: 'invoiced' })}
                                 className="text-xs text-blue-600 hover:underline">Abrechnen</button>
-                              <button onClick={() => reopenInvoice.mutate(inv.id)}
+                              <button onClick={() => setConfirmReopenId(inv.id)}
                                 className="text-xs text-gray-400 hover:text-red-500">Wiedereröffnen</button>
                             </>
                           )}
@@ -403,6 +539,46 @@ export default function ProjectDetailPage() {
         </Modal>
       )}
 
+      {/* Edit person budget modal */}
+      {editBudget && (
+        <Modal title={`Stunden anpassen — ${editBudget.personName}`} onClose={() => setEditBudget(null)}>
+          <form onSubmit={(e) => { e.preventDefault(); updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours }) }} className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Aktuelle Stunden</label>
+              <input
+                autoFocus
+                required type="number" min={0} step={0.5}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={editHours}
+                onChange={(e) => setEditHours(parseFloat(e.target.value))}
+              />
+            </div>
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setEditBudget(null)}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              <button type="submit"
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Reopen invoice confirmation */}
+      {confirmReopenId !== null && (
+        <Modal title="Monat wiedereröffnen" onClose={() => setConfirmReopenId(null)}>
+          <p className="text-sm text-gray-700 mb-4">
+            Dieser Monat ist bereits abgeschlossen. Trotzdem wiedereröffnen und die Abrechnung rückgängig machen?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmReopenId(null)}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+            <button onClick={() => { reopenInvoice.mutate(confirmReopenId); setConfirmReopenId(null) }}
+              className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700">Wiedereröffnen</button>
+          </div>
+        </Modal>
+      )}
+
       {/* Add member modal */}
       {showAddMember && (
         <Modal title="Mitglied hinzufügen" onClose={() => { setShowAddMember(false); setError(null) }}>
@@ -411,7 +587,15 @@ export default function ProjectDetailPage() {
               <label className="block text-xs font-medium text-gray-600 mb-1">Person</label>
               <select required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                 value={addMemberForm.person_id}
-                onChange={(e) => setAddMemberForm({ ...addMemberForm, person_id: parseInt(e.target.value) })}>
+                onChange={(e) => {
+                  const pid = parseInt(e.target.value)
+                  const person = personList.find((p) => p.id === pid)
+                  setAddMemberForm({
+                    ...addMemberForm,
+                    person_id: pid,
+                    billing_rate_per_hour: person?.default_billing_rate ?? addMemberForm.billing_rate_per_hour,
+                  })
+                }}>
                 <option value={0} disabled>— bitte wählen —</option>
                 {personList.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>

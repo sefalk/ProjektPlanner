@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     default_holiday_state: str = "BY"
 
     # Application
-    app_version: str = "0.1.0"
+    app_version: str = "0.2.0"
     debug: bool = False
 
 

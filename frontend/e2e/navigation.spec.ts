@@ -18,18 +18,30 @@ test.describe('Navigation', () => {
     await expect(page).toHaveURL(/\/persons/)
     await expect(page.getByRole('heading', { name: 'Personen' })).toBeVisible()
 
-    await page.getByRole('link', { name: 'Programme' }).click()
+    await page.getByRole('link', { name: 'Kalender' }).click()
+    await expect(page).toHaveURL(/\/calendar/)
+    await expect(page.getByRole('heading', { name: 'Kalender' })).toBeVisible()
+
+    await page.getByRole('link', { name: 'Sage-Import' }).click()
+    await expect(page).toHaveURL(/\/import/)
+    await expect(page.getByRole('heading', { name: /sage-import/i })).toBeVisible()
+
+    await page.getByRole('link', { name: 'Hauptprojekte' }).click()
     await expect(page).toHaveURL(/\/programs/)
-    await expect(page.getByRole('heading', { name: 'Programme' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Hauptprojekte' })).toBeVisible()
 
     await page.getByRole('link', { name: 'Sage-Mapping' }).click()
     await expect(page).toHaveURL(/\/mappings/)
     await expect(page.getByRole('heading', { name: /sage/i })).toBeVisible()
+
+    await page.getByRole('link', { name: 'Einstellungen' }).click()
+    await expect(page).toHaveURL(/\/settings/)
+    await expect(page.getByRole('heading', { name: 'Einstellungen' })).toBeVisible()
   })
 
-  test('root path redirects to /projects', async ({ page }) => {
+  test('root path redirects to /calendar', async ({ page }) => {
     await page.goto('/')
-    await expect(page).toHaveURL(/\/projects/)
+    await expect(page).toHaveURL(/\/calendar/)
   })
 
   test('active nav item is highlighted', async ({ page }) => {

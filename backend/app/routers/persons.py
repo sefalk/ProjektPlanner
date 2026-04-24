@@ -8,6 +8,9 @@ from sqlmodel import Field, Session, SQLModel, select
 from app.db import get_session
 from app.models.enums import AbsenceStatus, AbsenceType
 from app.models.person import Person, PersonAbsence, VacationContingent
+from app.models.membership import ProjectMembership
+from app.models.project import Project
+from app.models.setting import Setting
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
@@ -31,6 +34,14 @@ class ContingentCreate(SQLModel):
     total_days: float = Field(ge=0, le=365)
 
 
+class PersonWithProjects(SQLModel):
+    id: int
+    name: str
+    sage_employee_name: str
+    default_weekly_hours: float
+    project_numbers: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Persons
 # ---------------------------------------------------------------------------
@@ -40,11 +51,49 @@ def list_persons(session: SessionDep, skip: int = 0, limit: int = 100):
     return session.exec(select(Person).offset(skip).limit(limit)).all()
 
 
+@router.get("/with-projects", response_model=list[PersonWithProjects])
+def list_persons_with_projects(session: SessionDep):
+    all_persons = session.exec(select(Person)).all()
+    memberships = session.exec(select(ProjectMembership)).all()
+    projects_map = {
+        p.id: p.project_number
+        for p in session.exec(select(Project)).all()
+    }
+    person_projects: dict[int, list[str]] = {p.id: [] for p in all_persons}
+    for m in memberships:
+        if m.person_id in person_projects and m.project_id in projects_map:
+            num = projects_map[m.project_id]
+            if num not in person_projects[m.person_id]:
+                person_projects[m.person_id].append(num)
+    return [
+        PersonWithProjects(
+            id=p.id,
+            name=p.name,
+            sage_employee_name=p.sage_employee_name,
+            default_weekly_hours=p.default_weekly_hours,
+            project_numbers=person_projects.get(p.id, []),
+        )
+        for p in all_persons
+    ]
+
+
 @router.post("", response_model=Person, status_code=201)
 def create_person(person: Person, session: SessionDep):
+    from datetime import date as _date
     person.id = None
     try:
         session.add(person)
+        session.flush()
+        # Auto-create vacation contingent for the current year using default_vacation_days setting.
+        setting = session.get(Setting, "default_vacation_days")
+        default_days = float(setting.value) if setting else 30.0
+        current_year = _date.today().year
+        contingent = VacationContingent(
+            person_id=person.id,
+            year=current_year,
+            total_days=default_days,
+        )
+        session.add(contingent)
         session.commit()
         session.refresh(person)
     except IntegrityError:

@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 
 from app.db import get_session
 from app.models.program import Program
+from app.models.project import Project
 
 router = APIRouter(prefix="/programs", tags=["programs"])
 
@@ -28,6 +29,13 @@ def create_program(program: Program, session: SessionDep):
         session.rollback()
         raise HTTPException(409, "Program number already exists.")
     return program
+
+
+@router.get("/{program_id}/projects", response_model=list[Project])
+def get_program_projects(program_id: int, session: SessionDep):
+    if not session.get(Program, program_id):
+        raise HTTPException(404, "Program not found.")
+    return session.exec(select(Project).where(Project.program_id == program_id)).all()
 
 
 @router.get("/{program_id}", response_model=Program)

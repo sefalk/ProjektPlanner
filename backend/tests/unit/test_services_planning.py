@@ -395,6 +395,56 @@ def test_capacity_hours_partial_week(mem_session):
     assert abs(result - 12.0) < 0.01
 
 
+def test_capacity_hours_with_work_week_pattern_4day(mem_session):
+    """4-day work week (8,8,8,8,0): Friday should contribute 0 h."""
+    import httpx
+    p = _make_person(mem_session)
+    # Override work_week_pattern
+    p.work_week_pattern = "8,8,8,8,0"
+    mem_session.add(p)
+    mem_session.commit()
+    proj = _make_project(mem_session)
+    _make_membership(mem_session, p.id, proj.id, weekly_hours=32.0)
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    # 2026-04-20 Mon – 2026-04-24 Fri (Mon-Thu = 4 days at 8h = 32h, Fri = 0)
+    result = capacity_hours(
+        p.id, proj.id, date(2026, 4, 20), date(2026, 4, 24), mem_session, client
+    )
+    assert abs(result - 32.0) < 0.5
+
+
+def test_capacity_hours_with_work_week_pattern_returns_non_negative(mem_session):
+    import httpx
+    p = _make_person(mem_session)
+    p.work_week_pattern = "7,7,7,7,4"
+    mem_session.add(p)
+    mem_session.commit()
+    proj = _make_project(mem_session)
+    _make_membership(mem_session, p.id, proj.id, weekly_hours=32.0)
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    result = capacity_hours(
+        p.id, proj.id, date(2026, 4, 1), date(2026, 4, 30), mem_session, client
+    )
+    assert result >= 0.0
+
+
+def test_capacity_hours_with_invalid_pattern_falls_back(mem_session):
+    """Invalid pattern string silently falls back to the non-pattern formula."""
+    import httpx
+    p = _make_person(mem_session)
+    p.work_week_pattern = "bad,data"
+    mem_session.add(p)
+    mem_session.commit()
+    proj = _make_project(mem_session)
+    _make_membership(mem_session, p.id, proj.id, weekly_hours=40.0)
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    result = capacity_hours(
+        p.id, proj.id, date(2026, 4, 6), date(2026, 4, 10), mem_session, client
+    )
+    # Falls back to 5 days × 8h = 40h
+    assert abs(result - 40.0) < 0.01
+
+
 @given(weekly_h=st.floats(min_value=1.0, max_value=60.0, allow_nan=False))
 @settings(max_examples=30)
 def test_capacity_hours_always_non_negative(weekly_h):

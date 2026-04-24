@@ -18,6 +18,9 @@ class Person(ValidatedSQLModel, table=True):
     # Must match the employee name string used in Sage ERP exports.
     sage_employee_name: str = Field(unique=True, index=True, min_length=1)
     default_weekly_hours: float = Field(gt=0, le=60)
+    # Comma-separated daily hours Mon–Fri, e.g. "8,8,8,8,0" for 4-day/32h week.
+    work_week_pattern: str | None = Field(default=None)
+    default_billing_rate: float | None = Field(default=None, gt=0)
 
 
 class VacationContingent(ValidatedSQLModel, table=True):

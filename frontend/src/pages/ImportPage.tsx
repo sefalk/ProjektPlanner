@@ -14,10 +14,17 @@ interface ImportResultOut {
   skipped: number
 }
 
+interface ParseErrorRow {
+  row: number
+  column: string | null
+  message: string
+}
+
 interface ImportError422 {
   unresolved_projects?: string[]
   unmatched_persons?: string[]
   detail?: string
+  parse_errors?: ParseErrorRow[]
 }
 
 type PageState =
@@ -25,6 +32,7 @@ type PageState =
   | { kind: 'uploading' }
   | { kind: 'unresolved'; names: string[]; file: File | string }
   | { kind: 'unmatched'; names: string[]; file: File | string }
+  | { kind: 'parse_error'; message: string; errors: ParseErrorRow[] }
   | { kind: 'success'; result: ImportResultOut }
   | { kind: 'error'; message: string }
 
@@ -53,7 +61,7 @@ async function postImport(source: File | string): Promise<{ ok: true; result: Im
 // ─── Import history ───────────────────────────────────────────────────────────
 
 function ImportHistory({ batches }: { batches: ImportBatch[] }) {
-  if (batches.length === 0) return <p className="text-sm text-gray-400">Noch keine Importe.</p>
+  if (batches.length === 0) return <p className="text-sm text-gray-500">Noch keine Importe.</p>
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -201,7 +209,9 @@ export default function ImportPage() {
         void refetchBatches()
       } else {
         const { error } = outcome
-        if (error.unresolved_projects?.length) {
+        if (error.parse_errors?.length) {
+          setState({ kind: 'parse_error', message: error.detail ?? 'Fehlerhafte Zeilen.', errors: error.parse_errors })
+        } else if (error.unresolved_projects?.length) {
           setState({ kind: 'unresolved', names: error.unresolved_projects, file: source })
         } else if (error.unmatched_persons?.length) {
           setState({ kind: 'unmatched', names: error.unmatched_persons, file: source })
@@ -225,7 +235,7 @@ export default function ImportPage() {
     }
   }
 
-  const canSubmit = state.kind === 'idle' || state.kind === 'success' || state.kind === 'error'
+  const canSubmit = state.kind === 'idle' || state.kind === 'success' || state.kind === 'error' || state.kind === 'parse_error'
   const busy = state.kind === 'uploading'
 
   return (
@@ -262,7 +272,7 @@ export default function ImportPage() {
               >
                 <Upload size={24} className="text-gray-300 mb-2" />
                 <p className="text-sm text-gray-500">CSV-Datei auswählen oder hierher ziehen</p>
-                <p className="text-xs text-gray-400 mt-1">Encoding: UTF-8 oder CP1252, Trennzeichen: Semikolon</p>
+                <p className="text-xs text-gray-500 mt-1">Encoding: UTF-8, Trennzeichen: Semikolon oder Tab</p>
                 <input
                   ref={fileRef}
                   type="file"
@@ -280,10 +290,44 @@ export default function ImportPage() {
               <textarea
                 rows={8}
                 className="w-full border border-gray-300 rounded px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
-                placeholder={`Buchungsdatum;Mitarbeiter;Sage-Projekt;Projektebene;Nettozeit\n01.04.2026;Bauer, Anna;Acme Analytics 2026a;P01;8.0`}
+                placeholder={`Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n02.03.2026;Mustermann, Max;PRJ-001 Analytics 2026;Qlik/Python;1:30h;`}
                 value={pasteText}
                 onChange={(e) => { setPasteText(e.target.value); setState({ kind: 'idle' }) }}
               />
+            )}
+
+            {/* Status: CSV parse errors */}
+            {state.kind === 'parse_error' && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-start gap-2 mb-3">
+                  <AlertCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-red-800">CSV konnte nicht geparst werden</p>
+                    <p className="text-xs text-red-700 mt-0.5">{state.message}</p>
+                  </div>
+                </div>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-red-700 font-medium">
+                      <th className="text-left pb-1 pr-3">Zeile</th>
+                      <th className="text-left pb-1 pr-3">Spalte</th>
+                      <th className="text-left pb-1">Fehler</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {state.errors.map((e, i) => (
+                      <tr key={i} className="text-red-700 border-t border-red-100">
+                        <td className="py-0.5 pr-3 font-mono">{e.row}</td>
+                        <td className="py-0.5 pr-3">{e.column ?? '–'}</td>
+                        <td className="py-0.5 font-mono">{e.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-xs text-red-600 mt-3">
+                  Erwartet: <code className="bg-red-100 px-1 rounded">Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung</code>
+                </p>
+              </div>
             )}
 
             {/* Status: unresolved mappings */}

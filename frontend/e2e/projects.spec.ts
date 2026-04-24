@@ -81,6 +81,23 @@ test.describe('Projekte-Verwaltung', () => {
     await page.getByRole('row').nth(1).click()
     await expect(page).toHaveURL(/\/projects\/\d+/)
   })
+
+  test('Bearbeiten-Button pro Zeile vorhanden wenn Projekte existieren', async ({ page }) => {
+    await ensureProjectExists(page, 'P99004', 'Edit-Test')
+    await expect(page.getByRole('dialog')).not.toBeVisible()
+    const row = page.getByRole('row').nth(1)
+    await expect(row.getByRole('button', { name: /bearbeiten/i })).toBeVisible()
+  })
+
+  test('Formular enthält Budget-€-Feld', async ({ page }) => {
+    await page.getByRole('button', { name: /neu/i }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await expect(page.getByLabel(/budget.*€/i)).toBeVisible()
+  })
+
+  test('Start-Spalte in Projektliste vorhanden', async ({ page }) => {
+    await expect(page.getByRole('columnheader', { name: /start/i })).toBeVisible()
+  })
 })
 
 test.describe('Projektdetail-Tabs', () => {

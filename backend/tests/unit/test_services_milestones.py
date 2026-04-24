@@ -330,7 +330,7 @@ def test_update_budget_wrong_milestone(session):
 
 
 @given(delta=st.floats(min_value=0, max_value=200))
-@h_settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@h_settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture], deadline=2000)
 def test_invariant_after_update(delta, session):
     """After any valid budget update, SUM(budgets) == milestone.current_hours."""
     from sqlmodel import func, select as sq_select

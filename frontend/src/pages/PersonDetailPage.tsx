@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, Plus, Trash2 } from 'lucide-react'
-import { persons, type PersonAbsence, type VacationContingent } from '../api'
+import { ChevronLeft, Pencil, Plus, Trash2 } from 'lucide-react'
+import { persons, type Person, type PersonAbsence, type VacationContingent } from '../api'
 import Modal from '../components/Modal'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -23,6 +23,55 @@ const STATUS_LABELS: Record<PersonAbsence['status'], string> = {
   planned: 'Geplant',
   confirmed: 'Bestätigt',
   ongoing: 'Laufend',
+}
+
+// ─── Edit person form ─────────────────────────────────────────────────────────
+
+function EditPersonForm({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: Person
+  onSave: (d: Omit<Person, 'id'>) => void
+  onCancel: () => void
+}) {
+  const [form, setForm] = useState({
+    name: initial.name,
+    sage_employee_name: initial.sage_employee_name,
+    default_weekly_hours: initial.default_weekly_hours,
+  })
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
+      <div>
+        <label htmlFor="edit-name" className="block text-xs font-medium text-gray-600 mb-1">Name (Anzeige)</label>
+        <input id="edit-name" required
+          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })} />
+      </div>
+      <div>
+        <label htmlFor="edit-sage" className="block text-xs font-medium text-gray-600 mb-1">Sage-Mitarbeitername</label>
+        <input id="edit-sage" required
+          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={form.sage_employee_name}
+          onChange={(e) => setForm({ ...form, sage_employee_name: e.target.value })} />
+      </div>
+      <div>
+        <label htmlFor="edit-hours" className="block text-xs font-medium text-gray-600 mb-1">Wochenstunden (Standard)</label>
+        <input id="edit-hours" required type="number" min={0.5} max={60} step={0.5}
+          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={form.default_weekly_hours}
+          onChange={(e) => setForm({ ...form, default_weekly_hours: parseFloat(e.target.value) })} />
+      </div>
+      <div className="flex justify-end gap-2 pt-2">
+        <button type="button" onClick={onCancel}
+          className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+        <button type="submit"
+          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+      </div>
+    </form>
+  )
 }
 
 // ─── Absence form ─────────────────────────────────────────────────────────────
@@ -185,8 +234,10 @@ export default function PersonDetailPage() {
   const qc = useQueryClient()
 
   const [tab, setTab] = useState<Tab>('absences')
+  const [showEdit, setShowEdit] = useState(false)
   const [showAddAbsence, setShowAddAbsence] = useState(false)
   const [showAddContingent, setShowAddContingent] = useState(false)
+  const [editingContingent, setEditingContingent] = useState<VacationContingent | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const { data: person } = useQuery({
@@ -202,6 +253,11 @@ export default function PersonDetailPage() {
     queryFn: () => persons.vacationContingents(personId),
   })
 
+  const updatePerson = useMutation({
+    mutationFn: (d: Omit<Person, 'id'>) => persons.update(personId, d),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['person', personId] }); setShowEdit(false); setError(null) },
+    onError: (e: Error) => setError(e.message),
+  })
   const addAbsence = useMutation({
     mutationFn: (d: Omit<PersonAbsence, 'id' | 'person_id'>) => persons.addAbsence(personId, d),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['absences', personId] }); setShowAddAbsence(false); setError(null) },
@@ -214,6 +270,12 @@ export default function PersonDetailPage() {
   const addContingent = useMutation({
     mutationFn: (d: { year: number; total_days: number }) => persons.addVacationContingent(personId, d),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setShowAddContingent(false); setError(null) },
+    onError: (e: Error) => setError(e.message),
+  })
+  const updateContingent = useMutation({
+    mutationFn: ({ id, d }: { id: number; d: { year: number; total_days: number } }) =>
+      persons.updateVacationContingent(personId, id, d),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setEditingContingent(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
 
@@ -237,6 +299,13 @@ export default function PersonDetailPage() {
               {person.sage_employee_name} · {person.default_weekly_hours} h/Woche
             </p>
           </div>
+          <button
+            onClick={() => setShowEdit(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50"
+            aria-label="Person bearbeiten"
+          >
+            <Pencil size={13} /> Bearbeiten
+          </button>
         </div>
         {/* Tabs */}
         <div className="flex gap-0 mt-4 border-b border-gray-200 -mb-px">
@@ -325,19 +394,28 @@ export default function PersonDetailPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Jahr', 'Urlaubstage'].map((h) => (
+                    {['Jahr', 'Urlaubstage', ''].map((h) => (
                       <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {sortedContingents.length === 0 && (
-                    <tr><td colSpan={2} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Kontingente eingetragen.</td></tr>
+                    <tr><td colSpan={3} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Kontingente eingetragen.</td></tr>
                   )}
                   {sortedContingents.map((c) => (
                     <tr key={c.id}>
                       <td className="px-4 py-3 text-sm font-medium text-gray-700">{c.year}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{c.total_days} Tage</td>
+                      <td className="px-4 py-3 text-sm">
+                        <button
+                          aria-label={`Kontingent ${c.year} bearbeiten`}
+                          onClick={() => setEditingContingent(c)}
+                          className="text-gray-400 hover:text-blue-500 transition-colors"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -346,6 +424,17 @@ export default function PersonDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Edit person modal */}
+      {showEdit && (
+        <Modal title="Person bearbeiten" onClose={() => { setShowEdit(false); setError(null) }}>
+          <EditPersonForm
+            initial={person}
+            onSave={(d) => updatePerson.mutate(d)}
+            onCancel={() => { setShowEdit(false); setError(null) }}
+          />
+        </Modal>
+      )}
 
       {/* Add absence modal */}
       {showAddAbsence && (
@@ -363,6 +452,17 @@ export default function PersonDetailPage() {
           <ContingentForm
             onSave={(d) => addContingent.mutate(d)}
             onCancel={() => { setShowAddContingent(false); setError(null) }}
+          />
+        </Modal>
+      )}
+
+      {/* Edit contingent modal */}
+      {editingContingent && (
+        <Modal title="Kontingent bearbeiten" onClose={() => { setEditingContingent(null); setError(null) }}>
+          <ContingentForm
+            initial={editingContingent}
+            onSave={(d) => updateContingent.mutate({ id: editingContingent.id, d })}
+            onCancel={() => { setEditingContingent(null); setError(null) }}
           />
         </Modal>
       )}

@@ -42,13 +42,16 @@ class MembershipOut(BaseModel):
     project_id: int
     project_number: str
     project_name: str
+    program_id: int | None
     from_date: date
     to_date: date
+    weekly_capacity_hours: float
 
 
 class PersonOut(BaseModel):
     id: int
     name: str
+    default_weekly_hours: float
     absences: list[AbsenceOut]
     memberships: list[MembershipOut]
 
@@ -60,6 +63,8 @@ class MilestoneOut(BaseModel):
     month: int
     status: str
     is_locked: bool
+    initial_hours: float
+    current_hours: float
 
 
 class CalendarResponse(BaseModel):
@@ -143,8 +148,10 @@ def get_calendar(
                     project_id=proj.id,  # type: ignore[arg-type]
                     project_number=proj.project_number,
                     project_name=proj.name,
+                    program_id=proj.program_id,
                     from_date=m.from_date,
                     to_date=m.to_date,
+                    weekly_capacity_hours=m.weekly_capacity_hours,
                 )
             )
 
@@ -152,6 +159,7 @@ def get_calendar(
         PersonOut(
             id=p.id,  # type: ignore[arg-type]
             name=p.name,
+            default_weekly_hours=p.default_weekly_hours,
             absences=absences_by_person.get(p.id, []),  # type: ignore[arg-type]
             memberships=memberships_by_person.get(p.id, []),  # type: ignore[arg-type]
         )
@@ -175,6 +183,8 @@ def get_calendar(
             month=ms.month,
             status=ms.status.value,
             is_locked=ms.is_locked,
+            initial_hours=ms.initial_hours,
+            current_hours=ms.current_hours,
         )
         for ms, proj in milestones_raw
     ]
