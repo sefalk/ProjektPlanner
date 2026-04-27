@@ -5,9 +5,10 @@ import pytest
 from hypothesis import HealthCheck, given, settings as h_settings
 from hypothesis import strategies as st
 
+from app.models.enums import AbsenceType
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
-from app.models.person import Person
+from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
 from app.services.milestones import (
     BudgetNotFound,
@@ -231,6 +232,110 @@ def test_initialize_partial_membership(session):
 def test_initialize_project_not_found(session):
     with pytest.raises(MilestoneNotFound):
         initialize_milestones(9999, session)
+
+
+def test_initialize_budget_scaling(session):
+    """When capacity > total_budget_hours, current_hours are scaled down to match budget."""
+    # 40h/week × 3 months ≈ 512h capacity; budget = 400h → scale ≈ 0.781
+    proj = _project(session, date(2026, 1, 1), date(2026, 3, 31), number="PBS01")
+    proj.total_budget_hours = 400.0
+    session.add(proj)
+    person = _person(session, "Budget Person")
+    _membership(session, proj.id, person.id, weekly_hours=40.0)
+    session.commit()
+
+    created = initialize_milestones(proj.id, session)
+
+    total_current = sum(m.current_hours for m in created)
+    total_initial = sum(m.initial_hours for m in created)
+
+    assert total_current == pytest.approx(400.0, rel=1e-4)
+    assert total_initial > 400.0  # capacity exceeds budget
+    assert total_initial > total_current
+
+
+def test_initialize_no_scaling_when_capacity_within_budget(session):
+    """When capacity <= budget, initial_hours == current_hours (no scaling)."""
+    proj = _project(session, date(2026, 1, 1), date(2026, 1, 31), number="PBS02")
+    proj.total_budget_hours = 5000.0  # far above capacity
+    session.add(proj)
+    person = _person(session, "No-Scale Person")
+    _membership(session, proj.id, person.id, weekly_hours=40.0)
+    session.commit()
+
+    created = initialize_milestones(proj.id, session)
+    assert len(created) == 1
+    ms = created[0]
+    assert ms.initial_hours == pytest.approx(ms.current_hours)
+
+
+def test_initialize_budget_scaling_invariant(session):
+    """After budget scaling, Milestone.current_hours == SUM(MilestonePersonBudget.current_hours)."""
+    from sqlmodel import select as sq_select
+    proj = _project(session, date(2026, 1, 1), date(2026, 3, 31), number="PBS03")
+    proj.total_budget_hours = 300.0
+    session.add(proj)
+    p1 = _person(session, "Scale Alice")
+    p2 = _person(session, "Scale Bob")
+    _membership(session, proj.id, p1.id, weekly_hours=40.0)
+    _membership(session, proj.id, p2.id, weekly_hours=20.0)
+    session.commit()
+
+    initialize_milestones(proj.id, session)
+
+    milestones = session.exec(sq_select(Milestone).where(Milestone.project_id == proj.id)).all()
+    for ms in milestones:
+        budgets = session.exec(
+            sq_select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
+        ).all()
+        assert ms.current_hours == pytest.approx(sum(b.current_hours for b in budgets), rel=1e-5)
+
+
+def test_vacation_estimate_per_month_not_globally_disabled(session):
+    """A vacation entry in month A must not suppress the estimate in month B."""
+    from sqlmodel import select as sq_select
+    proj = _project(session, date(2026, 1, 1), date(2026, 3, 31), number="PVE01")
+    proj.total_budget_hours = 10000.0  # well above capacity — no scaling
+    session.add(proj)
+    person = _person(session, "Vacation Test Person")
+    _membership(session, proj.id, person.id, weekly_hours=40.0)
+
+    # Give person a vacation contingent
+    vc = VacationContingent(person_id=person.id, year=2026, total_days=30)
+    session.add(vc)
+
+    # Specific vacation only in January
+    absence = PersonAbsence(
+        person_id=person.id,
+        absence_type=AbsenceType.vacation,
+        status="confirmed",
+        start_date=date(2026, 1, 12),
+        end_date=date(2026, 1, 16),
+        note="",
+    )
+    session.add(absence)
+    session.commit()
+
+    initialize_milestones(proj.id, session)
+
+    milestones = {
+        (m.year, m.month): m
+        for m in session.exec(sq_select(Milestone).where(Milestone.project_id == proj.id)).all()
+    }
+
+    # Jan: has specific vacation → abs_days deducted, no estimate → hours slightly lower
+    # Feb + Mar: no specific vacation → estimate applied → hours lower than gross capacity
+    # Without the fix, Feb and Mar would have no estimate (has_vacation wrongly True),
+    # making them equal to gross capacity.
+    feb_ms = milestones[(2026, 2)]
+    mar_ms = milestones[(2026, 3)]
+
+    # Raw capacity Feb (no holidays in tests): 20 × 8 = 160h
+    # With vacation estimate of 30/12 ≈ 2.5 days → deduction ≈ 20h
+    # So hours should be noticeably less than 160
+    raw_feb_capacity = 20 * (40.0 / 5.0)  # 20 working days × 8h
+    assert feb_ms.initial_hours < raw_feb_capacity  # estimate was applied
+    assert mar_ms.initial_hours < 22 * (40.0 / 5.0)  # same for March
 
 
 # ---------------------------------------------------------------------------

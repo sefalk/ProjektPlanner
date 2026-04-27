@@ -180,12 +180,13 @@ def _person_available_hours(
     # Specific absence days (all types including vacation)
     abs_days = absence_days_in_range(person.id, eff_start, eff_end, session)
 
-    # Distributed vacation estimate — only if no specific vacation this month
+    # Distributed vacation estimate — only if no specific vacation overlaps this month
     has_vacation = session.exec(
         select(PersonAbsence).where(
             PersonAbsence.person_id == person.id,
             PersonAbsence.absence_type == AbsenceType.vacation,
             PersonAbsence.start_date <= eff_end,
+            PersonAbsence.end_date >= eff_start,
         )
     ).first()
     vacation_estimate = 0.0
@@ -211,6 +212,12 @@ def initialize_milestones(project_id: int, session: Session) -> list[Milestone]:
 
     Skips months that already have a Milestone (safe to call multiple times).
     Returns the newly created Milestone rows (not the pre-existing ones).
+
+    initial_hours  = available capacity (working days minus holidays and absences).
+    current_hours  = capacity scaled down proportionally so that the sum across all
+                     new months equals project.total_budget_hours when the raw capacity
+                     exceeds the budget.  If capacity <= budget, current_hours == initial_hours.
+                     Budget scaling is skipped when any milestones already exist (re-init).
     """
     project = session.get(Project, project_id)
     if not project:
@@ -227,19 +234,25 @@ def initialize_milestones(project_id: int, session: Session) -> list[Milestone]:
             person_cache[pid] = session.get(Person, pid)
         return person_cache[pid]
 
-    created: list[Milestone] = []
-
+    # Determine which months need to be created
+    new_months: list[tuple[int, int]] = []
     for year, month in _months_in_range(project.start_date, project.end_date):
-        existing = session.exec(
+        exists = session.exec(
             select(Milestone).where(
                 Milestone.project_id == project_id,
                 Milestone.year == year,
                 Milestone.month == month,
             )
         ).first()
-        if existing:
-            continue
+        if not exists:
+            new_months.append((year, month))
 
+    if not new_months:
+        return []
+
+    # First pass: compute capacity per month
+    month_capacity: dict[tuple[int, int], dict[int, float]] = {}
+    for year, month in new_months:
         person_hours: dict[int, float] = {}
         for m in memberships:
             person = _get_person(m.person_id)
@@ -248,25 +261,38 @@ def initialize_milestones(project_id: int, session: Session) -> list[Milestone]:
             stats = _person_available_hours(person, m, project, year, month, session)
             if stats.hours > 0:
                 person_hours[m.person_id] = person_hours.get(m.person_id, 0.0) + stats.hours
+        month_capacity[(year, month)] = person_hours
 
-        total_hours = sum(person_hours.values())
+    # Budget scaling: only on first init; scale down if capacity exceeds budget
+    is_first_init = len(new_months) == len(_months_in_range(project.start_date, project.end_date))
+    total_capacity = sum(sum(ph.values()) for ph in month_capacity.values())
+    budget = project.total_budget_hours
+    if is_first_init and budget > 0 and total_capacity > budget:
+        scale = budget / total_capacity
+    else:
+        scale = 1.0
+
+    created: list[Milestone] = []
+    for year, month in new_months:
+        person_hours = month_capacity[(year, month)]
+        capacity_total = sum(person_hours.values())
 
         milestone = Milestone(
             project_id=project_id,
             year=year,
             month=month,
-            initial_hours=total_hours,
-            current_hours=total_hours,
+            initial_hours=capacity_total,
+            current_hours=capacity_total * scale,
         )
         session.add(milestone)
         session.flush()
 
-        for person_id, hours in person_hours.items():
+        for person_id, cap_hours in person_hours.items():
             session.add(MilestonePersonBudget(
                 milestone_id=milestone.id,
                 person_id=person_id,
-                initial_hours=hours,
-                current_hours=hours,
+                initial_hours=cap_hours,
+                current_hours=cap_hours * scale,
             ))
 
         created.append(milestone)
