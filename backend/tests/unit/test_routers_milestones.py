@@ -217,10 +217,13 @@ def test_get_milestones_detail_after_init(client):
         p = d["persons"][0]
         assert "person_id" in p
         assert "initial_hours" in p
+        assert "current_hours" in p
         assert "work_days" in p
         assert "absence_days" in p
         assert "holiday_days" in p
         assert "billing_rate_per_hour" in p
+        assert "booked_hours" in p
+        assert isinstance(p["booked_hours"], float)
 
 
 def test_get_milestones_detail_initial_hours_positive(client):

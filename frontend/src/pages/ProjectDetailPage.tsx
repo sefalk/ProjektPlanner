@@ -269,7 +269,7 @@ export default function ProjectDetailPage() {
                       const expanded = expandedMilestones.has(ms.id)
                       const euros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
                       const rebalanced = suggMap[ms.id]
-                      const totalBooked = d.persons.reduce((s, p) => s + p.booked_hours, 0)
+                      const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
                       const barColor = pct > 100 ? 'bg-red-500' : pct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       return [
@@ -352,7 +352,7 @@ export default function ProjectDetailPage() {
                                       <td className="pl-12 pr-4 py-2 text-gray-700">{p.person_name}</td>
                                       <td className="px-4 py-2 text-gray-500">{p.initial_hours.toFixed(1)} h</td>
                                       <td className="px-4 py-2 text-gray-700 font-medium">{p.current_hours.toFixed(1)} h</td>
-                                      <td className="px-4 py-2 text-gray-500">Gebucht: {p.booked_hours.toFixed(1)} h</td>
+                                      <td className="px-4 py-2 text-gray-500">Gebucht: {(p.booked_hours ?? 0).toFixed(1)} h</td>
                                       <td className="px-4 py-2 text-gray-500">{p.work_days} T</td>
                                       <td className="px-4 py-2 text-gray-500">{p.absence_days} T</td>
                                       <td className="px-4 py-2 text-gray-500">{p.holiday_days} T</td>
