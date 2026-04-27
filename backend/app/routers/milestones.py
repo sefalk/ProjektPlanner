@@ -1,7 +1,10 @@
 """Endpoints for milestone management and per-person budget updates."""
+from calendar import monthrange as _monthrange
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.db import get_session
@@ -9,6 +12,7 @@ from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person
 from app.models.project import Project
+from app.models.timebooking import TimeBooking
 from app.services.milestones import (
     BudgetNotFound,
     MilestoneLocked,
@@ -40,6 +44,7 @@ class MilestonePersonDetailOut(SQLModel):
     absence_days: int
     holiday_days: int
     billing_rate_per_hour: float
+    booked_hours: float = 0.0
 
 
 class MilestoneDetailOut(SQLModel):
@@ -94,6 +99,18 @@ def list_milestones_detail(project_id: int, session: SessionDep):
     result: list[MilestoneDetailOut] = []
     for ms in milestones:
         budgets = get_milestone_budgets(ms.id, session)
+        month_start = date(ms.year, ms.month, 1)
+        month_end = date(ms.year, ms.month, _monthrange(ms.year, ms.month)[1])
+        booked_rows = session.exec(
+            select(TimeBooking.person_id, func.sum(TimeBooking.net_hours))
+            .where(
+                TimeBooking.project_id == project_id,
+                TimeBooking.booking_date >= month_start,
+                TimeBooking.booking_date <= month_end,
+            )
+            .group_by(TimeBooking.person_id)
+        ).all()
+        booked_map: dict[int, float] = {pid: float(h) for pid, h in booked_rows}
         persons_out: list[MilestonePersonDetailOut] = []
         for budget in budgets:
             person = persons_map.get(budget.person_id)
@@ -111,6 +128,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 absence_days=stats.absence_days,
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=membership.billing_rate_per_hour,
+                booked_hours=booked_map.get(person.id, 0.0),
             ))
         result.append(MilestoneDetailOut(milestone=ms, persons=persons_out))
 

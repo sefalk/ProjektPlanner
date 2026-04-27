@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi,
-  type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type MilestoneSuggestion,
+  type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type MilestoneSuggestion,
 } from '../api'
 import Modal from '../components/Modal'
 import Table from '../components/Table'
@@ -26,7 +26,7 @@ const STATUS_LABELS: Record<MonthlyInvoice['status'], string> = {
   paid: 'Bezahlt',
 }
 
-type Tab = 'milestones' | 'rebalancing' | 'invoices' | 'members'
+type Tab = 'milestones' | 'rebalancing' | 'invoices' | 'members' | 'settings'
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -47,6 +47,11 @@ export default function ProjectDetailPage() {
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
   const [error, setError] = useState<string | null>(null)
   const [memberWarnings, setMemberWarnings] = useState<string[]>([])
+  const [closeWarnings, setCloseWarnings] = useState<string[]>([])
+  const [pendingCloseForm, setPendingCloseForm] = useState<typeof closeForm | null>(null)
+  const [showReinitConfirm, setShowReinitConfirm] = useState(false)
+  const [settingsForm, setSettingsForm] = useState<Omit<Project, 'id'> | null>(null)
+  const [settingsSaved, setSettingsSaved] = useState(false)
 
   // Queries
   const { data: project } = useQuery({ queryKey: ['project', projectId], queryFn: () => projects.get(projectId) })
@@ -63,6 +68,7 @@ export default function ProjectDetailPage() {
   const { data: memberships = [] } = useQuery({ queryKey: ['memberships', projectId], queryFn: () => projects.memberships(projectId) })
   const { data: billingPositions = [] } = useQuery({ queryKey: ['billingPositions', projectId], queryFn: () => projects.billingPositions(projectId) })
   const { data: personList = [] } = useQuery({ queryKey: ['persons'], queryFn: () => persons.list() })
+  const { data: programList = [] } = useQuery({ queryKey: ['programs'], queryFn: () => programs.list() })
   const personName = (pid: number) => personList.find((p) => p.id === pid)?.name ?? String(pid)
 
   // Mutations
@@ -138,6 +144,16 @@ export default function ProjectDetailPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['memberships', projectId] }),
   })
 
+  const updateProject = useMutation({
+    mutationFn: (data: Omit<Project, 'id'>) => projects.update(projectId, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      setSettingsSaved(true)
+      setTimeout(() => setSettingsSaved(false), 2000)
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
   if (!project) return <div className="p-6 text-sm text-gray-400">Lade…</div>
 
   const tabs: { id: Tab; label: string }[] = [
@@ -145,6 +161,7 @@ export default function ProjectDetailPage() {
     { id: 'rebalancing', label: 'Rebalancing' },
     { id: 'invoices', label: 'Rechnungen' },
     { id: 'members', label: 'Mitglieder' },
+    { id: 'settings', label: 'Einstellungen' },
   ]
 
   return (
@@ -164,7 +181,7 @@ export default function ProjectDetailPage() {
             <p className="text-sm text-gray-500 mt-0.5">
               {project.start_date} – {project.end_date} · {project.total_budget_hours.toLocaleString('de-DE')} Std.
               {project.total_budget_euros != null && (
-                <> · {project.total_budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })}</>
+                <> · {project.total_budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 2 })}</>
               )}
             </p>
             {program && (
@@ -216,7 +233,15 @@ export default function ProjectDetailPage() {
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
-                <button onClick={() => initMilestones.mutate()}
+                <button onClick={() => {
+                  if (memberships.length === 0) {
+                    setError('Bitte zuerst Mitglieder anlegen, bevor Meilensteine initialisiert werden.')
+                  } else if (milestonesDetail.length > 0) {
+                    setShowReinitConfirm(true)
+                  } else {
+                    initMilestones.mutate()
+                  }
+                }}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
                   <RefreshCw size={14} /> Initialisieren
                 </button>
@@ -244,6 +269,9 @@ export default function ProjectDetailPage() {
                       const expanded = expandedMilestones.has(ms.id)
                       const euros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
                       const rebalanced = suggMap[ms.id]
+                      const totalBooked = d.persons.reduce((s, p) => s + p.booked_hours, 0)
+                      const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
+                      const barColor = pct > 100 ? 'bg-red-500' : pct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       return [
                         <tr key={ms.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(ms.id)}>
                           <td className="px-4 py-3 text-gray-400">
@@ -251,7 +279,17 @@ export default function ProjectDetailPage() {
                           </td>
                           <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[ms.month]} {ms.year}</td>
                           <td className="px-4 py-3 text-sm text-gray-600">{ms.initial_hours.toFixed(1)} h</td>
-                          <td className="px-4 py-3 text-sm text-gray-600">{ms.current_hours.toFixed(1)} h</td>
+                          <td className="px-4 py-3">
+                            <div className="min-w-[8rem]">
+                              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                                <span>{totalBooked.toFixed(1)} h</span>
+                                <span>{ms.current_hours.toFixed(1)} h</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${barColor}`} style={{ width: `${Math.min(100, pct)}%` }} />
+                              </div>
+                            </div>
+                          </td>
                           <td className="px-4 py-3 text-sm text-blue-600">
                             {rebalanced != null ? `${rebalanced.toFixed(1)} h` : <span className="text-gray-300">–</span>}
                           </td>
@@ -269,8 +307,21 @@ export default function ProjectDetailPage() {
                               {ms.status === 'open' && !ms.is_locked && (
                                 <button
                                   onClick={() => {
-                                    setCloseForm({ year: ms.year, month: ms.month, billing_position_id: billingPositions[0]?.id ?? 0 })
-                                    setShowCloseModal(true)
+                                    const form = { year: ms.year, month: ms.month, billing_position_id: billingPositions[0]?.id ?? 0 }
+                                    const warnings: string[] = []
+                                    if (ms.current_hours > 0 && totalBooked < ms.current_hours * 0.8) {
+                                      warnings.push(`Nur ${totalBooked.toFixed(1)} von ${ms.current_hours.toFixed(1)} h gebucht (${Math.round(totalBooked / ms.current_hours * 100)} %)`)
+                                    }
+                                    d.persons.forEach((p) => {
+                                      if (p.booked_hours === 0) warnings.push(`${p.person_name}: keine Buchungen vorhanden`)
+                                    })
+                                    if (warnings.length > 0) {
+                                      setCloseWarnings(warnings)
+                                      setPendingCloseForm(form)
+                                    } else {
+                                      setCloseForm(form)
+                                      setShowCloseModal(true)
+                                    }
                                   }}
                                   className="text-xs text-blue-600 hover:underline whitespace-nowrap">
                                   Abschließen
@@ -288,6 +339,7 @@ export default function ProjectDetailPage() {
                                     <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
                                     <th className="px-4 py-1.5 text-left font-normal">Plan</th>
                                     <th className="px-4 py-1.5 text-left font-normal">Aktuell</th>
+                                    <th className="px-4 py-1.5 text-left font-normal">Gebucht</th>
                                     <th className="px-4 py-1.5 text-left font-normal">Arbeitstage</th>
                                     <th className="px-4 py-1.5 text-left font-normal">Abwesenheit</th>
                                     <th className="px-4 py-1.5 text-left font-normal">Feiertage</th>
@@ -300,6 +352,7 @@ export default function ProjectDetailPage() {
                                       <td className="pl-12 pr-4 py-2 text-gray-700">{p.person_name}</td>
                                       <td className="px-4 py-2 text-gray-500">{p.initial_hours.toFixed(1)} h</td>
                                       <td className="px-4 py-2 text-gray-700 font-medium">{p.current_hours.toFixed(1)} h</td>
+                                      <td className="px-4 py-2 text-gray-500">Gebucht: {p.booked_hours.toFixed(1)} h</td>
                                       <td className="px-4 py-2 text-gray-500">{p.work_days} T</td>
                                       <td className="px-4 py-2 text-gray-500">{p.absence_days} T</td>
                                       <td className="px-4 py-2 text-gray-500">{p.holiday_days} T</td>
@@ -331,7 +384,11 @@ export default function ProjectDetailPage() {
                         <td className="px-4 py-3 text-gray-700">
                           {totals.euros > 0 ? totals.euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : '–'}
                         </td>
-                        <td colSpan={2}></td>
+                        <td className="px-4 py-3 text-gray-500 text-sm font-normal">
+                          Vertrag: {project.total_budget_hours.toLocaleString('de-DE')} h
+                          {project.total_budget_euros != null && <><br/>{project.total_budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 2 })}</>}
+                        </td>
+                        <td></td>
                       </tr>
                     )}
                   </tbody>
@@ -527,6 +584,95 @@ export default function ProjectDetailPage() {
             </div>
           </div>
         )}
+
+        {/* ── Settings ── */}
+        {tab === 'settings' && (() => {
+          const sf = settingsForm ?? {
+            project_number: project.project_number,
+            name: project.name,
+            description: project.description,
+            start_date: project.start_date,
+            end_date: project.end_date,
+            total_budget_hours: project.total_budget_hours,
+            total_budget_euros: project.total_budget_euros,
+            holiday_country: project.holiday_country,
+            holiday_state: project.holiday_state,
+            status: project.status,
+            program_id: project.program_id,
+          }
+          const setSf = (v: typeof sf) => setSettingsForm(v)
+          return (
+            <div className="max-w-lg">
+              <h3 className="font-medium text-gray-700 mb-4">Projekteinstellungen</h3>
+              <form onSubmit={(e) => { e.preventDefault(); updateProject.mutate(sf) }} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Projektname</label>
+                  <input required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={sf.name} onChange={(e) => setSf({ ...sf, name: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Projektnummer</label>
+                  <input required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={sf.project_number} onChange={(e) => setSf({ ...sf, project_number: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Beschreibung</label>
+                  <textarea rows={3} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={sf.description} onChange={(e) => setSf({ ...sf, description: e.target.value })} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Von</label>
+                    <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={sf.start_date} onChange={(e) => setSf({ ...sf, start_date: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
+                    <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={sf.end_date} onChange={(e) => setSf({ ...sf, end_date: e.target.value })} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.)</label>
+                  <input required type="number" min={0.5} step={0.5} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={sf.total_budget_hours} onChange={(e) => setSf({ ...sf, total_budget_hours: parseFloat(e.target.value) })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Budget (€) <span className="font-normal text-gray-400">optional</span></label>
+                  <input type="number" min={0} step={0.01} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={sf.total_budget_euros ?? ''} onChange={(e) => setSf({ ...sf, total_budget_euros: e.target.value ? parseFloat(e.target.value) : null })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+                  <select className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={sf.status} onChange={(e) => setSf({ ...sf, status: e.target.value as Project['status'] })}>
+                    <option value="planned">Geplant</option>
+                    <option value="active">Aktiv</option>
+                    <option value="completed">Abgeschlossen</option>
+                    <option value="archived">Archiviert</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Hauptprojekt <span className="font-normal text-gray-400">optional</span></label>
+                  <select className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={sf.program_id ?? ''} onChange={(e) => setSf({ ...sf, program_id: e.target.value ? parseInt(e.target.value) : null })}>
+                    <option value="">— kein Hauptprojekt —</option>
+                    {(programList as Program[]).map((pg) => (
+                      <option key={pg.id} value={pg.id}>{pg.program_number} – {pg.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-3 pt-2">
+                  <button type="submit"
+                    className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                    Speichern
+                  </button>
+                  {settingsSaved && <span className="text-sm text-green-600">Gespeichert</span>}
+                </div>
+              </form>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Close month modal */}
@@ -571,6 +717,42 @@ export default function ProjectDetailPage() {
                 className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Abschließen</button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {/* Close warning dialog */}
+      {closeWarnings.length > 0 && (
+        <Modal title="Warnung vor Abschluss" onClose={() => { setCloseWarnings([]); setPendingCloseForm(null) }}>
+          <p className="text-sm text-gray-700 mb-3">Folgende Punkte wurden festgestellt:</p>
+          <ul className="list-disc list-inside space-y-1 text-sm text-amber-700 mb-4">
+            {closeWarnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setCloseWarnings([]); setPendingCloseForm(null) }}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+            <button onClick={() => {
+              if (pendingCloseForm) setCloseForm(pendingCloseForm)
+              setCloseWarnings([])
+              setPendingCloseForm(null)
+              setShowCloseModal(true)
+            }}
+              className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700">Trotzdem abschließen</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Re-initialize confirmation */}
+      {showReinitConfirm && (
+        <Modal title="Meilensteine initialisieren" onClose={() => setShowReinitConfirm(false)}>
+          <p className="text-sm text-gray-700 mb-4">
+            Es sind bereits {milestonesDetail.length} Meilensteine vorhanden. Neue Monate werden hinzugefügt (bestehende werden nicht überschrieben). Fortfahren?
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowReinitConfirm(false)}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+            <button onClick={() => { setShowReinitConfirm(false); initMilestones.mutate() }}
+              className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Fortfahren</button>
+          </div>
         </Modal>
       )}
 

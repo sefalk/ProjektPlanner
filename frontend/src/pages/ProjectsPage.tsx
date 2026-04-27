@@ -75,7 +75,7 @@ function ProjectForm({ initial, onSave, onCancel }: {
       <div>
         <label htmlFor="proj-budget-euros" className="block text-xs font-medium text-gray-600 mb-1">Budget (€) <span className="font-normal text-gray-400">optional</span></label>
         <input id="proj-budget-euros"
-          type="number" min={0} step={100}
+          type="number" min={0} step={0.01}
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.total_budget_euros ?? ''}
           onChange={(e) => setForm({ ...form, total_budget_euros: e.target.value ? parseFloat(e.target.value) : null })}
@@ -143,6 +143,8 @@ export default function ProjectsPage() {
   const [editProject, setEditProject] = useState<Project | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Project | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
 
   const { data = [], isLoading } = useQuery({
     queryKey: ['projects'],
@@ -250,18 +252,37 @@ export default function ProjectsPage() {
     },
   ]
 
+  const filtered = data
+    .filter((p) => statusFilter === 'all' || p.status === statusFilter)
+    .filter((p) => !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.project_number.toLowerCase().includes(search.toLowerCase()))
+
   return (
     <div>
       <PageHeader
         title="Projekte"
         subtitle={`${data.length} Projekte · Verwalte Projektbudgets, Meilensteine und Abrechnungen`}
         actions={
-          <button
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-          >
-            <Plus size={14} /> Neu
-          </button>
+          <div className="flex items-center gap-2">
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded">
+              <option value="all">Alle Status</option>
+              <option value="planned">Geplant</option>
+              <option value="active">Aktiv</option>
+              <option value="completed">Abgeschlossen</option>
+              <option value="archived">Archiviert</option>
+            </select>
+            <input
+              type="search" placeholder="Suchen…" value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="px-3 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"
+            />
+            <button
+              onClick={() => setShowCreate(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+            >
+              <Plus size={14} /> Neues Projekt
+            </button>
+          </div>
         }
       />
 
@@ -278,7 +299,7 @@ export default function ProjectsPage() {
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             <Table
               columns={columns}
-              rows={data}
+              rows={filtered}
               keyFn={(p) => p.id}
               onRowClick={(p) => navigate(`/projects/${p.id}`)}
             />

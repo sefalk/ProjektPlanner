@@ -101,6 +101,7 @@ export interface MilestonePersonDetail {
   absence_days: number;
   holiday_days: number;
   billing_rate_per_hour: number;
+  booked_hours: number;
 }
 
 export interface MilestoneDetail {
