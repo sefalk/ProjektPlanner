@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 
 from app.db import get_session
 from app.models.membership import ProjectMembership
-from app.models.milestone import Milestone
+from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person, PersonAbsence
 from app.models.project import Project
 from app.services.holiday import HolidayFetchError, get_holidays_in_range
@@ -56,6 +56,11 @@ class PersonOut(BaseModel):
     memberships: list[MembershipOut]
 
 
+class MilestonePersonBudgetOut(BaseModel):
+    person_id: int
+    current_hours: float
+
+
 class MilestoneOut(BaseModel):
     project_id: int
     project_number: str
@@ -65,6 +70,7 @@ class MilestoneOut(BaseModel):
     is_locked: bool
     initial_hours: float
     current_hours: float
+    budgets: list[MilestonePersonBudgetOut] = []
 
 
 class CalendarResponse(BaseModel):
@@ -175,6 +181,18 @@ def get_calendar(
         .order_by(Project.project_number)
     ).all()
 
+    # Bulk-fetch all person budgets for these milestones in one query
+    milestone_ids = [ms.id for ms, _ in milestones_raw if ms.id is not None]
+    budgets_raw = session.exec(
+        select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id.in_(milestone_ids))
+    ).all() if milestone_ids else []
+    budgets_by_milestone: dict[int, list[MilestonePersonBudgetOut]] = {mid: [] for mid in milestone_ids}
+    for b in budgets_raw:
+        if b.milestone_id in budgets_by_milestone:
+            budgets_by_milestone[b.milestone_id].append(
+                MilestonePersonBudgetOut(person_id=b.person_id, current_hours=b.current_hours)
+            )
+
     milestones_out = [
         MilestoneOut(
             project_id=ms.project_id,
@@ -185,6 +203,7 @@ def get_calendar(
             is_locked=ms.is_locked,
             initial_hours=ms.initial_hours,
             current_hours=ms.current_hours,
+            budgets=budgets_by_milestone.get(ms.id, []),
         )
         for ms, proj in milestones_raw
     ]

@@ -95,29 +95,43 @@ function membershipEndDay(toDate: string, year: number, month: number, numDays: 
 function PersonRow({
   person, year, month, days, numDays, todayStr, holidayMap,
   showHolidays, showAbsences, showProjects, rowClass,
+  viewMode, personMilestoneHours, workDaysInMonth,
 }: {
   person: CalendarPerson
   year: number; month: number; days: number[]; numDays: number; todayStr: string
   holidayMap: Record<string, string>
   showHolidays: boolean; showAbsences: boolean; showProjects: boolean
   rowClass: string
+  viewMode: 'availability' | 'milestones'
+  personMilestoneHours: Record<number, number>
+  workDaysInMonth: number
 }) {
   const [expanded, setExpanded] = useState(false)
   const totalCap = person.default_weekly_hours > 0 ? person.default_weekly_hours : 40
   const firstDay = isoDate(year, month, 1)
   const lastDay = isoDate(year, month, numDays)
 
-  // Utilization badge
-  const activeCap = person.memberships
-    .filter((m) => m.from_date <= lastDay && m.to_date >= firstDay)
-    .reduce((sum, m) => sum + m.weekly_capacity_hours, 0)
-  const utilPct = Math.round((activeCap / totalCap) * 100)
-  const badgeCls = utilPct > 100 ? 'bg-red-100 text-red-700'
-    : utilPct >= 80 ? 'bg-green-100 text-green-700'
+  const activeMembers = person.memberships.filter((m) => m.from_date <= lastDay && m.to_date >= firstDay)
+
+  // Utilization badge — differs by view mode
+  const activeCap = activeMembers.reduce((sum, m) => sum + m.weekly_capacity_hours, 0)
+  let badgeValue: number
+  let badgeTitle: string
+  if (viewMode === 'milestones') {
+    const totalMsHours = Object.values(personMilestoneHours).reduce((s, h) => s + h, 0)
+    const monthlyCapacity = workDaysInMonth > 0 ? (totalCap / 5) * workDaysInMonth : totalCap * 4.33
+    badgeValue = Math.round(totalMsHours / monthlyCapacity * 100)
+    badgeTitle = `${totalMsHours.toFixed(1)} h Meilenstein von ${monthlyCapacity.toFixed(0)} h Kapazität`
+  } else {
+    badgeValue = Math.round((activeCap / totalCap) * 100)
+    badgeTitle = `${activeCap} h/Woche von ${totalCap} h/Woche`
+  }
+  const badgeCls = badgeValue > 100 ? 'bg-red-100 text-red-700'
+    : badgeValue >= 80 ? 'bg-green-100 text-green-700'
     : 'bg-gray-100 text-gray-500'
 
   // Pre-compute stacked membership bars (bottom → top)
-  type Bar = { m: CalendarMembership; startDay: number; endDay: number; frac: number; bottom: number }
+  type Bar = { m: CalendarMembership; startDay: number; endDay: number; frac: number; bottom: number; label: string }
   const bars: Bar[] = []
   if (showProjects) {
     let stackBottom = 0
@@ -125,13 +139,24 @@ function PersonRow({
       if (m.from_date > lastDay || m.to_date < firstDay) continue
       const startDay = membershipStartDay(m.from_date, year, month)
       const endDay = membershipEndDay(m.to_date, year, month, numDays)
-      const frac = Math.min(1, m.weekly_capacity_hours / totalCap)
-      bars.push({ m, startDay, endDay, frac, bottom: stackBottom })
+      let frac: number
+      let label: string
+      if (viewMode === 'milestones') {
+        const msHours = personMilestoneHours[m.project_id] ?? 0
+        const monthlyCapacity = workDaysInMonth > 0 ? (m.weekly_capacity_hours / 5) * workDaysInMonth : m.weekly_capacity_hours * 4.33
+        frac = monthlyCapacity > 0 ? Math.min(1, msHours / monthlyCapacity) : 0
+        const pct = Math.round(frac * 100)
+        label = msHours > 0 ? `${m.project_number} · ${msHours.toFixed(0)} h (${pct}% Kap.)` : `${m.project_number} · kein Meilenstein`
+      } else {
+        frac = Math.min(1, m.weekly_capacity_hours / totalCap)
+        label = `${m.project_number} · ${Math.round(frac * 100)}%`
+      }
+      bars.push({ m, startDay, endDay, frac, bottom: stackBottom, label })
       stackBottom += frac * 100
     }
   }
   const totalFrac = activeCap / totalCap
-  const overbooked = totalFrac > 1.005
+  const overbooked = viewMode === 'availability' && totalFrac > 1.005
 
   return (
     <>
@@ -150,9 +175,9 @@ function PersonRow({
           </Link>
           <span
             className={`ml-1.5 inline-block rounded px-1 py-0.5 text-[9px] font-semibold leading-none ${badgeCls}`}
-            title={`${activeCap} h/Woche von ${totalCap} h/Woche`}
+            title={badgeTitle}
           >
-            {utilPct}%
+            {badgeValue}%
           </span>
         </td>
 
@@ -183,7 +208,7 @@ function PersonRow({
           </div>
 
           {/* Layer 1: continuous membership bars */}
-          {bars.map(({ m, startDay, endDay, frac, bottom }) => (
+          {bars.map(({ m, startDay, endDay, frac, bottom, label }) => (
             <div
               key={m.project_id}
               className={`absolute ${projectColor(m.project_id)} flex items-center px-1.5 overflow-hidden`}
@@ -193,10 +218,12 @@ function PersonRow({
                 bottom: `${bottom}%`,
                 height: `${frac * 100}%`,
               }}
-              title={`${m.project_number}: ${m.weekly_capacity_hours} h/Woche · ${Math.round(frac * 100)}%`}
+              title={viewMode === 'milestones'
+                ? `${m.project_number}: ${(personMilestoneHours[m.project_id] ?? 0).toFixed(1)} h geplant · ${m.weekly_capacity_hours} h/W Kapazität`
+                : `${m.project_number}: ${m.weekly_capacity_hours} h/Woche · ${Math.round(frac * 100)}%`}
             >
               <span className="text-[9px] font-semibold text-gray-700 leading-none truncate whitespace-nowrap select-none">
-                {m.project_number} · {Math.round(frac * 100)}%
+                {label}
               </span>
             </div>
           ))}
@@ -252,11 +279,24 @@ function PersonRow({
               </span>
             </td>
             <td colSpan={numDays} className="px-3 py-1 border-b border-gray-100 text-xs text-gray-500">
-              <span className="font-medium text-gray-700">{m.weekly_capacity_hours} h/Woche</span>
-              <span className="mx-1.5 text-gray-300">·</span>
-              <span>{Math.round(frac * 100)}% Kapazität</span>
-              <span className="mx-1.5 text-gray-300">·</span>
-              <span>{m.from_date} – {m.to_date}</span>
+              {viewMode === 'milestones' ? (() => {
+                const msHours = personMilestoneHours[m.project_id] ?? 0
+                const monthlyCapacity = workDaysInMonth > 0 ? (m.weekly_capacity_hours / 5) * workDaysInMonth : m.weekly_capacity_hours * 4.33
+                const msPct = monthlyCapacity > 0 ? Math.round(msHours / monthlyCapacity * 100) : 0
+                return <>
+                  <span className="font-medium text-gray-700">{msHours.toFixed(1)} h geplant</span>
+                  <span className="mx-1.5 text-gray-300">·</span>
+                  <span>{msPct}% der Monatskapazität ({monthlyCapacity.toFixed(0)} h)</span>
+                  <span className="mx-1.5 text-gray-300">·</span>
+                  <span>{m.weekly_capacity_hours} h/Woche Kapazität</span>
+                </>
+              })() : <>
+                <span className="font-medium text-gray-700">{m.weekly_capacity_hours} h/Woche</span>
+                <span className="mx-1.5 text-gray-300">·</span>
+                <span>{Math.round((m.weekly_capacity_hours / totalCap) * 100)}% Kapazität</span>
+                <span className="mx-1.5 text-gray-300">·</span>
+                <span>{m.from_date} – {m.to_date}</span>
+              </>}
             </td>
           </tr>
         )
@@ -368,6 +408,7 @@ export default function CalendarPage() {
   const [showHolidays, setShowHolidays] = useState(true)
   const [showAbsences, setShowAbsences] = useState(true)
   const [showProjects, setShowProjects] = useState(true)
+  const [viewMode, setViewMode] = useState<'milestones' | 'availability'>('milestones')
 
   const [selectedProgramId, setSelectedProgramId] = useState<number | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
@@ -405,6 +446,25 @@ export default function CalendarPage() {
   data?.holidays.forEach((h) => { holidayMap[h.holiday_date] = h.name })
 
   const milestones: CalendarMilestone[] = data?.milestones ?? []
+
+  // Compute actual work days in this month (Mon–Fri, excl. public holidays)
+  const holidayWorkdayDates = new Set(data?.holidays.filter(h => h.is_workday).map(h =>
+    typeof h.holiday_date === 'string' ? h.holiday_date : (h.holiday_date as Date).toISOString().slice(0, 10)
+  ))
+  let workDaysInMonth = 0
+  for (let d = 1; d <= numDays; d++) {
+    const dow = weekdayIndex(year, month, d)
+    if (dow >= 1 && dow <= 5 && !holidayWorkdayDates.has(isoDate(year, month, d))) workDaysInMonth++
+  }
+
+  // Build per-person milestone hours map: personId → projectId → planned hours
+  const personMilestoneHoursMap: Record<number, Record<number, number>> = {}
+  for (const ms of milestones) {
+    for (const b of ms.budgets ?? []) {
+      if (!personMilestoneHoursMap[b.person_id]) personMilestoneHoursMap[b.person_id] = {}
+      personMilestoneHoursMap[b.person_id][ms.project_id] = b.current_hours
+    }
+  }
 
   const programProjectIds = selectedProgramId != null
     ? projectList.filter((p) => p.program_id === selectedProgramId).map((p) => p.id)
@@ -471,6 +531,26 @@ export default function CalendarPage() {
             <option key={p.id} value={p.id}>{p.project_number} – {p.name}</option>
           ))}
         </select>
+
+        <div className="w-px h-4 bg-gray-200 mx-1" />
+
+        {/* View mode toggle */}
+        <div className="flex items-center rounded-md border border-gray-200 overflow-hidden text-xs font-medium">
+          <button
+            onClick={() => setViewMode('milestones')}
+            className={`px-2.5 py-1 transition-colors ${viewMode === 'milestones' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+            title="Zeigt geplante Meilensteinsstunden je Person und Projekt"
+          >
+            Meilensteine
+          </button>
+          <button
+            onClick={() => setViewMode('availability')}
+            className={`px-2.5 py-1 transition-colors ${viewMode === 'availability' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+            title="Zeigt verfügbare Kapazität (PWS) je Person und Projekt"
+          >
+            Verfügbarkeit
+          </button>
+        </div>
 
         <div className="w-px h-4 bg-gray-200 mx-1" />
 
@@ -549,6 +629,9 @@ export default function CalendarPage() {
                     showAbsences={showAbsences}
                     showProjects={showProjects}
                     rowClass={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}
+                    viewMode={viewMode}
+                    personMilestoneHours={personMilestoneHoursMap[person.id] ?? {}}
+                    workDaysInMonth={workDaysInMonth}
                   />
                 ))}
               </tbody>

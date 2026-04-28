@@ -252,10 +252,10 @@ export default function ProjectDetailPage() {
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-6"></th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monat</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan (init.)</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Aktuell (angepasst)</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rebalanciert</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Budget (€)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Kapazität bei Initialisierung (Arbeitstage × h/Woche, abzgl. Feiertage und Abwesenheiten)">Plan (init.)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Stunden inkl. manueller Anpassungen. Fortschrittsbalken = gebuchte / geplante Stunden.">Aktuell (angepasst)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Vom Rebalancing-Algorithmus vorgeschlagene Stundenverteilung auf Basis des Restbudgets">Rebalanciert</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Geplante Kosten: Summe(Stunden × Verrechnungssatz) je Person">Budget (€)</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
                     </tr>
@@ -337,22 +337,38 @@ export default function ProjectDetailPage() {
                                 <thead>
                                   <tr className="text-xs text-gray-400 border-b border-slate-100">
                                     <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Plan</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Aktuell</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Gebucht</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Arbeitstage</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Kapazität bei Initialisierung">Plan</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Aktuell geplante Stunden (manuell anpassbar)">Aktuell</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Aus Sage importierte Buchungen">Gebucht</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Effektive Personenwochenstunden: Aktuell ÷ (Arbeitstage / 5). Zeigt den impliziten wöchentlichen Aufwand aus den geplanten Stunden.">Eff. PWS</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Abweichung der effektiven PWS zur Ziel-PWS aus der Projektmitgliedschaft. Positiv = mehr als geplant, negativ = weniger.">Δ PWS</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage im Monat (Mo–Fr, exkl. Feiertage und außerhalb der Mitgliedschaft)">Arbeitstage</th>
                                     <th className="px-4 py-1.5 text-left font-normal">Abwesenheit</th>
                                     <th className="px-4 py-1.5 text-left font-normal">Feiertage</th>
                                     <th className="px-4 py-1.5"></th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {d.persons.map((p) => (
+                                  {d.persons.map((p) => {
+                                    const targetPws = memberships.find(m => m.person_id === p.person_id)?.weekly_capacity_hours ?? null
+                                    const effPws = p.work_days > 0 ? p.current_hours * 5 / p.work_days : null
+                                    const deltaPws = effPws !== null && targetPws !== null ? effPws - targetPws : null
+                                    return (
                                     <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
                                       <td className="pl-12 pr-4 py-2 text-gray-700">{p.person_name}</td>
                                       <td className="px-4 py-2 text-gray-500">{p.initial_hours.toFixed(1)} h</td>
                                       <td className="px-4 py-2 text-gray-700 font-medium">{p.current_hours.toFixed(1)} h</td>
-                                      <td className="px-4 py-2 text-gray-500">Gebucht: {(p.booked_hours ?? 0).toFixed(1)} h</td>
+                                      <td className="px-4 py-2 text-gray-500">{(p.booked_hours ?? 0).toFixed(1)} h</td>
+                                      <td className="px-4 py-2 text-gray-600 font-medium">
+                                        {effPws !== null ? `${effPws.toFixed(1)} h/W` : <span className="text-gray-300">–</span>}
+                                      </td>
+                                      <td className="px-4 py-2 font-medium">
+                                        {deltaPws !== null
+                                          ? <span className={deltaPws > 0.05 ? 'text-orange-600' : deltaPws < -0.05 ? 'text-blue-600' : 'text-green-600'}>
+                                              {deltaPws > 0 ? '+' : ''}{deltaPws.toFixed(1)} h/W
+                                            </span>
+                                          : <span className="text-gray-300">–</span>}
+                                      </td>
                                       <td className="px-4 py-2 text-gray-500">{p.work_days} T</td>
                                       <td className="px-4 py-2 text-gray-500">{p.absence_days} T</td>
                                       <td className="px-4 py-2 text-gray-500">{p.holiday_days} T</td>
@@ -366,7 +382,8 @@ export default function ProjectDetailPage() {
                                         )}
                                       </td>
                                     </tr>
-                                  ))}
+                                    )
+                                  })}
                                 </tbody>
                               </table>
                             </td>

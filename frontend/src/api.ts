@@ -315,6 +315,11 @@ export interface CalendarPerson {
   memberships: CalendarMembership[];
 }
 
+export interface CalendarMilestoneBudget {
+  person_id: number;
+  current_hours: number;
+}
+
 export interface CalendarMilestone {
   project_id: number;
   project_number: string;
@@ -324,6 +329,7 @@ export interface CalendarMilestone {
   is_locked: boolean;
   initial_hours: number | undefined;
   current_hours: number | undefined;
+  budgets: CalendarMilestoneBudget[];
 }
 
 export interface CalendarResponse {
