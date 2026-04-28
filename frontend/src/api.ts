@@ -318,6 +318,7 @@ export interface CalendarPerson {
 export interface CalendarMilestoneBudget {
   person_id: number;
   current_hours: number;
+  booked_hours: number;
 }
 
 export interface CalendarMilestone {
@@ -329,7 +330,7 @@ export interface CalendarMilestone {
   is_locked: boolean;
   initial_hours: number | undefined;
   current_hours: number | undefined;
-  budgets: CalendarMilestoneBudget[];
+  budgets?: CalendarMilestoneBudget[];
 }
 
 export interface CalendarResponse {

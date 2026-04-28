@@ -9,11 +9,14 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlmodel import Session, select
 
+from sqlalchemy import func
+
 from app.db import get_session
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person, PersonAbsence
 from app.models.project import Project
+from app.models.timebooking import TimeBooking
 from app.services.holiday import HolidayFetchError, get_holidays_in_range
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
@@ -59,6 +62,7 @@ class PersonOut(BaseModel):
 class MilestonePersonBudgetOut(BaseModel):
     person_id: int
     current_hours: float
+    booked_hours: float = 0.0
 
 
 class MilestoneOut(BaseModel):
@@ -183,14 +187,41 @@ def get_calendar(
 
     # Bulk-fetch all person budgets for these milestones in one query
     milestone_ids = [ms.id for ms, _ in milestones_raw if ms.id is not None]
+    milestone_to_project: dict[int, int] = {
+        ms.id: ms.project_id for ms, _ in milestones_raw if ms.id is not None
+    }
+
     budgets_raw = session.exec(
         select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id.in_(milestone_ids))
     ).all() if milestone_ids else []
+
+    # Bulk-fetch booked hours per (project_id, person_id) for this month
+    project_ids = list({ms.project_id for ms, _ in milestones_raw})
+    bookings_raw = session.exec(
+        select(TimeBooking.project_id, TimeBooking.person_id, func.sum(TimeBooking.net_hours))
+        .where(
+            TimeBooking.project_id.in_(project_ids),
+            TimeBooking.booking_date >= start,
+            TimeBooking.booking_date <= end,
+        )
+        .group_by(TimeBooking.project_id, TimeBooking.person_id)
+    ).all() if project_ids else []
+    booked_map: dict[tuple[int, int], float] = {
+        (int(proj_id), int(person_id)): float(hours)
+        for proj_id, person_id, hours in bookings_raw
+    }
+
     budgets_by_milestone: dict[int, list[MilestonePersonBudgetOut]] = {mid: [] for mid in milestone_ids}
     for b in budgets_raw:
         if b.milestone_id in budgets_by_milestone:
+            proj_id = milestone_to_project.get(b.milestone_id)
+            booked = booked_map.get((proj_id, b.person_id), 0.0) if proj_id else 0.0
             budgets_by_milestone[b.milestone_id].append(
-                MilestonePersonBudgetOut(person_id=b.person_id, current_hours=b.current_hours)
+                MilestonePersonBudgetOut(
+                    person_id=b.person_id,
+                    current_hours=b.current_hours,
+                    booked_hours=booked,
+                )
             )
 
     milestones_out = [

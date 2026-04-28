@@ -95,7 +95,7 @@ function membershipEndDay(toDate: string, year: number, month: number, numDays: 
 function PersonRow({
   person, year, month, days, numDays, todayStr, holidayMap,
   showHolidays, showAbsences, showProjects, rowClass,
-  viewMode, personMilestoneHours, workDaysInMonth,
+  viewMode, personMilestoneHours, personBookedHours, workDaysInMonth,
 }: {
   person: CalendarPerson
   year: number; month: number; days: number[]; numDays: number; todayStr: string
@@ -104,6 +104,7 @@ function PersonRow({
   rowClass: string
   viewMode: 'availability' | 'milestones'
   personMilestoneHours: Record<number, number>
+  personBookedHours: Record<number, number>
   workDaysInMonth: number
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -119,9 +120,10 @@ function PersonRow({
   let badgeTitle: string
   if (viewMode === 'milestones') {
     const totalMsHours = Object.values(personMilestoneHours).reduce((s, h) => s + h, 0)
+    const totalBooked = Object.values(personBookedHours).reduce((s, h) => s + h, 0)
     const monthlyCapacity = workDaysInMonth > 0 ? (totalCap / 5) * workDaysInMonth : totalCap * 4.33
     badgeValue = Math.round(totalMsHours / monthlyCapacity * 100)
-    badgeTitle = `${totalMsHours.toFixed(1)} h Meilenstein von ${monthlyCapacity.toFixed(0)} h Kapazität`
+    badgeTitle = `Meilenstein: ${totalMsHours.toFixed(1)} h geplant · ${totalBooked.toFixed(1)} h gebucht (von ${monthlyCapacity.toFixed(0)} h Kapazität)`
   } else {
     badgeValue = Math.round((activeCap / totalCap) * 100)
     badgeTitle = `${activeCap} h/Woche von ${totalCap} h/Woche`
@@ -131,7 +133,7 @@ function PersonRow({
     : 'bg-gray-100 text-gray-500'
 
   // Pre-compute stacked membership bars (bottom → top)
-  type Bar = { m: CalendarMembership; startDay: number; endDay: number; frac: number; bottom: number; label: string }
+  type Bar = { m: CalendarMembership; startDay: number; endDay: number; frac: number; bookedFrac: number; bottom: number; label: string }
   const bars: Bar[] = []
   if (showProjects) {
     let stackBottom = 0
@@ -141,17 +143,23 @@ function PersonRow({
       const endDay = membershipEndDay(m.to_date, year, month, numDays)
       let frac: number
       let label: string
+      let bookedFrac = 0
       if (viewMode === 'milestones') {
         const msHours = personMilestoneHours[m.project_id] ?? 0
+        const bookedHours = personBookedHours[m.project_id] ?? 0
         const monthlyCapacity = workDaysInMonth > 0 ? (m.weekly_capacity_hours / 5) * workDaysInMonth : m.weekly_capacity_hours * 4.33
         frac = monthlyCapacity > 0 ? Math.min(1, msHours / monthlyCapacity) : 0
+        bookedFrac = msHours > 0 ? Math.min(1, bookedHours / msHours) : 0
         const pct = Math.round(frac * 100)
-        label = msHours > 0 ? `${m.project_number} · ${msHours.toFixed(0)} h (${pct}% Kap.)` : `${m.project_number} · kein Meilenstein`
+        const bookedPct = Math.round(bookedFrac * 100)
+        label = msHours > 0
+          ? `${m.project_number} · ${msHours.toFixed(0)} h Soll · ${bookedHours.toFixed(0)} h Ist (${bookedPct}%)`
+          : `${m.project_number} · kein Meilenstein`
       } else {
         frac = Math.min(1, m.weekly_capacity_hours / totalCap)
         label = `${m.project_number} · ${Math.round(frac * 100)}%`
       }
-      bars.push({ m, startDay, endDay, frac, bottom: stackBottom, label })
+      bars.push({ m, startDay, endDay, frac, bookedFrac, bottom: stackBottom, label })
       stackBottom += frac * 100
     }
   }
@@ -208,7 +216,7 @@ function PersonRow({
           </div>
 
           {/* Layer 1: continuous membership bars */}
-          {bars.map(({ m, startDay, endDay, frac, bottom, label }) => (
+          {bars.map(({ m, startDay, endDay, frac, bookedFrac, bottom, label }) => (
             <div
               key={m.project_id}
               className={`absolute ${projectColor(m.project_id)} flex items-center px-1.5 overflow-hidden`}
@@ -219,10 +227,17 @@ function PersonRow({
                 height: `${frac * 100}%`,
               }}
               title={viewMode === 'milestones'
-                ? `${m.project_number}: ${(personMilestoneHours[m.project_id] ?? 0).toFixed(1)} h geplant · ${m.weekly_capacity_hours} h/W Kapazität`
+                ? `${m.project_number}: ${(personMilestoneHours[m.project_id] ?? 0).toFixed(1)} h Soll · ${(personBookedHours[m.project_id] ?? 0).toFixed(1)} h Ist · ${m.weekly_capacity_hours} h/W Kapazität`
                 : `${m.project_number}: ${m.weekly_capacity_hours} h/Woche · ${Math.round(frac * 100)}%`}
             >
-              <span className="text-[9px] font-semibold text-gray-700 leading-none truncate whitespace-nowrap select-none">
+              {/* Booked (Ist) overlay — fills bar from bottom proportional to booked/planned */}
+              {viewMode === 'milestones' && bookedFrac > 0 && (
+                <div
+                  className={`absolute bottom-0 left-0 right-0 ${bookedFrac >= 1 ? 'bg-green-600/40' : 'bg-black/25'} pointer-events-none`}
+                  style={{ height: `${bookedFrac * 100}%` }}
+                />
+              )}
+              <span className="relative text-[9px] font-semibold text-gray-700 leading-none truncate whitespace-nowrap select-none z-10">
                 {label}
               </span>
             </div>
@@ -281,14 +296,24 @@ function PersonRow({
             <td colSpan={numDays} className="px-3 py-1 border-b border-gray-100 text-xs text-gray-500">
               {viewMode === 'milestones' ? (() => {
                 const msHours = personMilestoneHours[m.project_id] ?? 0
+                const bookedHours = personBookedHours[m.project_id] ?? 0
                 const monthlyCapacity = workDaysInMonth > 0 ? (m.weekly_capacity_hours / 5) * workDaysInMonth : m.weekly_capacity_hours * 4.33
                 const msPct = monthlyCapacity > 0 ? Math.round(msHours / monthlyCapacity * 100) : 0
+                const bookedPct = msHours > 0 ? Math.round(bookedHours / msHours * 100) : 0
+                const noMilestone = msHours === 0
                 return <>
-                  <span className="font-medium text-gray-700">{msHours.toFixed(1)} h geplant</span>
-                  <span className="mx-1.5 text-gray-300">·</span>
-                  <span>{msPct}% der Monatskapazität ({monthlyCapacity.toFixed(0)} h)</span>
-                  <span className="mx-1.5 text-gray-300">·</span>
-                  <span>{m.weekly_capacity_hours} h/Woche Kapazität</span>
+                  {noMilestone
+                    ? <span className="italic text-gray-400">kein Meilenstein für diesen Monat</span>
+                    : <>
+                      <span className="font-medium text-gray-700" title="Geplante Stunden laut Meilenstein">Soll: {msHours.toFixed(1)} h</span>
+                      <span className="mx-1.5 text-gray-300">·</span>
+                      <span className={`font-medium ${bookedHours >= msHours ? 'text-green-700' : bookedHours > 0 ? 'text-blue-700' : 'text-gray-500'}`} title="Gebuchte Stunden aus Sage">
+                        Ist: {bookedHours.toFixed(1)} h ({bookedPct}%)
+                      </span>
+                      <span className="mx-1.5 text-gray-300">·</span>
+                      <span title="Meilensteinanteil an der gesamten Monatskapazität">{msPct}% von {monthlyCapacity.toFixed(0)} h Kapazität</span>
+                    </>
+                  }
                 </>
               })() : <>
                 <span className="font-medium text-gray-700">{m.weekly_capacity_hours} h/Woche</span>
@@ -457,12 +482,15 @@ export default function CalendarPage() {
     if (dow >= 1 && dow <= 5 && !holidayWorkdayDates.has(isoDate(year, month, d))) workDaysInMonth++
   }
 
-  // Build per-person milestone hours map: personId → projectId → planned hours
+  // Build per-person milestone maps: personId → projectId → hours
   const personMilestoneHoursMap: Record<number, Record<number, number>> = {}
+  const personBookedHoursMap: Record<number, Record<number, number>> = {}
   for (const ms of milestones) {
     for (const b of ms.budgets ?? []) {
       if (!personMilestoneHoursMap[b.person_id]) personMilestoneHoursMap[b.person_id] = {}
+      if (!personBookedHoursMap[b.person_id]) personBookedHoursMap[b.person_id] = {}
       personMilestoneHoursMap[b.person_id][ms.project_id] = b.current_hours
+      personBookedHoursMap[b.person_id][ms.project_id] = b.booked_hours ?? 0
     }
   }
 
@@ -631,6 +659,7 @@ export default function CalendarPage() {
                     rowClass={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}
                     viewMode={viewMode}
                     personMilestoneHours={personMilestoneHoursMap[person.id] ?? {}}
+                    personBookedHours={personBookedHoursMap[person.id] ?? {}}
                     workDaysInMonth={workDaysInMonth}
                   />
                 ))}
