@@ -59,7 +59,7 @@ function EditPersonForm({
       </div>
       <div>
         <label htmlFor="edit-hours" className="block text-xs font-medium text-gray-600 mb-1">Wochenstunden (Standard)</label>
-        <input id="edit-hours" required type="number" min={0.5} max={60} step={0.5}
+        <input id="edit-hours" required type="number" min={0} max={60} step={0.01}
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={form.default_weekly_hours}
           onChange={(e) => setForm({ ...form, default_weekly_hours: parseFloat(e.target.value) })} />
@@ -282,14 +282,14 @@ function MembershipForm({
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label htmlFor="ms-hours" className="block text-xs font-medium text-gray-600 mb-1">Kapazität (h/Woche)</label>
-          <input id="ms-hours" required type="number" min={0.5} max={60} step={0.5}
+          <input id="ms-hours" required type="number" min={0} max={60} step={0.01}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.weekly_capacity_hours}
             onChange={(e) => setForm((f) => ({ ...f, weekly_capacity_hours: parseFloat(e.target.value) }))} />
         </div>
         <div>
           <label htmlFor="ms-rate" className="block text-xs font-medium text-gray-600 mb-1">Verrechnungssatz (€/h)</label>
-          <input id="ms-rate" required type="number" min={0} step={1}
+          <input id="ms-rate" required type="number" min={0} step={0.01}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.billing_rate_per_hour}
             onChange={(e) => setForm((f) => ({ ...f, billing_rate_per_hour: parseFloat(e.target.value) }))} />

@@ -65,7 +65,7 @@ function ProjectForm({ initial, onSave, onCancel }: {
         <div>
           <label htmlFor="proj-budget" className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.)</label>
           <input id="proj-budget"
-            required type="number" min={0.5} step={0.5}
+            required type="number" min={0} step={0.01}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.total_budget_hours}
             onChange={(e) => setForm({ ...form, total_budget_hours: parseFloat(e.target.value) })}

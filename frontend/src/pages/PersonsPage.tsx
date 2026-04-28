@@ -64,7 +64,7 @@ function PersonForm({ initial, onSave, onCancel }: {
         <div>
           <label htmlFor="person-hours" className="block text-xs font-medium text-gray-600 mb-1">Wochenstunden (Standard)</label>
           <input id="person-hours"
-            required type="number" min={1} max={60} step={0.5}
+            required type="number" min={0} max={60} step={0.01}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.default_weekly_hours}
             onChange={(e) => setForm({ ...form, default_weekly_hours: parseFloat(e.target.value) })}
@@ -73,7 +73,7 @@ function PersonForm({ initial, onSave, onCancel }: {
         <div>
           <label htmlFor="person-rate" className="block text-xs font-medium text-gray-600 mb-1">Verrechnungssatz (€/h) <span className="font-normal text-gray-400">optional</span></label>
           <input id="person-rate"
-            type="number" min={0} step={1}
+            type="number" min={0} step={0.01}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={form.default_billing_rate ?? ''}
             onChange={(e) => setForm({ ...form, default_billing_rate: e.target.value ? parseFloat(e.target.value) : null })}

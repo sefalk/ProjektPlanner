@@ -634,7 +634,7 @@ export default function ProjectDetailPage() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.)</label>
-                  <input required type="number" min={0.5} step={0.5} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  <input required type="number" min={0} step={0.01} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={sf.total_budget_hours} onChange={(e) => setSf({ ...sf, total_budget_hours: parseFloat(e.target.value) })} />
                 </div>
                 <div>
@@ -764,7 +764,7 @@ export default function ProjectDetailPage() {
               <label className="block text-xs font-medium text-gray-600 mb-1">Aktuelle Stunden</label>
               <input
                 autoFocus
-                required type="number" min={0} step={0.5}
+                required type="number" min={0} step={0.01}
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 value={editHours}
                 onChange={(e) => setEditHours(parseFloat(e.target.value))}
@@ -836,14 +836,14 @@ export default function ProjectDetailPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">h/Woche</label>
-                <input required type="number" min={1} max={60} step={0.5}
+                <input required type="number" min={0} max={60} step={0.01}
                   className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                   value={addMemberForm.weekly_capacity_hours}
                   onChange={(e) => setAddMemberForm({ ...addMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                <input required type="number" min={0} step={0.25}
+                <input required type="number" min={0} step={0.01}
                   className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                   value={addMemberForm.billing_rate_per_hour}
                   onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
@@ -882,14 +882,14 @@ export default function ProjectDetailPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">h/Woche</label>
-                <input required type="number" min={1} max={60} step={0.5}
+                <input required type="number" min={0} max={60} step={0.01}
                   className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                   value={editMemberForm.weekly_capacity_hours}
                   onChange={(e) => setEditMemberForm({ ...editMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                <input required type="number" min={0} step={0.25}
+                <input required type="number" min={0} step={0.01}
                   className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                   value={editMemberForm.billing_rate_per_hour}
                   onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
