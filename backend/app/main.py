@@ -11,13 +11,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.db import create_db_and_tables
+from app.db import create_db_and_tables, seed_default_settings
 from app.routers import calendar, imports, invoices, milestones, persons, programs, projects, rebalancing, settings as settings_router
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     create_db_and_tables()
+    seed_default_settings()
     yield
 
 

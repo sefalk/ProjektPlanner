@@ -32,8 +32,8 @@ export interface Project {
   description: string;
   start_date: string;
   end_date: string;
-  total_budget_hours: number;
-  total_budget_euros: number | null;
+  total_budget_hours: number | null;
+  total_budget_euros: number;
   holiday_country: string;
   holiday_state: string;
   status: 'planned' | 'active' | 'completed' | 'archived';
@@ -97,6 +97,8 @@ export interface MilestonePersonDetail {
   budget_id: number;
   initial_hours: number;
   current_hours: number;
+  available_hours: number;
+  days_per_week: number;
   work_days: number;
   absence_days: number;
   holiday_days: number;
@@ -157,6 +159,25 @@ export interface ImportBatch {
   last_booking_date: string;
 }
 
+export type ExclusionReason = 'duplicate' | 'incorrect' | 'cancelled' | 'test';
+
+export interface TimeBooking {
+  id: number;
+  booking_date: string;
+  person_id: number;
+  person_name: string;
+  import_batch_id: number;
+  sage_project_name: string;
+  sage_project_level: string;
+  net_hours: number;
+  duration_raw: string;
+  break_duration: string;
+  note: string;
+  is_excluded: boolean;
+  exclusion_reason: ExclusionReason | null;
+  exclusion_note: string | null;
+}
+
 // ─── Programs ────────────────────────────────────────────────────────────────
 
 export const programs = {
@@ -194,9 +215,11 @@ export const projects = {
   billingPositions: (id: number) => req<BillingPosition[]>('GET', `/projects/${id}/billing-positions`),
   addBillingPosition: (id: number, d: Omit<BillingPosition, 'id' | 'project_id'>) =>
     req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
+  deleteBillingPosition: (projectId: number, bpId: number) =>
+    req<void>('DELETE', `/projects/${projectId}/billing-positions/${bpId}`),
   milestones: (id: number) => req<Milestone[]>('GET', `/projects/${id}/milestones`),
   milestonesDetail: (id: number) => req<MilestoneDetail[]>('GET', `/projects/${id}/milestones/detail`),
-  initMilestones: (id: number) => req<Milestone[]>('POST', `/projects/${id}/milestones/initialize`),
+  initMilestones: (id: number, force?: boolean) => req<Milestone[]>('POST', `/projects/${id}/milestones/initialize${force ? '?force=true' : ''}`),
   updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number) =>
     req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}`, { current_hours: hours }),
   drift: (id: number) => req<PersonDrift[]>('GET', `/projects/${id}/rebalancing/drift`),
@@ -205,6 +228,15 @@ export const projects = {
   invoices: (id: number) => req<MonthlyInvoice[]>('GET', `/projects/${id}/invoices`),
   closeMonth: (id: number, d: { year: number; month: number; billing_position_id: number }) =>
     req<MonthlyInvoice>('POST', `/projects/${id}/invoices/close`, d),
+  bookings: (id: number, filters?: { person_id?: number; year?: number; month?: number; week?: number }) => {
+    const p = new URLSearchParams()
+    if (filters?.person_id) p.set('person_id', String(filters.person_id))
+    if (filters?.year) p.set('year', String(filters.year))
+    if (filters?.month) p.set('month', String(filters.month))
+    if (filters?.week) p.set('week', String(filters.week))
+    const qs = p.toString()
+    return req<TimeBooking[]>('GET', `/projects/${id}/bookings${qs ? '?' + qs : ''}`)
+  },
 };
 
 export interface PersonAbsence {
@@ -348,14 +380,38 @@ export const calendar = {
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
+export interface DbPathInfo {
+  url: string;
+  path: string;
+  config_source: string;
+  cloud_warning: boolean;
+}
+
+export interface DbPathResult {
+  new_path: string;
+  restart_required: boolean;
+  cloud_warning: boolean;
+}
+
 export const settings = {
   get: () => req<Record<string, string>>('GET', '/settings'),
   update: (key: string, value: string) =>
     req<{ key: string; value: string }>('PUT', `/settings/${key}`, { value }),
+  getDbPath: () => req<DbPathInfo>('GET', '/settings/database-path'),
+  setDbPath: (directory: string) =>
+    req<DbPathResult>('PUT', '/settings/database-path', { directory }),
 };
 
 // ─── Imports ─────────────────────────────────────────────────────────────────
 
 export const imports = {
   list: () => req<ImportBatch[]>('GET', '/imports'),
+  bookings: (batchId: number) => req<TimeBooking[]>('GET', `/imports/${batchId}/bookings`),
+};
+
+// ─── Bookings ─────────────────────────────────────────────────────────────────
+
+export const bookings = {
+  flag: (id: number, data: { is_excluded: boolean; exclusion_reason?: ExclusionReason | null; exclusion_note?: string | null }) =>
+    req<TimeBooking>('PUT', `/bookings/${id}/flag`, data),
 };

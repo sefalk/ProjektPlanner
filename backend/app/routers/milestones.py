@@ -18,6 +18,7 @@ from app.services.milestones import (
     MilestoneLocked,
     MilestoneNotFound,
     PersonMonthStats,
+    _parse_work_week_pattern,
     _person_available_hours,
     get_milestone_budgets,
     initialize_milestones,
@@ -40,6 +41,8 @@ class MilestonePersonDetailOut(SQLModel):
     budget_id: int
     initial_hours: float
     current_hours: float
+    available_hours: float
+    days_per_week: float
     work_days: int
     absence_days: int
     holiday_days: int
@@ -58,16 +61,17 @@ class MilestoneDetailOut(SQLModel):
 
 
 @router.post("/{project_id}/milestones/initialize", response_model=list[Milestone], status_code=201)
-def init_milestones(project_id: int, session: SessionDep):
+def init_milestones(project_id: int, session: SessionDep, force: bool = False):
     """Create milestones for all months in the project range.
 
-    Safe to call multiple times: existing milestones are not modified.
+    force=false (default): existing milestones are skipped; missing member budgets are repaired.
+    force=true: all unlocked milestones are deleted and fully re-created.
     Returns only the newly created milestones.
     """
     if not session.get(Project, project_id):
         raise HTTPException(404, "Project not found.")
     try:
-        return initialize_milestones(project_id, session)
+        return initialize_milestones(project_id, session, force=force)
     except MilestoneNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -107,6 +111,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 TimeBooking.project_id == project_id,
                 TimeBooking.booking_date >= month_start,
                 TimeBooking.booking_date <= month_end,
+                TimeBooking.is_excluded == False,  # noqa: E712
             )
             .group_by(TimeBooking.person_id)
         ).all()
@@ -118,12 +123,16 @@ def list_milestones_detail(project_id: int, session: SessionDep):
             if person is None or membership is None:
                 continue
             stats = _person_available_hours(person, membership, project, ms.year, ms.month, session)
+            pattern = _parse_work_week_pattern(person.work_week_pattern) if person.work_week_pattern else None
+            days_per_week = float(sum(1 for h in pattern if h > 0)) if pattern else 5.0
             persons_out.append(MilestonePersonDetailOut(
                 person_id=person.id,
                 person_name=person.name,
                 budget_id=budget.id,
                 initial_hours=budget.initial_hours,
                 current_hours=budget.current_hours,
+                available_hours=stats.hours,
+                days_per_week=days_per_week,
                 work_days=stats.work_days,
                 absence_days=stats.absence_days,
                 holiday_days=stats.holiday_days,

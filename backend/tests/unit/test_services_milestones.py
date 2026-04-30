@@ -32,6 +32,7 @@ def _project(session, start=date(2026, 1, 1), end=date(2026, 3, 31), number="P00
         name=f"Project {number}",
         start_date=start,
         end_date=end,
+        total_budget_euros=50000.0,
         total_budget_hours=500.0,
     )
     session.add(p)
@@ -235,10 +236,12 @@ def test_initialize_project_not_found(session):
 
 
 def test_initialize_budget_scaling(session):
-    """When capacity > total_budget_hours, current_hours are scaled down to match budget."""
-    # 40h/week × 3 months ≈ 512h capacity; budget = 400h → scale ≈ 0.781
+    """When capacity > total_budget_hours and no euro budget, hours are scaled down to match."""
+    # Use total_budget_euros=0 to exercise the legacy hours-budget path.
+    # 40h/week × 3 months ≈ capacity; budget_hours = 400 → scale < 1
     proj = _project(session, date(2026, 1, 1), date(2026, 3, 31), number="PBS01")
     proj.total_budget_hours = 400.0
+    proj.total_budget_euros = 0.0  # bypass euro path
     session.add(proj)
     person = _person(session, "Budget Person")
     _membership(session, proj.id, person.id, weekly_hours=40.0)
@@ -250,8 +253,8 @@ def test_initialize_budget_scaling(session):
     total_initial = sum(m.initial_hours for m in created)
 
     assert total_current == pytest.approx(400.0, rel=1e-4)
-    assert total_initial > 400.0  # capacity exceeds budget
-    assert total_initial > total_current
+    # initial_hours == current_hours at init (both carry the scaled plan value)
+    assert total_initial == pytest.approx(total_current, rel=1e-4)
 
 
 def test_initialize_no_scaling_when_capacity_within_budget(session):
@@ -296,6 +299,7 @@ def test_vacation_estimate_per_month_not_globally_disabled(session):
     from sqlmodel import select as sq_select
     proj = _project(session, date(2026, 1, 1), date(2026, 3, 31), number="PVE01")
     proj.total_budget_hours = 10000.0  # well above capacity — no scaling
+    proj.total_budget_euros = 0.0  # bypass euro path so scale = 1.0
     session.add(proj)
     person = _person(session, "Vacation Test Person")
     _membership(session, proj.id, person.id, weekly_hours=40.0)

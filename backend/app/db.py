@@ -3,6 +3,10 @@ Database engine and session management.
 
 get_session is a FastAPI dependency injected into all routers.
 Tests override it with an in-memory engine via app.dependency_overrides.
+
+The active database URL is resolved at import time via db_management so that
+a user-configured path (stored in data_config.json) takes priority over the
+DATABASE_URL env var / pydantic default.
 """
 
 from collections.abc import Generator
@@ -11,9 +15,12 @@ from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import settings
+from app.services.db_management import resolve_db_url
+
+_db_url = resolve_db_url()
 
 engine = create_engine(
-    settings.database_url,
+    _db_url,
     connect_args={"check_same_thread": False, "timeout": 30},
     echo=settings.debug,
 )
@@ -30,6 +37,22 @@ def _set_sqlite_pragmas(dbapi_conn, _record) -> None:
 def create_db_and_tables() -> None:
     """Create all tables. Called once on application startup."""
     SQLModel.metadata.create_all(engine)
+
+
+def seed_default_settings() -> None:
+    """Insert default settings rows if they do not yet exist."""
+    from app.models.setting import Setting  # local import avoids circular deps at module load
+
+    defaults = {
+        "default_vacation_days": "30",
+        "sick_days_per_year": "10",
+        "training_days_per_year": "5",
+    }
+    with Session(engine) as session:
+        for key, value in defaults.items():
+            if session.get(Setting, key) is None:
+                session.add(Setting(key=key, value=value))
+        session.commit()
 
 
 def get_session() -> Generator[Session, None, None]:  # pragma: no cover

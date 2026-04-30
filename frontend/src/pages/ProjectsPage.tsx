@@ -33,8 +33,8 @@ function ProjectForm({ initial, onSave, onCancel }: {
     description: initial?.description ?? '',
     start_date: initial?.start_date ?? '',
     end_date: initial?.end_date ?? '',
-    total_budget_hours: initial?.total_budget_hours ?? 100,
-    total_budget_euros: initial?.total_budget_euros ?? null as number | null,
+    total_budget_hours: initial?.total_budget_hours ?? null as number | null,
+    total_budget_euros: initial?.total_budget_euros ?? 0,
     holiday_country: initial?.holiday_country ?? 'DE',
     holiday_state: initial?.holiday_state ?? 'BY',
     status: initial?.status ?? 'active' as Project['status'],
@@ -63,22 +63,22 @@ function ProjectForm({ initial, onSave, onCancel }: {
           />
         </div>
         <div>
-          <label htmlFor="proj-budget" className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.)</label>
-          <input id="proj-budget"
+          <label htmlFor="proj-budget-euros" className="block text-xs font-medium text-gray-600 mb-1">Budget (€)</label>
+          <input id="proj-budget-euros"
             required type="number" min={0} step={0.01}
             className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.total_budget_hours}
-            onChange={(e) => setForm({ ...form, total_budget_hours: parseFloat(e.target.value) })}
+            value={form.total_budget_euros ?? ''}
+            onChange={(e) => setForm({ ...form, total_budget_euros: e.target.value ? parseFloat(e.target.value) : 0 })}
           />
         </div>
       </div>
       <div>
-        <label htmlFor="proj-budget-euros" className="block text-xs font-medium text-gray-600 mb-1">Budget (€) <span className="font-normal text-gray-400">optional</span></label>
-        <input id="proj-budget-euros"
+        <label htmlFor="proj-budget" className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.) <span className="font-normal text-gray-400">optional</span></label>
+        <input id="proj-budget"
           type="number" min={0} step={0.01}
           className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.total_budget_euros ?? ''}
-          onChange={(e) => setForm({ ...form, total_budget_euros: e.target.value ? parseFloat(e.target.value) : null })}
+          value={form.total_budget_hours ?? ''}
+          onChange={(e) => setForm({ ...form, total_budget_hours: e.target.value ? parseFloat(e.target.value) : null })}
         />
       </div>
       <div>
@@ -190,20 +190,14 @@ export default function ProjectsPage() {
     {
       key: 'budget', header: 'Budget',
       render: (p: Project) => {
-        const s: ProjectStats | undefined = statsMap[p.id]
-        const booked = s?.booked_hours ?? 0
-        const total = p.total_budget_hours
-        const pct = total > 0 ? Math.min(100, (booked / total) * 100) : 0
-        const barColor = pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-orange-400' : 'bg-blue-500'
+        const euros = p.total_budget_euros
+        const hours = p.total_budget_hours
         return (
-          <div className="min-w-[8rem]">
-            <div className="flex justify-between text-xs text-gray-500 mb-1">
-              <span>{booked.toLocaleString('de-DE', { maximumFractionDigits: 0 })} h</span>
-              <span className="text-gray-500">{total.toLocaleString('de-DE')} h</span>
-            </div>
-            <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-              <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
-            </div>
+          <div className="text-xs text-gray-700 space-y-0.5">
+            <div className="font-medium">{euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>
+            {hours != null && (
+              <div className="text-gray-400">{hours.toLocaleString('de-DE')} Std.</div>
+            )}
           </div>
         )
       },
