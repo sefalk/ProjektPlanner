@@ -587,6 +587,8 @@ export default function ProjectDetailPage() {
                       const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
                       const barColor = pct > 100 ? 'bg-red-500' : pct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
+                      const eurPct = planEuros > 0 ? Math.min(150, (currentEuros / planEuros) * 100) : 0
+                      const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       const fmtEur = (n: number) => n > 0 ? n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : null
                       return [
                         <tr key={ms.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(ms.id)}>
@@ -614,8 +616,21 @@ export default function ProjectDetailPage() {
                           <td className="px-4 py-3 text-sm text-gray-600">
                             {fmtEur(planEuros) ?? <span className="text-gray-300">–</span>}
                           </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">
-                            {fmtEur(currentEuros) ?? <span className="text-gray-300">–</span>}
+                          <td className="px-4 py-3">
+                            <div className="min-w-[9rem]">
+                              <div className="flex justify-between text-xs text-gray-500 mb-1">
+                                <span>{fmtEur(currentEuros) ?? '0 €'}</span>
+                                <span>{fmtEur(planEuros) ?? '–'}</span>
+                              </div>
+                              <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
+                                <div className={`h-full rounded ${eurBarColor}`} style={{ width: `${Math.min(100, eurPct)}%` }} />
+                                {eurPct > 0 && (
+                                  <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
+                                    {Math.round(eurPct)} %
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </td>
                           <td className="px-4 py-3 text-sm">
                             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
@@ -665,9 +680,9 @@ export default function ProjectDetailPage() {
                                 <thead>
                                   <tr className="text-xs text-gray-400 border-b border-slate-100">
                                     <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Verfügbare Kapazität: Arbeitstage × h/Woche minus Abwesenheits- und Urlaubsschätzung">Verfügbarkeit</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Geplante Stunden (Budget-proportional verteilt)">Plan</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Aktuell geplante Stunden (manuell anpassbar)">Aktuell</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Verfügbare Kapazität: Arbeitstage × h/Woche minus Abwesenheits- und Urlaubsschätzung">Verfügbarkeit</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Aus Sage importierte Buchungen">Gebucht</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Effektive Personenwochenstunden: Aktuell ÷ (Arbeitstage / Tage-je-Woche). Zeigt den impliziten wöchentlichen Aufwand aus den geplanten Stunden.">Eff. PWS</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Abweichung der effektiven PWS zur Ziel-PWS aus der Projektmitgliedschaft.">Δ PWS</th>
@@ -689,12 +704,12 @@ export default function ProjectDetailPage() {
                                     return (
                                     <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
                                       <td className="pl-12 pr-4 py-2 text-gray-700">{p.person_name}</td>
+                                      <td className="px-4 py-2 text-gray-400">{avail !== null ? `${avail.toFixed(1)} h` : <span className="text-gray-300">–</span>}</td>
                                       <td className={`px-4 py-2 font-medium ${planOverbooked ? 'text-red-600' : planUnderbooked ? 'text-blue-600' : 'text-gray-500'}`}
                                           title={planOverbooked ? 'Überbucht: Plan übersteigt verfügbare Kapazität' : planUnderbooked ? 'Unterbucht: Plan liegt unter verfügbarer Kapazität' : undefined}>
                                         {p.initial_hours.toFixed(1)} h
                                       </td>
                                       <td className="px-4 py-2 text-gray-700 font-medium">{p.current_hours.toFixed(1)} h</td>
-                                      <td className="px-4 py-2 text-gray-400">{avail !== null ? `${avail.toFixed(1)} h` : <span className="text-gray-300">–</span>}</td>
                                       <td className="px-4 py-2 text-gray-500">{(p.booked_hours ?? 0).toFixed(1)} h</td>
                                       <td className="px-4 py-2 text-gray-600 font-medium">
                                         {effPws !== null ? `${effPws.toFixed(1)} h/W` : <span className="text-gray-300">–</span>}
