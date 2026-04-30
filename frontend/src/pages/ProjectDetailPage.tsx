@@ -584,10 +584,11 @@ export default function ProjectDetailPage() {
                       const expanded = expandedMilestones.has(ms.id)
                       const planEuros = d.persons.reduce((s, p) => s + p.initial_hours * p.billing_rate_per_hour, 0)
                       const currentEuros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+                      const bookedEuros = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0) * p.billing_rate_per_hour, 0)
                       const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
                       const barColor = pct > 100 ? 'bg-red-500' : pct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
-                      const eurPct = planEuros > 0 ? Math.min(150, (currentEuros / planEuros) * 100) : 0
+                      const eurPct = currentEuros > 0 ? Math.min(150, (bookedEuros / currentEuros) * 100) : 0
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       const fmtEur = (n: number) => n > 0 ? n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : null
                       return [
@@ -619,8 +620,8 @@ export default function ProjectDetailPage() {
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
                               <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                <span>{fmtEur(currentEuros) ?? '0 €'}</span>
-                                <span>{fmtEur(planEuros) ?? '–'}</span>
+                                <span>{fmtEur(bookedEuros) ?? '0 €'}</span>
+                                <span>{fmtEur(currentEuros) ?? '–'}</span>
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${eurBarColor}`} style={{ width: `${Math.min(100, eurPct)}%` }} />

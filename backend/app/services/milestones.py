@@ -29,7 +29,7 @@ from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
 from app.models.setting import Setting
-from app.services.holiday import get_holidays_in_range
+from app.services.holiday import HolidayFetchError, get_holidays_in_range
 from app.services.planning import absence_days_in_range
 
 
@@ -125,10 +125,16 @@ def _get_setting_float(session: Session, key: str, default: float) -> float:
 
 
 def _calendar_work_days(year: int, month: int, holiday_country: str, holiday_state: str, session: Session) -> int:
-    """Count Mon-Fri working days in a calendar month, excluding public holidays."""
+    """Count Mon-Fri working days in a calendar month, excluding public holidays.
+
+    Falls back to plain weekday count if holiday data is unavailable.
+    """
     month_start, month_end = _month_bounds(year, month)
-    holidays = get_holidays_in_range(month_start, month_end, holiday_country, holiday_state, session)
-    holiday_dates = {h.holiday_date for h in holidays if h.is_workday}
+    try:
+        holidays = get_holidays_in_range(month_start, month_end, holiday_country, holiday_state, session)
+        holiday_dates = {h.holiday_date for h in holidays if h.is_workday}
+    except HolidayFetchError:
+        holiday_dates = set()
     count = 0
     d = month_start
     while d <= month_end:
@@ -165,9 +171,12 @@ def _person_available_hours(
     if eff_end < eff_start:
         return PersonMonthStats(0.0, 0, 0, 0)
 
-    # Public holidays in effective period
-    holidays = get_holidays_in_range(eff_start, eff_end, project.holiday_country, project.holiday_state, session)
-    holiday_dates = {h.holiday_date for h in holidays if h.is_workday}
+    # Public holidays in effective period (fall back to zero holidays if API unavailable)
+    try:
+        holidays = get_holidays_in_range(eff_start, eff_end, project.holiday_country, project.holiday_state, session)
+        holiday_dates = {h.holiday_date for h in holidays if h.is_workday}
+    except HolidayFetchError:
+        holiday_dates = set()
     holiday_days_count = len(holiday_dates)
 
     # Working days in effective period (Mon-Fri, not holiday)
