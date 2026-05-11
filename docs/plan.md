@@ -413,7 +413,7 @@ SageProjectMapping
 
 ### 2026-04-21
 - Analyzed Excel files via Python/openpyxl and M365 MCP
-- Confirmed: PRG-001 = parent Program; PRJ-003/PRJ-002/PRJ-001 = sub-projects
+- Confirmed project/program hierarchy and billing model
 - Confirmed: billing rate fixed per sub-project; PersonAbsence global per person
 - Decided: Bavaria holidays from API, not hardcoded; strict DSGVO code/data separation
 - Critical review of Excel: dropped redundant per-day plan columns — all plan values computed from Milestones + availability; only actual_hours stored (via TimeBooking)
