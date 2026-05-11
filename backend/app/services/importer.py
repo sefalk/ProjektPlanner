@@ -8,7 +8,7 @@ Workflow:
 
 Supported Sage export format (current / "echtes" Sage format):
     Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung
-    02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Qlik/Python;1:30h;
+    02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Analytics;1:30h;
 
 Duration field "Dauer" is parsed as h:mm (e.g. "1:30h" → 1.5 h).
 Legacy column names (Buchungsdatum, Nettozeit, Sage-Projekt, …) are still accepted
@@ -219,6 +219,7 @@ def parse_rows(content: str | bytes) -> list[dict[str, Any]]:
                 "net_hours": _parse_hours(row["net_hours"]),
                 "duration_raw": row.get("duration_raw", ""),
                 "break_duration": row.get("break_duration", ""),
+                "note": row.get("note", ""),
             })
         except ParseError as exc:
             col = "Dauer" if "hours" in str(exc).lower() else "Datum"
@@ -364,6 +365,7 @@ def import_bookings(
             net_hours=row["net_hours"],
             duration_raw=row["duration_raw"],
             break_duration=row["break_duration"],
+            note=row.get("note", ""),
         )
         try:
             with session.begin_nested():  # SAVEPOINT for per-row dedup

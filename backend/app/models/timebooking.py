@@ -66,3 +66,7 @@ class TimeBooking(ValidatedSQLModel, table=True):
     net_hours: float = Field(ge=0)
     duration_raw: str = ""   # e.g. "4:30h" — display only, not used in calculations
     break_duration: str = "" # e.g. "0:30h" — display only
+    note: str = ""           # Bemerkung field from Sage CSV
+    is_excluded: bool = False
+    exclusion_reason: str | None = None  # 'duplicate' | 'incorrect' | 'cancelled' | 'test'
+    exclusion_note: str | None = None

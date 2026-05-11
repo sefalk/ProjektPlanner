@@ -8,6 +8,7 @@ def _project(number: str = "P00001") -> dict:
         "name": "Test Project",
         "start_date": "2026-01-01",
         "end_date": "2026-12-31",
+        "total_budget_euros": 50000.0,
         "total_budget_hours": 500.0,
     }
 

@@ -203,6 +203,7 @@ def get_calendar(
             TimeBooking.project_id.in_(project_ids),
             TimeBooking.booking_date >= start,
             TimeBooking.booking_date <= end,
+            TimeBooking.is_excluded == False,  # noqa: E712
         )
         .group_by(TimeBooking.project_id, TimeBooking.person_id)
     ).all() if project_ids else []

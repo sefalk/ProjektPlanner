@@ -55,6 +55,7 @@ def _make_project(session: Session) -> Project:
         name="Test Project",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 12, 31),
+        total_budget_euros=100000.0,
         total_budget_hours=1000.0,
     )
     session.add(proj)

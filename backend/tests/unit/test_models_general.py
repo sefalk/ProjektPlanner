@@ -30,6 +30,7 @@ def test_project_valid() -> None:
         name="Test Project",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 12, 31),
+        total_budget_euros=50000.0,
         total_budget_hours=500.0,
     )
     assert p.status == ProjectStatus.active
@@ -44,6 +45,7 @@ def test_project_requires_positive_budget() -> None:
             name="X",
             start_date=date(2026, 1, 1),
             end_date=date(2026, 12, 31),
+            total_budget_euros=10000.0,
             total_budget_hours=0.0,
         )
 
@@ -55,6 +57,7 @@ def test_project_end_must_be_after_start() -> None:
             name="X",
             start_date=date(2026, 6, 1),
             end_date=date(2026, 1, 1),
+            total_budget_euros=10000.0,
             total_budget_hours=100.0,
         )
 
@@ -124,7 +127,7 @@ def test_time_booking_valid() -> None:
         booking_date=date(2026, 4, 15),
         person_id=1, project_id=1, import_batch_id=1,
         sage_project_name="PRJ-001 Analytics 2026",
-        sage_project_level="Qlik/Python",
+        sage_project_level="Analytics",
         net_hours=4.5,
     )
     assert tb.net_hours == 4.5

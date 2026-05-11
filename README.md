@@ -1,6 +1,6 @@
 # ProjektPlanner
 
-A local-first web app for project time planning and billing tracking, built to replace a manual Excel workflow at Project Planning.
+A local-first web app for project time planning and billing tracking — import Sage ERP time bookings, plan monthly milestones per person, and track budget burn in hours and euros.
 
 ## What it does
 

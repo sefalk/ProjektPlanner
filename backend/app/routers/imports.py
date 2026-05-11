@@ -1,12 +1,15 @@
 """Endpoints for Sage ERP imports and project name mappings."""
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.db import get_session
-from app.models.timebooking import ImportBatch, SageProjectMapping
+from app.models.person import Person
+from app.models.timebooking import ImportBatch, SageProjectMapping, TimeBooking
 from app.services.importer import (
     ImportResult,
     ParseError,
@@ -93,6 +96,119 @@ def get_import(batch_id: int, session: SessionDep):
     if not batch:
         raise HTTPException(404, "Import batch not found.")
     return batch
+
+
+class TimeBookingOut(BaseModel):
+    id: int
+    booking_date: date
+    person_id: int
+    person_name: str
+    sage_project_name: str
+    sage_project_level: str
+    net_hours: float
+    duration_raw: str
+    break_duration: str
+    note: str
+    is_excluded: bool
+    exclusion_reason: str | None
+    exclusion_note: str | None
+
+
+@router.get("/imports/{batch_id}/bookings", response_model=list[TimeBookingOut])
+def get_import_bookings(batch_id: int, session: SessionDep):
+    batch = session.get(ImportBatch, batch_id)
+    if not batch:
+        raise HTTPException(404, "Import batch not found.")
+    bookings = session.exec(
+        select(TimeBooking).where(TimeBooking.import_batch_id == batch_id)
+        .order_by(TimeBooking.booking_date, TimeBooking.person_id)
+    ).all()
+    person_cache: dict[int, str] = {}
+    result = []
+    for b in bookings:
+        if b.person_id not in person_cache:
+            p = session.get(Person, b.person_id)
+            person_cache[b.person_id] = p.name if p else f"Person {b.person_id}"
+        result.append(TimeBookingOut(
+            id=b.id,  # type: ignore[arg-type]
+            booking_date=b.booking_date,
+            person_id=b.person_id,
+            person_name=person_cache[b.person_id],
+            sage_project_name=b.sage_project_name,
+            sage_project_level=b.sage_project_level,
+            net_hours=b.net_hours,
+            duration_raw=b.duration_raw,
+            break_duration=b.break_duration,
+            note=b.note,
+            is_excluded=b.is_excluded,
+            exclusion_reason=b.exclusion_reason,
+            exclusion_note=b.exclusion_note,
+        ))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Booking flag / correction
+# ---------------------------------------------------------------------------
+
+
+_VALID_REASONS = {"duplicate", "incorrect", "cancelled", "test"}
+
+
+class BookingFlagUpdate(BaseModel):
+    is_excluded: bool
+    exclusion_reason: str | None = None
+    exclusion_note: str | None = None
+
+
+@router.put("/bookings/{booking_id}/flag", response_model=TimeBookingOut)
+def flag_booking(booking_id: int, body: BookingFlagUpdate, session: SessionDep):
+    """Set or clear the exclusion flag on a single time booking.
+
+    When is_excluded=true, exclusion_reason must be one of:
+    duplicate, incorrect, cancelled, test.
+    When is_excluded=false, reason and note are cleared automatically.
+    """
+    booking = session.get(TimeBooking, booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found.")
+
+    if body.is_excluded:
+        if body.exclusion_reason not in _VALID_REASONS:
+            raise HTTPException(
+                422,
+                f"exclusion_reason must be one of: {sorted(_VALID_REASONS)}",
+            )
+        booking.is_excluded = True
+        booking.exclusion_reason = body.exclusion_reason
+        booking.exclusion_note = body.exclusion_note or None
+    else:
+        booking.is_excluded = False
+        booking.exclusion_reason = None
+        booking.exclusion_note = None
+
+    session.add(booking)
+    session.commit()
+    session.refresh(booking)
+
+    person = session.get(Person, booking.person_id)
+    person_name = person.name if person else f"Person {booking.person_id}"
+
+    return TimeBookingOut(
+        id=booking.id,  # type: ignore[arg-type]
+        booking_date=booking.booking_date,
+        person_id=booking.person_id,
+        person_name=person_name,
+        sage_project_name=booking.sage_project_name,
+        sage_project_level=booking.sage_project_level,
+        net_hours=booking.net_hours,
+        duration_raw=booking.duration_raw,
+        break_duration=booking.break_duration,
+        note=booking.note,
+        is_excluded=booking.is_excluded,
+        exclusion_reason=booking.exclusion_reason,
+        exclusion_note=booking.exclusion_note,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueries } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react'
 import {
@@ -9,7 +9,7 @@ import {
 import {
   calendar, programs, projects as projectsApi,
   type CalendarAbsence, type CalendarMembership, type CalendarPerson,
-  type CalendarMilestone, type MilestoneSuggestion,
+  type CalendarMilestone, type MilestoneSuggestion, type Project,
 } from '../api'
 import PageHeader from '../components/PageHeader'
 
@@ -96,6 +96,7 @@ function PersonRow({
   person, year, month, days, numDays, todayStr, holidayMap,
   showHolidays, showAbsences, showProjects, rowClass,
   viewMode, personMilestoneHours, personBookedHours, workDaysInMonth,
+  workDaysElapsed, isCurrentMonth,
 }: {
   person: CalendarPerson
   year: number; month: number; days: number[]; numDays: number; todayStr: string
@@ -106,6 +107,8 @@ function PersonRow({
   personMilestoneHours: Record<number, number>
   personBookedHours: Record<number, number>
   workDaysInMonth: number
+  workDaysElapsed: number
+  isCurrentMonth: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const totalCap = person.default_weekly_hours > 0 ? person.default_weekly_hours : 40
@@ -123,10 +126,19 @@ function PersonRow({
     const totalBooked = Object.values(personBookedHours).reduce((s, h) => s + h, 0)
     const monthlyCapacity = workDaysInMonth > 0 ? (totalCap / 5) * workDaysInMonth : totalCap * 4.33
     badgeValue = Math.round(totalMsHours / monthlyCapacity * 100)
-    badgeTitle = `Meilenstein: ${totalMsHours.toFixed(1)} h geplant · ${totalBooked.toFixed(1)} h gebucht (von ${monthlyCapacity.toFixed(0)} h Kapazität)`
+    const sollToDate = isCurrentMonth && workDaysInMonth > 0
+      ? totalMsHours * workDaysElapsed / workDaysInMonth
+      : null
+    badgeTitle = [
+      `Meilenstein: ${totalMsHours.toFixed(1)} h geplant · ${totalBooked.toFixed(1)} h gebucht`,
+      `Monatskapazität: ${monthlyCapacity.toFixed(0)} h`,
+      sollToDate != null
+        ? `Soll bis heute: ${sollToDate.toFixed(1)} h · Ist: ${totalBooked.toFixed(1)} h`
+        : null,
+    ].filter(Boolean).join(' · ')
   } else {
     badgeValue = Math.round((activeCap / totalCap) * 100)
-    badgeTitle = `${activeCap} h/Woche von ${totalCap} h/Woche`
+    badgeTitle = `Projektanteil: ${activeCap} h/Woche (von ${totalCap} h/Woche gesamt)`
   }
   const badgeCls = badgeValue > 100 ? 'bg-red-100 text-red-700'
     : badgeValue >= 80 ? 'bg-green-100 text-green-700'
@@ -150,7 +162,6 @@ function PersonRow({
         const monthlyCapacity = workDaysInMonth > 0 ? (m.weekly_capacity_hours / 5) * workDaysInMonth : m.weekly_capacity_hours * 4.33
         frac = monthlyCapacity > 0 ? Math.min(1, msHours / monthlyCapacity) : 0
         bookedFrac = msHours > 0 ? Math.min(1, bookedHours / msHours) : 0
-        const pct = Math.round(frac * 100)
         const bookedPct = Math.round(bookedFrac * 100)
         label = msHours > 0
           ? `${m.project_number} · ${msHours.toFixed(0)} h Soll · ${bookedHours.toFixed(0)} h Ist (${bookedPct}%)`
@@ -189,27 +200,21 @@ function PersonRow({
           </span>
         </td>
 
-        {/* Single cell spanning all day columns — three absolute layers */}
+        {/* Single cell spanning all day columns — layered */}
         <td colSpan={numDays} className="p-0 h-8 border-b border-gray-100 relative overflow-hidden">
 
-          {/* Layer 0: per-day background (weekends · holidays · today indicator) */}
+          {/* Layer 0: per-day backgrounds — only today indicator, no weekend/holiday here */}
           <div className="absolute inset-0 flex pointer-events-none" aria-hidden="true">
             {days.map((day) => {
               const dateStr = isoDate(year, month, day)
-              const weekend = isWeekend(year, month, day)
-              const holiday = holidayMap[dateStr]
               const isToday = dateStr === todayStr
               return (
                 <div
                   key={day}
                   className={`flex-shrink-0 border-r border-gray-100 ${
-                    isToday    ? 'bg-blue-50 border-l-2 border-l-blue-400'
-                    : weekend  ? 'bg-gray-100'
-                    : holiday && showHolidays ? 'bg-red-50'
-                    : 'bg-white'
+                    isToday ? 'bg-blue-50 border-l-2 border-l-blue-400' : 'bg-white'
                   }`}
                   style={{ width: '2rem', height: '100%' }}
-                  title={holiday ?? undefined}
                 />
               )
             })}
@@ -227,7 +232,7 @@ function PersonRow({
                 height: `${frac * 100}%`,
               }}
               title={viewMode === 'milestones'
-                ? `${m.project_number}: ${(personMilestoneHours[m.project_id] ?? 0).toFixed(1)} h Soll · ${(personBookedHours[m.project_id] ?? 0).toFixed(1)} h Ist · ${m.weekly_capacity_hours} h/W Kapazität`
+                ? `${m.project_number}: ${(personMilestoneHours[m.project_id] ?? 0).toFixed(1)} h Soll · ${(personBookedHours[m.project_id] ?? 0).toFixed(1)} h Ist · ${m.weekly_capacity_hours} h/W Projektanteil`
                 : `${m.project_number}: ${m.weekly_capacity_hours} h/Woche · ${Math.round(frac * 100)}%`}
             >
               {/* Booked (Ist) overlay — fills bar from bottom proportional to booked/planned */}
@@ -251,7 +256,25 @@ function PersonRow({
             />
           )}
 
-          {/* Layer 2: absence overlays — per day, on top of bars */}
+          {/* Layer 1.5: semi-transparent weekend/holiday overlays — above project bars */}
+          {days.map((day) => {
+            const dateStr = isoDate(year, month, day)
+            const weekend = isWeekend(year, month, day)
+            const holiday = holidayMap[dateStr]
+            if (!weekend && !(holiday && showHolidays)) return null
+            return (
+              <div
+                key={`wh-${day}`}
+                className={`absolute top-0 bottom-0 pointer-events-none z-10 ${
+                  holiday && showHolidays ? 'bg-red-400/25' : 'bg-gray-500/15'
+                }`}
+                style={{ left: `calc(${day - 1} * 2rem)`, width: '2rem' }}
+                title={holiday ?? undefined}
+              />
+            )
+          })}
+
+          {/* Layer 2: absence overlays — per day, on top of everything */}
           {showAbsences && days.map((day) => {
             const dateStr = isoDate(year, month, day)
             const absence = person.absences.find((a) => absenceOnDay(a, dateStr))
@@ -277,7 +300,6 @@ function PersonRow({
 
       {/* Expanded sub-rows: one per membership */}
       {expanded && person.memberships.map((m) => {
-        const frac = m.weekly_capacity_hours / totalCap
         const color = projectColor(m.project_id)
         return (
           <tr key={m.project_id} className="bg-gray-50/70">
@@ -301,6 +323,7 @@ function PersonRow({
                 const msPct = monthlyCapacity > 0 ? Math.round(msHours / monthlyCapacity * 100) : 0
                 const bookedPct = msHours > 0 ? Math.round(bookedHours / msHours * 100) : 0
                 const noMilestone = msHours === 0
+                const sollToDate = isCurrentMonth && workDaysInMonth > 0 ? msHours * workDaysElapsed / workDaysInMonth : null
                 return <>
                   {noMilestone
                     ? <span className="italic text-gray-400">kein Meilenstein für diesen Monat</span>
@@ -311,14 +334,24 @@ function PersonRow({
                         Ist: {bookedHours.toFixed(1)} h ({bookedPct}%)
                       </span>
                       <span className="mx-1.5 text-gray-300">·</span>
-                      <span title="Meilensteinanteil an der gesamten Monatskapazität">{msPct}% von {monthlyCapacity.toFixed(0)} h Kapazität</span>
+                      <span title="Meilensteinanteil an der gesamten Monatskapazität">{msPct}% von {monthlyCapacity.toFixed(0)} h Monatskapazität</span>
+                      {sollToDate != null && <>
+                        <span className="mx-1.5 text-gray-300">·</span>
+                        <span
+                          className={`font-medium ${bookedHours >= sollToDate ? 'text-green-700' : 'text-amber-600'}`}
+                          title="Soll/Ist-Vergleich bis zum heutigen Tag"
+                        >
+                          Soll heute: {sollToDate.toFixed(1)} h
+                          {bookedHours < sollToDate && ` (−${(sollToDate - bookedHours).toFixed(1)} h)`}
+                        </span>
+                      </>}
                     </>
                   }
                 </>
               })() : <>
                 <span className="font-medium text-gray-700">{m.weekly_capacity_hours} h/Woche</span>
                 <span className="mx-1.5 text-gray-300">·</span>
-                <span>{Math.round((m.weekly_capacity_hours / totalCap) * 100)}% Kapazität</span>
+                <span>{Math.round((m.weekly_capacity_hours / totalCap) * 100)}% der Wochenkapazität</span>
                 <span className="mx-1.5 text-gray-300">·</span>
                 <span>{m.from_date} – {m.to_date}</span>
               </>}
@@ -370,53 +403,154 @@ function MilestoneBadge({ ms }: { ms: CalendarMilestone }) {
 
 // ─── Forecast chart ──────────────────────────────────────────────────────────
 
-function ForecastChart({ projectId }: { projectId: number }) {
-  const { data: proj } = useQuery({ queryKey: ['project', projectId], queryFn: () => projectsApi.get(projectId) })
-  const { data: milestones = [] } = useQuery({ queryKey: ['milestones', projectId], queryFn: () => projectsApi.milestones(projectId) })
-  const { data: suggestionsList = [] } = useQuery({ queryKey: ['suggestions', projectId], queryFn: () => projectsApi.suggestions(projectId) })
-
-  if (!proj || milestones.length === 0) return null
-
+function ForecastChart({
+  projectIds,
+  allProjects,
+}: {
+  projectIds: number[]
+  allProjects: Project[]
+}) {
   const today = new Date()
-  const suggMap: Record<number, number> = {}
-  suggestionsList.forEach((s: MilestoneSuggestion) => { suggMap[s.milestone_id] = s.total_current_hours })
+
+  const milestoneQueries = useQueries({
+    queries: projectIds.map((id) => ({
+      queryKey: ['milestones', id],
+      queryFn: () => projectsApi.milestones(id),
+      staleTime: 30_000,
+    })),
+  })
+
+  const suggestionQueries = useQueries({
+    queries: projectIds.map((id) => ({
+      queryKey: ['suggestions', id],
+      queryFn: () => projectsApi.suggestions(id),
+      staleTime: 30_000,
+    })),
+  })
+
+  const isLoading = milestoneQueries.some((q) => q.isPending)
+
+  if (isLoading) {
+    return (
+      <div className="mt-6 bg-white rounded-lg border border-gray-200 p-4">
+        <p className="text-sm text-gray-400">Lade Budgetdaten…</p>
+      </div>
+    )
+  }
+
+  // Aggregate milestones across all projects
+  type AggMs = {
+    year: number; month: number
+    initial_hours: number; current_hours: number; suggested: number
+  }
+  const allMs: AggMs[] = []
+
+  projectIds.forEach((_, idx) => {
+    const ms = milestoneQueries[idx].data ?? []
+    const suggs = suggestionQueries[idx].data ?? []
+    const suggMap: Record<number, number> = {}
+    suggs.forEach((s: MilestoneSuggestion) => { suggMap[s.milestone_id] = s.total_current_hours })
+
+    ms.forEach((m) => {
+      const isPastOrCurrent =
+        m.year < today.getFullYear() ||
+        (m.year === today.getFullYear() && m.month <= today.getMonth() + 1)
+      allMs.push({
+        year: m.year,
+        month: m.month,
+        initial_hours: m.initial_hours,
+        current_hours: m.current_hours,
+        suggested: isPastOrCurrent ? m.current_hours : (suggMap[m.id] ?? m.current_hours),
+      })
+    })
+  })
+
+  if (allMs.length === 0) {
+    return (
+      <div className="mt-6 bg-white rounded-lg border border-gray-200 p-4">
+        <p className="text-sm text-gray-400 text-center py-4">Keine Meilenstein-Daten — Meilensteine zuerst initialisieren.</p>
+      </div>
+    )
+  }
+
+  // Total budget in hours: prefer explicit hours budget; fall back to sum of milestone initial_hours
+  const relevantProjects = allProjects.filter((p) => projectIds.includes(p.id))
+  const explicitBudgetHours = relevantProjects.reduce((sum, p) => sum + (p.total_budget_hours ?? 0), 0)
+  const planTotalHours = allMs.reduce((sum, ms) => sum + ms.initial_hours, 0)
+  const effectiveBudget = explicitBudgetHours > 0 ? explicitBudgetHours : planTotalHours
+  const usingFallback = explicitBudgetHours === 0 && planTotalHours > 0
+
+  if (effectiveBudget === 0) {
+    return (
+      <div className="mt-6 bg-white rounded-lg border border-gray-200 p-4">
+        <p className="text-sm text-gray-400 text-center py-4">
+          Kein Budget und keine Meilensteine — Meilensteine initialisieren oder Stundenbudget hinterlegen.
+        </p>
+      </div>
+    )
+  }
+
+  // Group milestones by calendar month, sorted
+  const byMonth: Record<string, AggMs[]> = {}
+  allMs.forEach((ms) => {
+    const key = `${ms.year}-${String(ms.month).padStart(2, '0')}`
+    if (!byMonth[key]) byMonth[key] = []
+    byMonth[key].push(ms)
+  })
+  const sortedKeys = Object.keys(byMonth).sort()
 
   let cumPlan = 0, cumActual = 0, cumPrognose = 0
-  const chartData = milestones.map((ms) => {
-    const isPastOrCurrent = ms.year < today.getFullYear() || (ms.year === today.getFullYear() && ms.month <= today.getMonth() + 1)
-    cumPlan += ms.initial_hours
-    cumActual += ms.current_hours
-    if (isPastOrCurrent) {
-      cumPrognose += ms.current_hours
-    } else {
-      cumPrognose += suggMap[ms.id] ?? ms.current_hours
+  const chartData = sortedKeys.map((key) => {
+    const [y, m] = key.split('-').map(Number)
+    for (const ms of byMonth[key]) {
+      cumPlan += ms.initial_hours
+      cumActual += ms.current_hours
+      cumPrognose += ms.suggested
     }
     return {
-      label: `${MONTH_SHORT[ms.month - 1]} ${ms.year}`,
-      plan: Math.round(cumPlan * 10) / 10,
-      aktuell: Math.round(cumActual * 10) / 10,
-      prognose: Math.round(cumPrognose * 10) / 10,
+      label: `${MONTH_SHORT[m - 1]} ${y}`,
+      verblPlan: Math.max(0, Math.round((effectiveBudget - cumPlan) * 10) / 10),
+      verblAktuell: Math.max(0, Math.round((effectiveBudget - cumActual) * 10) / 10),
+      verblPrognose: Math.max(0, Math.round((effectiveBudget - cumPrognose) * 10) / 10),
     }
   })
 
-  const budget = proj.total_budget_hours
+  const isSingle = projectIds.length === 1
+  const singleProj = isSingle ? relevantProjects[0] : null
+  const title = singleProj
+    ? `Budgetverlauf — ${singleProj.project_number}: ${singleProj.name}`
+    : `Budgetverlauf — ${projectIds.length} Projekte`
 
   return (
     <div className="mt-6 bg-white rounded-lg border border-gray-200 p-4">
-      <h3 className="text-sm font-medium text-gray-700 mb-4">
-        Budgetverlauf — {proj.project_number}: {proj.name}
-      </h3>
+      <div className="flex items-baseline gap-3 mb-1">
+        <h3 className="text-sm font-medium text-gray-700">{title}</h3>
+        {usingFallback && (
+          <span className="text-xs text-gray-400">
+            Kein Stundenbudget gesetzt — Basis: {effectiveBudget.toFixed(0)} h aus Meilenstein-Initialisierung
+          </span>
+        )}
+      </div>
       <ResponsiveContainer width="100%" height={240}>
         <LineChart data={chartData} margin={{ top: 8, right: 24, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
           <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-          <YAxis tick={{ fontSize: 11 }} unit=" h" />
-          <ChartTooltip formatter={(v: number) => [`${v} h`]} />
+          <YAxis
+            tick={{ fontSize: 11 }}
+            unit=" h"
+            domain={[0, Math.ceil(effectiveBudget / 50) * 50]}
+          />
+          <ChartTooltip formatter={(v) => [`${Number(v).toFixed(1)} h`]} labelFormatter={(l) => `${l} · verbleibend`} />
           <ChartLegend wrapperStyle={{ fontSize: 12 }} />
-          <ReferenceLine y={budget} stroke="#ef4444" strokeDasharray="6 3" label={{ value: `Budget ${budget} h`, position: 'right', fontSize: 11, fill: '#ef4444' }} />
-          <Line type="monotone" dataKey="plan" name="PLAN (Init.)" stroke="#94a3b8" strokeWidth={1.5} dot={false} />
-          <Line type="monotone" dataKey="aktuell" name="Aktuell" stroke="#3b82f6" strokeWidth={2} dot={false} />
-          <Line type="monotone" dataKey="prognose" name="Prognose" stroke="#f97316" strokeWidth={2} strokeDasharray="4 2" dot={false} />
+          <ReferenceLine
+            y={0}
+            stroke="#ef4444"
+            strokeDasharray="6 3"
+            label={{ value: 'Budget erschöpft', position: 'insideBottomRight', fontSize: 10, fill: '#ef4444' }}
+          />
+          <Line type="monotone" dataKey="verblPlan" name="PLAN verbleibend" stroke="#94a3b8" strokeWidth={1.5} dot={false} />
+          <Line type="monotone" dataKey="verblAktuell" name="Aktuell verbleibend" stroke="#3b82f6" strokeWidth={2} dot={false} />
+          <Line type="monotone" dataKey="verblPrognose" name="Prognose verbleibend" stroke="#f97316" strokeWidth={2} strokeDasharray="4 2" dot={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -439,6 +573,7 @@ export default function CalendarPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
 
   const todayStr = isoDate(today.getFullYear(), today.getMonth() + 1, today.getDate())
+  const isCurrentMonth = year === today.getFullYear() && month === today.getMonth() + 1
 
   const { data, isLoading } = useQuery({
     queryKey: ['calendar', year, month],
@@ -472,7 +607,7 @@ export default function CalendarPage() {
 
   const milestones: CalendarMilestone[] = data?.milestones ?? []
 
-  // Compute actual work days in this month (Mon–Fri, excl. public holidays)
+  // Compute work days in month (Mon–Fri, excl. public holidays)
   const holidayWorkdayDates = new Set(data?.holidays.filter(h => h.is_workday).map(h =>
     typeof h.holiday_date === 'string' ? h.holiday_date : (h.holiday_date as Date).toISOString().slice(0, 10)
   ))
@@ -480,6 +615,16 @@ export default function CalendarPage() {
   for (let d = 1; d <= numDays; d++) {
     const dow = weekdayIndex(year, month, d)
     if (dow >= 1 && dow <= 5 && !holidayWorkdayDates.has(isoDate(year, month, d))) workDaysInMonth++
+  }
+
+  // Work days elapsed up to today (only meaningful for current month)
+  let workDaysElapsed = 0
+  if (isCurrentMonth) {
+    const todayDay = today.getDate()
+    for (let d = 1; d <= todayDay; d++) {
+      const dow = weekdayIndex(year, month, d)
+      if (dow >= 1 && dow <= 5 && !holidayWorkdayDates.has(isoDate(year, month, d))) workDaysElapsed++
+    }
   }
 
   // Build per-person milestone maps: personId → projectId → hours
@@ -505,6 +650,12 @@ export default function CalendarPage() {
     if (!activeFilterIds) return true
     return p.memberships.some((m) => activeFilterIds.includes(m.project_id))
   }) ?? []
+
+  // Determine project IDs for the forecast chart
+  const forecastProjectIds: number[] =
+    selectedProjectId != null ? [selectedProjectId]
+    : programProjectIds != null ? programProjectIds
+    : projectList.map((p) => p.id)
 
   return (
     <div className="flex flex-col h-full">
@@ -661,6 +812,8 @@ export default function CalendarPage() {
                     personMilestoneHours={personMilestoneHoursMap[person.id] ?? {}}
                     personBookedHours={personBookedHoursMap[person.id] ?? {}}
                     workDaysInMonth={workDaysInMonth}
+                    workDaysElapsed={workDaysElapsed}
+                    isCurrentMonth={isCurrentMonth}
                   />
                 ))}
               </tbody>
@@ -673,13 +826,14 @@ export default function CalendarPage() {
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-blue-200" /> Urlaub</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-yellow-200" /> Krank</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-emerald-200" /> Fortbildung</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-red-100" /> Feiertag</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-red-300/50 border border-red-200" /> Feiertag</span>
           <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-slate-300 border border-slate-200" /> Projekt (100%)</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-gray-100 border border-gray-200" /> Wochenende</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-gray-500/15 border border-gray-200" /> Wochenende</span>
         </div>
 
-        {selectedProjectId != null && (
-          <ForecastChart projectId={selectedProjectId} />
+        {/* Forecast chart — always visible */}
+        {forecastProjectIds.length > 0 && (
+          <ForecastChart projectIds={forecastProjectIds} allProjects={projectList} />
         )}
       </div>
     </div>

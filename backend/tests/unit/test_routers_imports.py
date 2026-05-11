@@ -8,6 +8,7 @@ def _project(number: str = "P00001") -> dict:
         "name": f"Project {number}",
         "start_date": "2026-01-01",
         "end_date": "2026-12-31",
+        "total_budget_euros": 50000.0,
         "total_budget_hours": 500.0,
     }
 
@@ -205,3 +206,84 @@ def test_delete_mapping_removes_from_list(client):
     ).json()
     client.delete(f"/sage-project-mappings/{m['id']}")
     assert client.get("/sage-project-mappings").json() == []
+
+
+# ---------------------------------------------------------------------------
+# GET /imports/{batch_id}/bookings
+# ---------------------------------------------------------------------------
+
+
+def test_get_import_bookings_returns_list(client):
+    _setup(client)
+    result = _upload(client, _csv_content()).json()
+    batch_id = result["batch_ids"][0]
+    r = client.get(f"/imports/{batch_id}/bookings")
+    assert r.status_code == 200
+    bookings = r.json()
+    assert len(bookings) == 1
+    b = bookings[0]
+    assert b["net_hours"] == 4.5
+    assert b["is_excluded"] is False
+    assert b["exclusion_reason"] is None
+
+
+def test_get_import_bookings_not_found(client):
+    assert client.get("/imports/9999/bookings").status_code == 404
+
+
+def test_get_import_bookings_includes_note(client):
+    _setup(client)
+    csv = b"Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n15.01.2026;Max Mustermann;P00001 Analytics;Development;4:30h;Testbuchung"
+    result = _upload(client, csv).json()
+    batch_id = result["batch_ids"][0]
+    bookings = client.get(f"/imports/{batch_id}/bookings").json()
+    assert bookings[0]["note"] == "Testbuchung"
+
+
+# ---------------------------------------------------------------------------
+# PUT /bookings/{id}/flag
+# ---------------------------------------------------------------------------
+
+
+def _import_and_get_booking_id(client) -> int:
+    _setup(client)
+    result = _upload(client, _csv_content()).json()
+    batch_id = result["batch_ids"][0]
+    return client.get(f"/imports/{batch_id}/bookings").json()[0]["id"]
+
+
+def test_flag_booking_excludes(client):
+    booking_id = _import_and_get_booking_id(client)
+    r = client.put(
+        f"/bookings/{booking_id}/flag",
+        json={"is_excluded": True, "exclusion_reason": "duplicate", "exclusion_note": "seen before"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["is_excluded"] is True
+    assert data["exclusion_reason"] == "duplicate"
+    assert data["exclusion_note"] == "seen before"
+
+
+def test_flag_booking_clears(client):
+    booking_id = _import_and_get_booking_id(client)
+    client.put(f"/bookings/{booking_id}/flag", json={"is_excluded": True, "exclusion_reason": "test"})
+    r = client.put(f"/bookings/{booking_id}/flag", json={"is_excluded": False})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["is_excluded"] is False
+    assert data["exclusion_reason"] is None
+
+
+def test_flag_booking_invalid_reason(client):
+    booking_id = _import_and_get_booking_id(client)
+    r = client.put(
+        f"/bookings/{booking_id}/flag",
+        json={"is_excluded": True, "exclusion_reason": "bogus"},
+    )
+    assert r.status_code == 422
+
+
+def test_flag_booking_not_found(client):
+    r = client.put("/bookings/9999/flag", json={"is_excluded": True, "exclusion_reason": "test"})
+    assert r.status_code == 404

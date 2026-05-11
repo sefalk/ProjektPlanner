@@ -12,8 +12,9 @@ from app.models.billing import BillingPosition
 from app.models.enums import MilestoneStatus
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone
+from app.models.person import Person
 from app.models.project import Project
-from app.models.timebooking import TimeBooking
+from app.models.timebooking import ImportBatch, TimeBooking
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -78,6 +79,7 @@ def get_project_stats(session: SessionDep):
 
     booked_rows = session.exec(
         select(TimeBooking.project_id, func.sum(TimeBooking.net_hours))
+        .where(TimeBooking.is_excluded == False)  # noqa: E712
         .group_by(TimeBooking.project_id)
     ).all()
     booked_map: dict[int, float] = {pid: float(hrs) for pid, hrs in booked_rows}
@@ -301,3 +303,92 @@ def delete_membership(project_id: int, membership_id: int, session: SessionDep):
         raise HTTPException(404, "Membership not found.")
     session.delete(m)
     session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Bookings
+# ---------------------------------------------------------------------------
+
+
+class BookingOut(BaseModel):
+    id: int
+    booking_date: date
+    person_id: int
+    person_name: str
+    import_batch_id: int
+    sage_project_name: str
+    sage_project_level: str
+    net_hours: float
+    duration_raw: str
+    break_duration: str
+    note: str
+    is_excluded: bool
+    exclusion_reason: str | None
+    exclusion_note: str | None
+
+
+@router.get("/{project_id}/bookings", response_model=list[BookingOut])
+def list_project_bookings(
+    project_id: int,
+    session: SessionDep,
+    person_id: int | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    week: int | None = None,
+):
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+
+    q = select(TimeBooking).where(TimeBooking.project_id == project_id)
+
+    if person_id is not None:
+        q = q.where(TimeBooking.person_id == person_id)
+
+    if year is not None and month is not None:
+        from calendar import monthrange
+        last_day = monthrange(year, month)[1]
+        q = q.where(
+            TimeBooking.booking_date >= date(year, month, 1),
+            TimeBooking.booking_date <= date(year, month, last_day),
+        )
+    elif year is not None and week is not None:
+        # ISO week: compute monday and sunday
+        from datetime import datetime
+        monday = datetime.strptime(f"{year}-W{week:02d}-1", "%G-W%V-%u").date()
+        sunday = datetime.strptime(f"{year}-W{week:02d}-7", "%G-W%V-%u").date()
+        q = q.where(
+            TimeBooking.booking_date >= monday,
+            TimeBooking.booking_date <= sunday,
+        )
+    elif year is not None:
+        q = q.where(
+            TimeBooking.booking_date >= date(year, 1, 1),
+            TimeBooking.booking_date <= date(year, 12, 31),
+        )
+
+    q = q.order_by(TimeBooking.booking_date.desc(), TimeBooking.person_id)
+    bookings = session.exec(q).all()
+
+    person_cache: dict[int, str] = {}
+    result = []
+    for b in bookings:
+        if b.person_id not in person_cache:
+            p = session.get(Person, b.person_id)
+            person_cache[b.person_id] = p.name if p else f"Person {b.person_id}"
+        result.append(BookingOut(
+            id=b.id,  # type: ignore[arg-type]
+            booking_date=b.booking_date,
+            person_id=b.person_id,
+            person_name=person_cache[b.person_id],
+            import_batch_id=b.import_batch_id,
+            sage_project_name=b.sage_project_name,
+            sage_project_level=b.sage_project_level,
+            net_hours=b.net_hours,
+            duration_raw=b.duration_raw,
+            break_duration=b.break_duration,
+            note=b.note,
+            is_excluded=b.is_excluded,
+            exclusion_reason=b.exclusion_reason,
+            exclusion_note=b.exclusion_note,
+        ))
+    return result

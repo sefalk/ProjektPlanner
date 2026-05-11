@@ -34,6 +34,7 @@ def _project(session, number="P00001"):
         name=f"Project {number}",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 3, 31),
+        total_budget_euros=50000.0,
         total_budget_hours=500.0,
     )
     session.add(p)
@@ -251,12 +252,11 @@ def test_reopen_deletes_entries(session):
     assert entries == []
 
 
-def test_reopen_invoiced_raises(session):
+def test_reopen_invoiced_succeeds(session):
     proj, person, bp = _setup(session)
     inv = close_month(proj.id, 2026, 1, bp.id, session)
     update_invoice_status(inv.id, InvoiceStatus.invoiced, session)
-    with pytest.raises(InvalidStatusTransitionError):
-        reopen_month(inv.id, session)
+    reopen_month(inv.id, session)  # must not raise
 
 
 def test_reopen_not_found(session):

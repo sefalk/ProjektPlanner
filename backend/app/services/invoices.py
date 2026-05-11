@@ -101,12 +101,13 @@ def close_month(
 
     month_start, month_end = _month_bounds(year, month)
 
-    # Aggregate actual hours per person from TimeBookings
+    # Aggregate actual hours per person from TimeBookings (excluded bookings are ignored)
     bookings = session.exec(
         select(TimeBooking).where(
             TimeBooking.project_id == project_id,
             TimeBooking.booking_date >= month_start,
             TimeBooking.booking_date <= month_end,
+            TimeBooking.is_excluded == False,  # noqa: E712
         )
     ).all()
     hours_by_person: dict[int, float] = {}
@@ -183,11 +184,6 @@ def reopen_month(invoice_id: int, session: Session) -> None:
     invoice = session.get(MonthlyInvoice, invoice_id)
     if not invoice:
         raise InvoiceNotFoundError(f"Invoice {invoice_id} not found.")
-    if invoice.status != InvoiceStatus.planned:
-        raise InvalidStatusTransitionError(
-            f"Cannot reopen invoice with status '{invoice.status}'. "
-            "Only 'planned' invoices can be reopened."
-        )
 
     # Re-open the milestone
     milestone = session.exec(

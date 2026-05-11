@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Upload, CheckCircle, AlertCircle, FileText, RefreshCw } from 'lucide-react'
-import { projects, mappings, type ImportBatch } from '../api'
+import React, { useRef, useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Upload, CheckCircle, AlertCircle, FileText, RefreshCw, ChevronDown, ChevronRight, Flag, RotateCcw } from 'lucide-react'
+import { projects, mappings, persons, imports as importsApi, bookings as bookingsApi, type ImportBatch, type TimeBooking, type ExclusionReason } from '../api'
 import PageHeader from '../components/PageHeader'
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api'
@@ -60,14 +60,156 @@ async function postImport(source: File | string): Promise<{ ok: true; result: Im
 
 // ─── Import history ───────────────────────────────────────────────────────────
 
+const EXCLUSION_LABELS: Record<ExclusionReason, string> = {
+  duplicate: 'Duplikat',
+  incorrect: 'Fehlerhaft',
+  cancelled: 'Storniert',
+  test: 'Test',
+}
+
+function FlagCell({ booking, queryKey }: { booking: TimeBooking; queryKey: unknown[] }) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [reason, setReason] = useState<ExclusionReason>('duplicate')
+  const [note, setNote] = useState('')
+
+  const { mutate: flag, isPending } = useMutation({
+    mutationFn: (data: Parameters<typeof bookingsApi.flag>[1]) => bookingsApi.flag(booking.id, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey }); setOpen(false) },
+  })
+
+  if (booking.is_excluded) {
+    return (
+      <div className="flex items-center gap-1">
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-xs font-medium">
+          <Flag size={10} />
+          {EXCLUSION_LABELS[booking.exclusion_reason as ExclusionReason] ?? booking.exclusion_reason}
+        </span>
+        <button
+          title="Kennzeichnung aufheben"
+          onClick={() => flag({ is_excluded: false })}
+          disabled={isPending}
+          className="text-gray-400 hover:text-gray-700 p-0.5 rounded"
+        >
+          <RotateCcw size={11} />
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        title="Als fehlerhaft kennzeichnen"
+        className="text-gray-300 hover:text-red-500 p-0.5 rounded transition-colors"
+      >
+        <Flag size={12} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-5 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-52 text-xs">
+          <p className="font-medium text-gray-700 mb-2">Buchung ausschließen</p>
+          <select
+            className="w-full border border-gray-300 rounded px-2 py-1 mb-2"
+            value={reason}
+            onChange={e => setReason(e.target.value as ExclusionReason)}
+          >
+            {(Object.entries(EXCLUSION_LABELS) as [ExclusionReason, string][]).map(([k, v]) => (
+              <option key={k} value={k}>{v}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="Kommentar (optional)"
+            className="w-full border border-gray-300 rounded px-2 py-1 mb-2"
+            value={note}
+            onChange={e => setNote(e.target.value)}
+          />
+          <div className="flex gap-1.5">
+            <button onClick={() => setOpen(false)} className="flex-1 px-2 py-1 border border-gray-200 rounded hover:bg-gray-50">
+              Abbruch
+            </button>
+            <button
+              disabled={isPending}
+              onClick={() => flag({ is_excluded: true, exclusion_reason: reason, exclusion_note: note || null })}
+              className="flex-1 px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+            >
+              Ausschließen
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BatchDetail({ batchId }: { batchId: number }) {
+  const queryKey = ['import-bookings', batchId]
+  const { data: batchBookings = [], isLoading } = useQuery<TimeBooking[]>({
+    queryKey,
+    queryFn: () => importsApi.bookings(batchId),
+  })
+  if (isLoading) return <tr><td colSpan={7} className="px-8 py-3 text-xs text-gray-400">Lade…</td></tr>
+  if (!batchBookings.length) return <tr><td colSpan={7} className="px-8 py-3 text-xs text-gray-400 italic">Keine Buchungen in diesem Import.</td></tr>
+  const activeHours = batchBookings.filter(b => !b.is_excluded).reduce((s, b) => s + b.net_hours, 0)
+  return (
+    <>
+      <tr className="bg-slate-50">
+        <td colSpan={5} className="px-2 pt-2 pb-0">
+          <table className="w-full text-xs border border-slate-200 rounded">
+            <thead className="bg-slate-100 text-gray-500">
+              <tr>
+                {['Datum', 'Mitarbeiter', 'Projektebene', 'Dauer (roh)', 'Std.', 'Bemerkung', ''].map(h => (
+                  <th key={h} className="px-3 py-1.5 text-left font-medium">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {batchBookings.map(b => (
+                <tr key={b.id} className={b.is_excluded ? 'bg-red-50 text-red-400' : 'hover:bg-slate-50'}>
+                  <td className={`px-3 py-1 font-mono ${b.is_excluded ? 'line-through' : ''}`}>{b.booking_date}</td>
+                  <td className={`px-3 py-1 ${b.is_excluded ? 'line-through' : ''}`}>{b.person_name}</td>
+                  <td className={`px-3 py-1 ${b.is_excluded ? 'line-through' : 'text-gray-600'}`}>{b.sage_project_level}</td>
+                  <td className={`px-3 py-1 font-mono ${b.is_excluded ? 'line-through' : 'text-gray-500'}`}>{b.duration_raw || '–'}</td>
+                  <td className={`px-3 py-1 font-mono text-right ${b.is_excluded ? 'line-through' : ''}`}>{b.net_hours.toFixed(2)}</td>
+                  <td className="px-3 py-1 text-gray-400 max-w-[8rem] truncate">{b.note || ''}</td>
+                  <td className="px-3 py-1 text-right"><FlagCell booking={b} queryKey={queryKey} /></td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-slate-50 text-gray-600 font-medium">
+              <tr>
+                <td colSpan={4} className="px-3 py-1.5 text-xs">Gesamt (aktiv)</td>
+                <td className="px-3 py-1.5 text-xs font-mono text-right">{activeHours.toFixed(2)}</td>
+                <td colSpan={2} />
+              </tr>
+            </tfoot>
+          </table>
+        </td>
+      </tr>
+      <tr className="bg-slate-50"><td colSpan={5} className="pb-2" /></tr>
+    </>
+  )
+}
+
 function ImportHistory({ batches }: { batches: ImportBatch[] }) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
   if (batches.length === 0) return <p className="text-sm text-gray-500">Noch keine Importe.</p>
+
+  function toggle(id: number) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
+            <th className="w-8" />
             {['Importiert am', 'Datei', 'Letztes Buchungsdatum'].map((h) => (
               <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
             ))}
@@ -75,15 +217,21 @@ function ImportHistory({ batches }: { batches: ImportBatch[] }) {
         </thead>
         <tbody className="divide-y divide-gray-100">
           {batches.map((b) => (
-            <tr key={b.id}>
-              <td className="px-4 py-3 text-sm text-gray-700">
-                {new Date(b.imported_at).toLocaleString('de-DE')}
-              </td>
-              <td className="px-4 py-3 text-sm text-gray-600">
-                {b.source_filename ?? <span className="italic text-gray-400">eingefügt</span>}
-              </td>
-              <td className="px-4 py-3 text-sm text-gray-600">{b.last_booking_date}</td>
-            </tr>
+            <React.Fragment key={b.id}>
+              <tr className="hover:bg-gray-50 cursor-pointer" onClick={() => toggle(b.id)}>
+                <td className="px-2 text-gray-400">
+                  {expanded.has(b.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-700">
+                  {new Date(b.imported_at).toLocaleString('de-DE')}
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {b.source_filename ?? <span className="italic text-gray-400">eingefügt</span>}
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-600">{b.last_booking_date}</td>
+              </tr>
+              {expanded.has(b.id) && <BatchDetail batchId={b.id} />}
+            </React.Fragment>
           ))}
         </tbody>
       </table>
@@ -178,6 +326,131 @@ function MappingResolver({
         >
           {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}
           Mappings speichern &amp; erneut importieren
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Person resolver ─────────────────────────────────────────────────────────
+
+function PersonResolver({
+  unmatchedNames,
+  onResolved,
+  onCancel,
+}: {
+  unmatchedNames: string[]
+  onResolved: () => void
+  onCancel: () => void
+}) {
+  const { data: personList = [] } = useQuery({ queryKey: ['persons'], queryFn: persons.list })
+  const qc = useQueryClient()
+
+  // For each unmatched name: 'new' = create new person, or a person_id number = map to existing
+  const [actions, setActions] = useState<Record<string, 'new' | number>>(() =>
+    Object.fromEntries(unmatchedNames.map((n) => [n, 'new']))
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      for (const [sageName, action] of Object.entries(actions)) {
+        if (action === 'new') {
+          // Create a new person with the Sage name as both display name and sage_employee_name
+          await persons.create({
+            name: sageName,
+            sage_employee_name: sageName,
+            default_weekly_hours: 40,
+            work_week_pattern: null,
+            default_billing_rate: null,
+          })
+        } else {
+          // Update the existing person's sage_employee_name to match the Sage export
+          const person = personList.find(p => p.id === action)
+          if (person) {
+            await persons.update(action, { ...person, sage_employee_name: sageName })
+          }
+        }
+      }
+      qc.invalidateQueries({ queryKey: ['persons'] })
+      onResolved()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+      <div className="flex items-start gap-2 mb-3">
+        <AlertCircle size={16} className="text-orange-600 mt-0.5 flex-shrink-0" />
+        <div>
+          <p className="text-sm font-medium text-orange-800">Mitarbeiter nicht gefunden</p>
+          <p className="text-xs text-orange-700 mt-0.5">
+            Für jeden unbekannten Namen: neue Person anlegen oder vorhandene Person zuordnen.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-3 mb-4">
+        {unmatchedNames.map((name) => (
+          <div key={name} className="bg-white border border-orange-100 rounded p-3">
+            <p className="text-sm font-mono font-medium text-gray-700 mb-2">„{name}"</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setActions(a => ({ ...a, [name]: 'new' }))}
+                className={`flex-1 px-3 py-1.5 text-xs rounded border transition-colors ${
+                  actions[name] === 'new'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400'
+                }`}
+              >
+                Neue Person anlegen
+              </button>
+              <select
+                className={`flex-1 border rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  actions[name] !== 'new' ? 'border-blue-400 bg-blue-50' : 'border-gray-300'
+                }`}
+                value={actions[name] === 'new' ? 0 : (actions[name] as number)}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value)
+                  setActions(a => ({ ...a, [name]: v > 0 ? v : 'new' }))
+                }}
+              >
+                <option value={0}>— bestehende Person zuordnen —</option>
+                {personList.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            {actions[name] !== 'new' && (
+              <p className="text-xs text-blue-700 mt-1.5">
+                Sage-Name „{name}" wird der Person zugeordnet (sage_employee_name wird aktualisiert).
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
+
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">
+          Abbrechen
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={handleSave}
+          className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+          Speichern &amp; erneut importieren
         </button>
       </div>
     </div>
@@ -290,7 +563,7 @@ export default function ImportPage() {
               <textarea
                 rows={8}
                 className="w-full border border-gray-300 rounded px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
-                placeholder={`Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n02.03.2026;Mustermann, Max;PRJ-001 Analytics 2026;Qlik/Python;1:30h;`}
+                placeholder={`Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n02.03.2026;Mustermann, Max;PRJ-001 Analytics 2026;Analytics;1:30h;`}
                 value={pasteText}
                 onChange={(e) => { setPasteText(e.target.value); setState({ kind: 'idle' }) }}
               />
@@ -341,22 +614,11 @@ export default function ImportPage() {
 
             {/* Status: unmatched persons */}
             {state.kind === 'unmatched' && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <div className="flex items-start gap-2">
-                  <AlertCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-red-800">Personen konnten nicht zugeordnet werden</p>
-                    <p className="text-xs text-red-700 mt-1">
-                      Bitte in der Personenverwaltung den Sage-Mitarbeiternamen angleichen:
-                    </p>
-                    <ul className="mt-2 space-y-0.5">
-                      {state.names.map((n) => (
-                        <li key={n} className="text-xs font-mono text-red-700">• {n}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </div>
+              <PersonResolver
+                unmatchedNames={state.names}
+                onResolved={() => void runImport(state.file)}
+                onCancel={() => setState({ kind: 'idle' })}
+              />
             )}
 
             {/* Status: generic error */}

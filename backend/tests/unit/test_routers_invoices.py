@@ -7,6 +7,7 @@ def _project(number: str = "P00001") -> dict:
         "name": f"Project {number}",
         "start_date": "2026-01-01",
         "end_date": "2026-03-31",
+        "total_budget_euros": 50000.0,
         "total_budget_hours": 500.0,
     }
 
@@ -147,12 +148,12 @@ def test_reopen_removes_invoice(client):
     assert client.get(f"/invoices/{inv['id']}").status_code == 404
 
 
-def test_reopen_invoiced_returns_409(client):
+def test_reopen_invoiced_returns_204(client):
     proj_id, bp_id = _setup(client)
     inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
     client.put(f"/invoices/{inv['id']}/status", json={"status": "invoiced"})
     r = client.delete(f"/invoices/{inv['id']}")
-    assert r.status_code == 409
+    assert r.status_code == 204
 
 
 def test_reopen_not_found(client):

@@ -9,7 +9,7 @@ The current import parser handles a legacy CSV format. The review specifies a ne
 
 ```
 Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung
-02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Qlik/Python;1:30h;
+02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Analytics;1:30h;
 ```
 
 Key differences:
@@ -52,6 +52,6 @@ Key differences:
 
 ## Verification
 
-1. Import the review sample file → 1.5 h booked for Mustermann, Max
+1. Import the sample file → 1.5 h booked for Mustermann, Max
 2. Same file with tab-separated → same result
 3. File with wrong column names → error response names the missing column and row

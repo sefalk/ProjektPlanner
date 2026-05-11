@@ -1,6 +1,6 @@
 """
-Seed the database with test data based on the PRG-001/PRJ-001 project structure.
-Uses pseudonymised person names.
+Seed the database with fictional demo data.
+Uses entirely made-up names, project numbers, and billing figures.
 
 Usage:
     python scripts/seed.py [--base-url http://localhost:8000]
@@ -63,7 +63,7 @@ if not p1 or not p2:
 
 # Programs
 print("\nProgramme...")
-prog = post("/programs", {"program_number": "PRG-001", "name": "Acme Analytics", "customer": "Acme Corp"})
+prog = post("/programs", {"program_number": "PRG-001", "name": "Acme Analytics Program", "customer": "Acme Corp"})
 if prog:
     info(f"Programm #{prog['id']}: {prog['program_number']}")
 progs = client.get("/programs").json()
@@ -77,10 +77,11 @@ print("\nProjekte...")
 r = post("/projects", {
     "project_number": "PRJ-001",
     "name": "Acme Analytics 2026a",
-    "description": "Analyse und Weiterentwicklung der MP-Analytics-Plattform (Phase 2026a)",
+    "description": "Development and analysis of the analytics platform (phase 2026a)",
     "start_date": "2026-04-01",
     "end_date": "2026-09-30",
     "total_budget_hours": 600,
+    "total_budget_euros": 54000,
     "holiday_country": "DE",
     "holiday_state": "BY",
     "status": "active",
@@ -92,10 +93,11 @@ if r:
 r2 = post("/projects", {
     "project_number": "PRJ-002",
     "name": "Acme Analytics 2025b",
-    "description": "Analyse und Weiterentwicklung der MP-Analytics-Plattform (Phase 2025b)",
+    "description": "Development and analysis of the analytics platform (phase 2025b)",
     "start_date": "2025-07-01",
     "end_date": "2025-12-31",
     "total_budget_hours": 480,
+    "total_budget_euros": 43200,
     "holiday_country": "DE",
     "holiday_state": "BY",
     "status": "completed",
@@ -118,20 +120,20 @@ m = post(f"/projects/{proj['id']}/memberships", {
     "from_date": "2026-04-01",
     "to_date": "2026-09-30",
     "weekly_capacity_hours": 28,
-    "billing_rate_per_hour": 92.0,
+    "billing_rate_per_hour": 90.0,
 })
 if m:
-    info(f"  {p1['name']} -> PRJ-001 (28h/Woche, 92 EUR/h)")
+    info(f"  {p1['name']} -> PRJ-001 (28h/Woche, 90 EUR/h)")
 
 m = post(f"/projects/{proj['id']}/memberships", {
     "person_id": p2["id"],
     "from_date": "2026-05-01",
     "to_date": "2026-09-30",
     "weekly_capacity_hours": 12,
-    "billing_rate_per_hour": 85.0,
+    "billing_rate_per_hour": 80.0,
 })
 if m:
-    info(f"  {p2['name']} -> PRJ-001 (12h/Woche, 85 EUR/h)")
+    info(f"  {p2['name']} -> PRJ-001 (12h/Woche, 80 EUR/h)")
 
 m = post(f"/projects/{proj2['id']}/memberships", {
     "person_id": p1["id"],
@@ -156,7 +158,7 @@ if bp1:
 bp2 = post(f"/projects/{proj['id']}/billing-positions", {
     "position_number": "PSP-002",
     "description": "Analyse & Konzeption",
-    "budget_euros": 10000.0,
+    "budget_euros": 4000.0,
 })
 if bp2:
     info(f"  {bp2['position_number']} - {bp2['description']}")

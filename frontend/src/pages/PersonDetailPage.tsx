@@ -40,6 +40,8 @@ function EditPersonForm({
     name: initial.name,
     sage_employee_name: initial.sage_employee_name,
     default_weekly_hours: initial.default_weekly_hours,
+    work_week_pattern: initial.work_week_pattern,
+    default_billing_rate: initial.default_billing_rate,
   })
   return (
     <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">

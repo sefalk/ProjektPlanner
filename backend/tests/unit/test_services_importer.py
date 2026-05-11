@@ -39,6 +39,7 @@ def _make_project(session, number="P00001"):
         name=f"Project {number}",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 12, 31),
+        total_budget_euros=50000.0,
         total_budget_hours=500.0,
     )
     session.add(proj)
@@ -390,11 +391,11 @@ def test_new_format_duration_full_hours():
 
 
 def test_new_format_review_sample():
-    """Exact sample from the review document."""
+    """Sample rows in the current Sage export format."""
     csv_str = (
         'Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n'
-        '02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Qlik/Python;1:30h;\n'
-        '03.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Qlik/Python;7:00h;'
+        '02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Analytics;1:30h;\n'
+        '03.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Analytics;7:00h;'
     )
     rows = parse_rows(csv_str)
     assert len(rows) == 2
@@ -402,7 +403,7 @@ def test_new_format_review_sample():
     assert rows[1]["net_hours"] == pytest.approx(7.0)
     assert rows[0]["sage_employee_name"] == "Mustermann, Max"
     assert rows[0]["sage_project_name"] == "PRJ-001 Analytics 2026"
-    assert rows[0]["sage_project_level"] == "Qlik/Python"
+    assert rows[0]["sage_project_level"] == "Analytics"
 
 
 def test_new_format_parse_error_carries_details():

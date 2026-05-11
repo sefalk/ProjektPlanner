@@ -5,7 +5,13 @@ All runtime settings are declared here as a single Pydantic Settings class.
 Never hardcode values — add them here and to .env.example instead.
 """
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Absolute fallback — always resolves to backend/data/projektplanner.db
+# regardless of working directory or uvicorn reload CWD.
+_DEFAULT_DB = Path(__file__).parent.parent / "data" / "projektplanner.db"
 
 
 class Settings(BaseSettings):
@@ -17,7 +23,7 @@ class Settings(BaseSettings):
     )
 
     # Database
-    database_url: str = "sqlite:///./data/projektplanner.db"
+    database_url: str = f"sqlite:///{_DEFAULT_DB}"
 
     # Holiday API
     holiday_api_url: str = "https://feiertage-api.de/api/"

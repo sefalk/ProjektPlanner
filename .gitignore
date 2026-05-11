@@ -11,6 +11,10 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+backend/.coverage
 
 # Environment / config
 .env
@@ -21,15 +25,25 @@ build/
 *.db
 *.sqlite
 *.sqlite3
+*.db.bak
+*.sqlite.bak
+
+# Local runtime config (may contain absolute paths / usernames)
+backend/data_config.json
 
 # Real seed / production data — NEVER commit
 seed/real/
 data/
 
+# Review / planning documents with real data — keep local only
+/*.txt
+
 # Frontend
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/playwright-report/
+frontend/test-results/
 *.local
 
 # IDE / OS

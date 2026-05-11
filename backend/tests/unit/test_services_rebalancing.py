@@ -23,6 +23,7 @@ def _project(session, start=date(2026, 1, 1), end=date(2026, 2, 28), number="P00
         name=f"Project {number}",
         start_date=start,
         end_date=end,
+        total_budget_euros=50000.0,
         total_budget_hours=500.0,
     )
     session.add(p)

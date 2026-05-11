@@ -81,9 +81,12 @@ def compute_drift(project_id: int, session: Session) -> list[PersonDrift]:
         for b in budgets:
             planned[b.person_id] = planned.get(b.person_id, 0.0) + b.initial_hours
 
-    # Actual booked hours per person from time bookings
+    # Actual booked hours per person from time bookings (excluded bookings are ignored)
     bookings = session.exec(
-        select(TimeBooking).where(TimeBooking.project_id == project_id)
+        select(TimeBooking).where(
+            TimeBooking.project_id == project_id,
+            TimeBooking.is_excluded == False,  # noqa: E712
+        )
     ).all()
     actual: dict[int, float] = {}
     for tb in bookings:
