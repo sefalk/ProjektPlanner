@@ -216,7 +216,7 @@ def parse_rows(content: str | bytes) -> list[dict[str, Any]]:
         )
 
     raw_rows: list[dict[str, str]] = [
-        {k.strip(): (v or "").strip() for k, v in row.items()}
+        {k.strip(): (v or "").strip() for k, v in row.items() if k is not None}
         for row in reader
     ]
 

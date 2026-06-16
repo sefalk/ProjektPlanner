@@ -421,6 +421,18 @@ def test_headerless_tab_format():
     assert rows[0]["sage_project_level"] == "Analytics"
 
 
+def test_headerless_tab_trailing_empty_columns():
+    """Sage copy-paste often adds trailing empty tab columns — must not crash."""
+    csv_str = (
+        "01.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t6:00h\t\t\n"
+        "02.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t3:30h\t\t\n"
+    )
+    rows = parse_rows(csv_str)
+    assert len(rows) == 2
+    assert rows[0]["net_hours"] == pytest.approx(6.0)
+    assert rows[1]["net_hours"] == pytest.approx(3.5)
+
+
 def test_headerless_tab_format_with_header_row():
     """Same format but with optional header row — both variants must parse identically."""
     with_header = (
