@@ -61,6 +61,30 @@ def test_initialize_milestones_without_members_returns_422(client):
     assert client.get(f"/projects/{proj['id']}/milestones").json() == []
 
 
+def test_resync_project_not_found(client):
+    assert client.post("/projects/9999/milestones/resync").status_code == 404
+
+
+def test_resync_adds_new_member_scaled(client):
+    """Adding a member and calling resync inserts a scaled budget row (BUG-4, non-destructive)."""
+    proj_id, _ = _setup(client)
+    client.post(f"/projects/{proj_id}/milestones/initialize")
+
+    # Add a second member after initialization.
+    person2 = client.post("/persons", json=_person("Second Member")).json()
+    client.post(f"/projects/{proj_id}/memberships", json=_membership(proj_id, person2["id"]))
+
+    r = client.post(f"/projects/{proj_id}/milestones/resync")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["added"] >= 1
+    assert set(body.keys()) == {"added", "removed", "recomputed", "changed_milestone_ids"}
+
+    # New member now appears in the per-person breakdown.
+    detail = client.get(f"/projects/{proj_id}/milestones/detail").json()
+    assert all(len(d["persons"]) == 2 for d in detail)
+
+
 def test_detail_zero_hours_month_flagged(client):
     """A month with personnel but zero planned hours is flagged with a warning (§8.1)."""
     proj_id, person_id = _setup(client)

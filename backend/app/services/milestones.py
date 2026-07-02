@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from calendar import monthrange
 from datetime import date, timedelta
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -454,42 +454,6 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
     else:
         plan_map = distribute_budget(avail_map, membership_rate_map, priorities, None)
 
-    # Repair existing milestones: sync member budget rows
-    for ms in repair_milestones:
-        existing_budgets = session.exec(
-            select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
-        ).all()
-        existing_person_ids = {b.person_id for b in existing_budgets}
-
-        for b in existing_budgets:
-            if b.person_id not in current_person_ids:
-                session.delete(b)
-
-        for m in memberships:
-            if m.person_id in existing_person_ids:
-                continue
-            person = _get_person(m.person_id)
-            if person is None:
-                continue
-            stats = _person_available_hours(person, m, project, ms.year, ms.month, session)
-            if stats.hours > 0:
-                session.add(MilestonePersonBudget(
-                    milestone_id=ms.id,
-                    person_id=m.person_id,
-                    initial_hours=stats.hours,
-                    current_hours=stats.hours,
-                ))
-
-        session.flush()
-        all_budgets = session.exec(
-            select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
-        ).all()
-        new_total = sum(b.current_hours for b in all_budgets)
-        ms.current_hours = new_total
-        if ms.initial_hours == 0:
-            ms.initial_hours = new_total
-        session.add(ms)
-
     # Create new milestone rows from the distributed plan
     created: list[Milestone] = []
     for year, month in new_months:
@@ -519,6 +483,13 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
             ))
 
         created.append(milestone)
+
+    # Repair existing open milestones (member added/removed/rescaled) via the shared,
+    # correctly scaled alignment (fixes BUG-4 — the old repair path inserted unscaled
+    # hours). Skipped on a fresh init (no pre-existing milestones to repair) so the
+    # new-month distribution above is authoritative. Manual overrides are preserved.
+    if repair_milestones:
+        _align_open_milestones(project, session)
 
     session.commit()
     for m in created:
@@ -709,6 +680,172 @@ def apply_project_range_change(project: Project, session: Session) -> list[str]:
         session.delete(ms)
     session.flush()
     return warnings
+
+
+# ---------------------------------------------------------------------------
+# Non-destructive resync (V5, WP4) — align open milestones to the current
+# membership state without discarding manual overrides.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ResyncSummary:
+    added: int = 0        # budget rows created for newly active members
+    removed: int = 0      # rows removed for members no longer active that month
+    recomputed: int = 0   # auto rows whose current_hours changed
+    changed_milestone_ids: list[int] = field(default_factory=list)
+
+
+def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
+    """Non-destructively align all OPEN milestones to the current membership state.
+
+    Fixes BUG-4/5/7 (V5):
+      * add correctly scaled budget rows for members newly active in a month,
+      * remove rows for members no longer active that month,
+      * recompute auto (non-override) rows from current capacity and the budget (§6.6),
+      * leave ``is_manual_override`` rows and locked months untouched.
+
+    Manual-override commitments and invoiced (locked) months reduce the distributable
+    budget R first; the remainder is spread over the recomputed slots. Baselines
+    (``initial_hours``) are set once when a row is created and never changed here (V10).
+    Does not commit — the caller owns the transaction.
+    """
+    project_id = project.id
+    memberships = session.exec(
+        select(ProjectMembership).where(ProjectMembership.project_id == project_id)
+    ).all()
+    rate_map = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    priorities = {m.person_id: m.priority for m in memberships}
+
+    person_cache: dict[int, Person] = {}
+
+    def _get_person(pid: int) -> Person | None:
+        if pid not in person_cache:
+            person_cache[pid] = session.get(Person, pid)
+        return person_cache[pid]
+
+    open_ms = session.exec(
+        select(Milestone).where(
+            Milestone.project_id == project_id,
+            Milestone.is_locked == False,  # noqa: E712
+        ).order_by(Milestone.year, Milestone.month)
+    ).all()
+
+    summary = ResyncSummary()
+    changed: set[int] = set()
+
+    rows_by_ms: dict[int, dict[int, MilestonePersonBudget]] = {}
+    recompute_avail: dict[SlotKey, float] = {}
+    override_rows: list[MilestonePersonBudget] = []
+    zero_avail_autos: list[MilestonePersonBudget] = []
+
+    for ms in open_ms:
+        month_start, month_end = _month_bounds(ms.year, ms.month)
+        active = [m for m in memberships if m.from_date <= month_end and m.to_date >= month_start]
+        active_pids = {m.person_id for m in active}
+        rows = {
+            b.person_id: b
+            for b in session.exec(
+                select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
+            ).all()
+        }
+        rows_by_ms[ms.id] = rows
+
+        # Remove rows for members no longer active this month (überzählig, BUG-7).
+        for pid, b in list(rows.items()):
+            if pid not in active_pids:
+                session.delete(b)
+                del rows[pid]
+                summary.removed += 1
+                changed.add(ms.id)
+
+        for m in active:
+            pid = m.person_id
+            b = rows.get(pid)
+            if b is not None and b.is_manual_override:
+                override_rows.append(b)  # fixed commitment, never recomputed
+                continue
+            person = _get_person(pid)
+            if person is None:
+                continue
+            avail = _person_available_hours(person, m, project, ms.year, ms.month, session).hours
+            if avail > 0:
+                recompute_avail[(pid, (ms.year, ms.month))] = avail
+            elif b is not None:
+                zero_avail_autos.append(b)  # existing row, member now has no capacity
+
+    session.flush()
+
+    # Distributable budget: total − invoiced(locked) − manual-override commitments.
+    budget_euros = project.total_budget_euros if project.total_budget_euros and project.total_budget_euros > 0 else 0.0
+    budget_hours = project.total_budget_hours if project.total_budget_hours and project.total_budget_hours > 0 else 0.0
+    open_month_set = {(ms.year, ms.month) for ms in open_ms}
+
+    if budget_euros > 0:
+        override_cost = sum(b.current_hours * rate_map.get(b.person_id, 0.0) for b in override_rows)
+        base_remaining = _remaining_euro_budget(project_id, budget_euros, open_month_set, rate_map, session)
+        remaining = max(0.0, base_remaining - override_cost)
+        plan = distribute_budget(recompute_avail, rate_map, priorities, remaining)
+    elif budget_hours > 0:
+        override_hours = sum(b.current_hours for b in override_rows)
+        committed = sum(
+            ms.current_hours
+            for ms in session.exec(select(Milestone).where(Milestone.project_id == project_id)).all()
+            if (ms.year, ms.month) not in open_month_set
+        )
+        remaining_h = max(0.0, budget_hours - committed - override_hours)
+        unit_rates = dict.fromkeys(priorities, 1.0)
+        plan = distribute_budget(recompute_avail, unit_rates, priorities, remaining_h)
+    else:
+        plan = distribute_budget(recompute_avail, rate_map, priorities, None)
+
+    ms_by_ym = {(ms.year, ms.month): ms for ms in open_ms}
+    for (pid, ym), hours in plan.items():
+        ms = ms_by_ym[ym]
+        rows = rows_by_ms[ms.id]
+        b = rows.get(pid)
+        if b is None:
+            session.add(MilestonePersonBudget(
+                milestone_id=ms.id, person_id=pid,
+                initial_hours=hours, current_hours=hours,  # baseline set at creation (V10)
+            ))
+            summary.added += 1
+            changed.add(ms.id)
+        else:
+            if b.current_hours != hours:
+                b.current_hours = hours  # initial_hours (baseline) preserved (V10)
+                session.add(b)
+                summary.recomputed += 1
+                changed.add(ms.id)
+
+    for b in zero_avail_autos:
+        if b.current_hours != 0.0:
+            b.current_hours = 0.0
+            session.add(b)
+            summary.recomputed += 1
+            changed.add(b.milestone_id)
+
+    session.flush()
+    for ms in open_ms:
+        _resync_milestone_totals(ms, session)
+
+    summary.changed_milestone_ids = sorted(changed)
+    return summary
+
+
+def resync_milestones(project_id: int, session: Session) -> ResyncSummary:
+    """Public, non-destructive resync of a project's open milestones (V5, WP4).
+
+    Aligns open milestones to the current membership state (add/remove/rescale),
+    preserving ``is_manual_override`` rows and locked months. This is the sanctioned
+    alternative to ``initialize?force=true`` (which discards manual overrides).
+    """
+    project = session.get(Project, project_id)
+    if not project:
+        raise MilestoneNotFound(f"Project {project_id} not found.")
+    summary = _align_open_milestones(project, session)
+    session.commit()
+    return summary
 
 
 def _person_hours_in_month(membership: ProjectMembership, year: int, month: int) -> float:

@@ -24,6 +24,7 @@ from app.services.milestones import (
     _person_available_hours,
     get_milestone_budgets,
     initialize_milestones,
+    resync_milestones,
     update_person_budget,
     update_person_budget_by_person,
 )
@@ -58,6 +59,13 @@ class MilestoneDetailOut(SQLModel):
     warnings: list[str] = []
 
 
+class ResyncResultOut(SQLModel):
+    added: int
+    removed: int
+    recomputed: int
+    changed_milestone_ids: list[int]
+
+
 # ---------------------------------------------------------------------------
 # Milestone endpoints (nested under /projects/{project_id})
 # ---------------------------------------------------------------------------
@@ -79,6 +87,29 @@ def init_milestones(project_id: int, session: SessionDep, force: bool = False):
         raise HTTPException(404, str(exc)) from exc
     except NoActiveMembership as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/{project_id}/milestones/resync", response_model=ResyncResultOut)
+def resync(project_id: int, session: SessionDep):
+    """Non-destructively align open milestones to the current membership state (V5).
+
+    Adds budget rows for newly active members (correctly scaled), removes rows for
+    members no longer active, recomputes auto rows against the budget — while preserving
+    manually overridden rows and locked months. Unlike initialize?force=true, manual
+    edits are kept.
+    """
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+    try:
+        summary = resync_milestones(project_id, session)
+    except MilestoneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return ResyncResultOut(
+        added=summary.added,
+        removed=summary.removed,
+        recomputed=summary.recomputed,
+        changed_milestone_ids=summary.changed_milestone_ids,
+    )
 
 
 @router.get("/{project_id}/milestones/detail", response_model=list[MilestoneDetailOut])
