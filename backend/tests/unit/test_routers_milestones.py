@@ -51,6 +51,32 @@ def test_initialize_milestones_project_not_found(client):
     assert client.post("/projects/9999/milestones/initialize").status_code == 404
 
 
+def test_initialize_milestones_without_members_returns_422(client):
+    """§8.1: a project without any active member cannot be initialized (backend guard)."""
+    proj = client.post("/projects", json=_project("PNOMEM")).json()
+    r = client.post(f"/projects/{proj['id']}/milestones/initialize")
+    assert r.status_code == 422
+    assert "member" in r.json()["detail"].lower()
+    # Guard runs before any mutation → no milestones created.
+    assert client.get(f"/projects/{proj['id']}/milestones").json() == []
+
+
+def test_detail_zero_hours_month_flagged(client):
+    """A month with personnel but zero planned hours is flagged with a warning (§8.1)."""
+    proj_id, person_id = _setup(client)
+    ms_list = client.post(f"/projects/{proj_id}/milestones/initialize").json()
+    ms = ms_list[0]
+    # Force this month to 0 h despite the member being assigned.
+    client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}",
+        json={"current_hours": 0.0},
+    )
+    detail = client.get(f"/projects/{proj_id}/milestones/detail").json()
+    flagged = next(d for d in detail if d["milestone"]["id"] == ms["id"])
+    assert len(flagged["warnings"]) >= 1
+    assert "planbaren Stunden" in flagged["warnings"][0]
+
+
 def test_initialize_milestones_idempotent(client):
     proj_id, _ = _setup(client)
     client.post(f"/projects/{proj_id}/milestones/initialize")

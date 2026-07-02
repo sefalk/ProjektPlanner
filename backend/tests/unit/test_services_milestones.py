@@ -152,6 +152,8 @@ def test_person_hours_part_time_20h():
 
 def test_initialize_creates_one_milestone_per_month(session):
     proj = _project(session, date(2026, 1, 1), date(2026, 3, 31))
+    person = _person(session)
+    _membership(session, proj.id, person.id)
     session.commit()
     created = initialize_milestones(proj.id, session)
     assert len(created) == 3
@@ -196,6 +198,8 @@ def test_initialize_invariant_hours(session):
 
 def test_initialize_idempotent(session):
     proj = _project(session)
+    person = _person(session)
+    _membership(session, proj.id, person.id)
     session.commit()
     first = initialize_milestones(proj.id, session)
     second = initialize_milestones(proj.id, session)
@@ -203,12 +207,30 @@ def test_initialize_idempotent(session):
     assert second == []  # nothing new
 
 
-def test_initialize_no_members_zero_hours(session):
+def test_initialize_no_members_raises(session):
+    """§8.1: milestones require personnel — init without an active member is refused."""
+    from app.services.milestones import NoActiveMembership
+
     proj = _project(session)
     session.commit()
-    created = initialize_milestones(proj.id, session)
-    assert all(m.initial_hours == 0.0 for m in created)
-    assert all(m.current_hours == 0.0 for m in created)
+    with pytest.raises(NoActiveMembership):
+        initialize_milestones(proj.id, session)
+    # No milestones were created (guard runs before any mutation).
+    from sqlmodel import select as sq_select
+    assert session.exec(sq_select(Milestone).where(Milestone.project_id == proj.id)).all() == []
+
+
+def test_initialize_membership_outside_range_raises(session):
+    """A membership that does not overlap the project range is not 'active' (§8.1)."""
+    from app.services.milestones import NoActiveMembership
+
+    proj = _project(session, date(2026, 1, 1), date(2026, 3, 31))
+    person = _person(session)
+    _membership(session, proj.id, person.id,
+                from_date=date(2027, 1, 1), to_date=date(2027, 3, 31))
+    session.commit()
+    with pytest.raises(NoActiveMembership):
+        initialize_milestones(proj.id, session)
 
 
 def test_initialize_partial_membership(session):
@@ -398,6 +420,8 @@ def test_update_budget_locked_milestone(session):
 
 def test_update_budget_not_found(session):
     proj = _project(session)
+    person = _person(session)
+    _membership(session, proj.id, person.id)
     session.commit()
     initialize_milestones(proj.id, session)
     ms = session.exec(__import__("sqlmodel").select(Milestone)).first()

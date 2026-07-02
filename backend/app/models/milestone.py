@@ -49,3 +49,5 @@ class MilestonePersonBudget(ValidatedSQLModel, table=True):
     person_id: int = Field(foreign_key="person.id", index=True)
     initial_hours: float = Field(ge=0)
     current_hours: float = Field(ge=0)
+    # V5/B6: when True, this row was manually edited and must be preserved by resync.
+    is_manual_override: bool = False

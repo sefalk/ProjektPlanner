@@ -15,6 +15,11 @@ from app.models.milestone import Milestone
 from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import ImportBatch, TimeBooking
+from app.services.milestones import (
+    apply_project_range_change,
+    prune_member_budgets_to_range,
+    remove_member_budgets,
+)
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -37,6 +42,7 @@ class MembershipCreate(SQLModel):
     to_date: str
     weekly_capacity_hours: float = Field(gt=0, le=60)
     billing_rate_per_hour: float = Field(ge=0)
+    priority: int = 0  # B6: smaller = higher priority for budget distribution
 
 
 class MembershipUpdate(SQLModel):
@@ -44,6 +50,7 @@ class MembershipUpdate(SQLModel):
     to_date: str
     weekly_capacity_hours: float = Field(gt=0, le=60)
     billing_rate_per_hour: float = Field(ge=0)
+    priority: int = 0
 
 
 class MembershipWithWarnings(SQLModel):
@@ -54,6 +61,7 @@ class MembershipWithWarnings(SQLModel):
     to_date: date
     weekly_capacity_hours: float
     billing_rate_per_hour: float
+    priority: int = 0
     warnings: list[str] = []
 
 
@@ -130,6 +138,7 @@ def update_project(project_id: int, data: Project, session: SessionDep):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found.")
+    old_start, old_end = project.start_date, project.end_date
     update = data.model_dump(exclude_unset=True, exclude={"id"})
     for field, value in update.items():
         setattr(project, field, value)
@@ -140,6 +149,12 @@ def update_project(project_id: int, data: Project, session: SessionDep):
     except IntegrityError:
         session.rollback()
         raise HTTPException(409, "Project number already exists.")
+    # Referential action (V11): reconcile milestones if the project range shrank/shifted.
+    # Open out-of-range milestones are removed; locked ones are kept (flagged in detail).
+    if project.start_date != old_start or project.end_date != old_end:
+        apply_project_range_change(project, session)
+        session.commit()
+        session.refresh(project)
     return project
 
 
@@ -250,6 +265,7 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         to_date=date.fromisoformat(body.to_date),
         weekly_capacity_hours=body.weekly_capacity_hours,
         billing_rate_per_hour=body.billing_rate_per_hour,
+        priority=body.priority,
     )
     try:
         session.add(membership)
@@ -267,6 +283,7 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         to_date=membership.to_date,
         weekly_capacity_hours=membership.weekly_capacity_hours,
         billing_rate_per_hour=membership.billing_rate_per_hour,
+        priority=membership.priority,
         warnings=warnings,
     )
 
@@ -280,9 +297,15 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
     m.to_date = date.fromisoformat(body.to_date)
     m.weekly_capacity_hours = body.weekly_capacity_hours
     m.billing_rate_per_hour = body.billing_rate_per_hour
+    m.priority = body.priority
     session.add(m)
     session.commit()
     session.refresh(m)
+    # Referential action (V11): drop this member's budgets from open milestones that no
+    # longer overlap the (possibly shrunk) membership range. Recomputing changed weekly
+    # hours into remaining months is the resync path (WP4/WP5), not done here.
+    prune_member_budgets_to_range(project_id, m.person_id, m.from_date, m.to_date, session)
+    session.commit()
     warnings = _membership_overbooking_warnings(m, session)
     return MembershipWithWarnings(
         id=m.id,
@@ -292,6 +315,7 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
         to_date=m.to_date,
         weekly_capacity_hours=m.weekly_capacity_hours,
         billing_rate_per_hour=m.billing_rate_per_hour,
+        priority=m.priority,
         warnings=warnings,
     )
 
@@ -301,7 +325,12 @@ def delete_membership(project_id: int, membership_id: int, session: SessionDep):
     m = session.get(ProjectMembership, membership_id)
     if not m or m.project_id != project_id:
         raise HTTPException(404, "Membership not found.")
+    person_id = m.person_id
     session.delete(m)
+    session.flush()
+    # Referential action (V11, BUG-7): drop the member's budgets from open milestones so
+    # no orphaned rows keep counting toward milestone totals. Locked months are protected.
+    remove_member_budgets(project_id, person_id, session)
     session.commit()
 
 

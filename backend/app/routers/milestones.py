@@ -17,7 +17,9 @@ from app.services.milestones import (
     BudgetNotFound,
     MilestoneLocked,
     MilestoneNotFound,
+    NoActiveMembership,
     PersonMonthStats,
+    _months_in_range,
     _parse_work_week_pattern,
     _person_available_hours,
     get_milestone_budgets,
@@ -53,6 +55,7 @@ class MilestonePersonDetailOut(SQLModel):
 class MilestoneDetailOut(SQLModel):
     milestone: Milestone
     persons: list[MilestonePersonDetailOut]
+    warnings: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +77,8 @@ def init_milestones(project_id: int, session: SessionDep, force: bool = False):
         return initialize_milestones(project_id, session, force=force)
     except MilestoneNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
+    except NoActiveMembership as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/{project_id}/milestones/detail", response_model=list[MilestoneDetailOut])
@@ -99,6 +104,8 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         p = session.get(Person, m.person_id)
         if p:
             persons_map[p.id] = p
+
+    valid_months = set(_months_in_range(project.start_date, project.end_date))
 
     result: list[MilestoneDetailOut] = []
     for ms in milestones:
@@ -139,7 +146,23 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 billing_rate_per_hour=membership.billing_rate_per_hour,
                 booked_hours=booked_map.get(person.id, 0.0),
             ))
-        result.append(MilestoneDetailOut(milestone=ms, persons=persons_out))
+
+        # Milestone-level warnings (§8.1 / V11)
+        warnings: list[str] = []
+        has_active_member = any(
+            m.from_date <= month_end and m.to_date >= month_start for m in memberships
+        )
+        if not ms.is_locked and has_active_member and ms.current_hours == 0:
+            warnings.append(
+                "Keine planbaren Stunden in diesem Monat trotz zugeordnetem Personal "
+                "(volle Abwesenheit oder Budget erschöpft)."
+            )
+        if ms.is_locked and (ms.year, ms.month) not in valid_months:
+            warnings.append(
+                "Gesperrter Meilenstein liegt außerhalb des aktuellen Projektzeitraums."
+            )
+
+        result.append(MilestoneDetailOut(milestone=ms, persons=persons_out, warnings=warnings))
 
     return result
 

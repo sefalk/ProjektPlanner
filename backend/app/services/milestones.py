@@ -21,16 +21,17 @@ from calendar import monthrange
 from datetime import date, timedelta
 from dataclasses import dataclass
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.models.enums import AbsenceType
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
-from app.models.person import Person, PersonAbsence, VacationContingent
+from app.models.person import Person, PersonAbsence
 from app.models.project import Project
 from app.models.setting import Setting
 from app.services.holiday import HolidayFetchError, get_holidays_in_range
-from app.services.planning import absence_days_in_range
+from app.services.planning import absence_days_in_range, estimated_vacation_days
 
 
 class MilestoneLocked(Exception):
@@ -43,6 +44,12 @@ class MilestoneNotFound(Exception):
 
 class BudgetNotFound(Exception):
     pass
+
+
+class NoActiveMembership(Exception):
+    """Raised when milestone initialization is attempted for a project without any
+    active member (§8.1). Milestones without personnel are not allowed — the guard
+    lives in the backend, not only in the UI."""
 
 
 # ---------------------------------------------------------------------------
@@ -87,33 +94,6 @@ def _parse_work_week_pattern(pattern: str) -> list[float] | None:
     return values if sum(values) > 0 else None
 
 
-def _vacation_estimate_for_month(
-    person_id: int,
-    year: int,
-    month: int,
-    session: Session,
-) -> float:
-    """Estimate unplanned vacation days for person in a given month.
-
-    Only called when no specific vacation absences exist for that month.
-    Distributes the annual contingent evenly over 12 calendar months so that
-    short projects don't over-estimate vacation and eliminate all capacity.
-    """
-    contingent = session.exec(
-        select(VacationContingent).where(
-            VacationContingent.person_id == person_id,
-            VacationContingent.year == year,
-        )
-    ).first()
-    if not contingent or contingent.total_days <= 0:
-        return 0.0
-
-    # Distribute over the full calendar year (12 months), not project months.
-    # Using project months as denominator causes short projects to over-estimate vacation
-    # (e.g. a 1-month project with 30-day contingent → 30 days in one month → 0 capacity).
-    return contingent.total_days / 12
-
-
 def _get_setting_float(session: Session, key: str, default: float) -> float:
     setting = session.get(Setting, key)
     if setting is None:
@@ -122,26 +102,6 @@ def _get_setting_float(session: Session, key: str, default: float) -> float:
         return float(setting.value)
     except (ValueError, TypeError):
         return default
-
-
-def _calendar_work_days(year: int, month: int, holiday_country: str, holiday_state: str, session: Session) -> int:
-    """Count Mon-Fri working days in a calendar month, excluding public holidays.
-
-    Falls back to plain weekday count if holiday data is unavailable.
-    """
-    month_start, month_end = _month_bounds(year, month)
-    try:
-        holidays = get_holidays_in_range(month_start, month_end, holiday_country, holiday_state, session)
-        holiday_dates = {h.holiday_date for h in holidays if h.is_workday}
-    except HolidayFetchError:
-        holiday_dates = set()
-    count = 0
-    d = month_start
-    while d <= month_end:
-        if d.weekday() < 5 and d not in holiday_dates:
-            count += 1
-        d += timedelta(days=1)
-    return count
 
 
 @dataclass
@@ -207,20 +167,13 @@ def _person_available_hours(
     # Specific absence days (all types including vacation)
     abs_days = absence_days_in_range(person.id, eff_start, eff_end, session)
 
-    # Distributed vacation estimate — only if no specific vacation overlaps this month
-    has_vacation = session.exec(
-        select(PersonAbsence).where(
-            PersonAbsence.person_id == person.id,
-            PersonAbsence.absence_type == AbsenceType.vacation,
-            PersonAbsence.start_date <= eff_end,
-            PersonAbsence.end_date >= eff_start,
-        )
-    ).first()
-    vacation_estimate = 0.0
-    if not has_vacation:
-        vacation_estimate = _vacation_estimate_for_month(person.id, year, month, session)
-        # Cap: can't estimate more vacation days than actual available working days
-        vacation_estimate = min(vacation_estimate, max(0, work_days_count - abs_days))
+    # Unplanned (remaining) vacation estimate for the effective period.
+    # estimated_vacation_days already subtracts concrete vacation already taken in the
+    # year (no double counting with abs_days) and distributes the remaining contingent
+    # across the remaining days of the year — see B3 / planning.estimated_vacation_days.
+    vacation_estimate = estimated_vacation_days(person.id, eff_start, eff_end, session)
+    # Cap: can't estimate more vacation days than actual available working days
+    vacation_estimate = min(vacation_estimate, max(0, work_days_count - abs_days))
 
     # Global sick / training day estimates — only if no specific absence of that type exists
     has_sick = session.exec(
@@ -254,6 +207,108 @@ def _person_available_hours(
 
 
 # ---------------------------------------------------------------------------
+# Budget distribution (§6.6) — pure, fully unit-testable
+# ---------------------------------------------------------------------------
+
+
+SlotKey = tuple[int, tuple[int, int]]  # (person_id, (year, month))
+
+
+def distribute_budget(
+    avail: dict[SlotKey, float],
+    rates: dict[int, float],
+    priorities: dict[int, int],
+    remaining_budget: float | None,
+) -> dict[SlotKey, float]:
+    """Distribute a capped budget over (person, month) capacity slots.
+
+    See docs/implementation/20-milestone-review-and-rework.md §6.6.
+
+    Args:
+        avail: {(person_id, (year, month)): available_net_hours}. The hard per-person
+               capacity cap — the result never exceeds these values.
+        rates: {person_id: euro_rate_per_hour}. Pass {pid: 1.0} to cap by HOURS instead
+               of euros (legacy total_budget_hours path).
+        priorities: {person_id: priority}; smaller = higher priority, equal = same tier,
+               missing = 0. Higher tiers are funded to full capacity first (B6).
+        remaining_budget: the cap in the same unit as (hours × rate). None => no cap,
+               i.e. plan = full available capacity (global scale s = 1).
+
+    Guarantees (hard invariants, verified by tests):
+        * plan[k] <= avail[k]                      (capacity / weekly hours, B2)
+        * SUM(plan[k] * rates[pid]) <= remaining   (budget, B1)
+    No rounding is applied — full float precision is kept so the euro budget can be
+    represented cent-exact via hours (§9.4). Rounding happens only in the display layer.
+    """
+    plan: dict[SlotKey, float] = dict.fromkeys(avail, 0.0)
+    if not avail:
+        return plan
+    if remaining_budget is None:
+        return dict(avail)  # no cap → full capacity
+
+    rest = max(0.0, remaining_budget)
+    tiers = sorted({priorities.get(pid, 0) for (pid, _ym) in avail})
+    for tier in tiers:
+        tier_keys = [k for k in avail if priorities.get(k[0], 0) == tier]
+        tier_cost = sum(avail[k] * rates.get(k[0], 0.0) for k in tier_keys)
+        if tier_cost <= 0:
+            continue
+        if rest >= tier_cost:
+            scale = 1.0
+            rest -= tier_cost
+        else:
+            scale = rest / tier_cost
+            rest = 0.0
+        for k in tier_keys:
+            plan[k] = avail[k] * scale
+        if rest <= 0.0:
+            break
+    return plan
+
+
+def _remaining_euro_budget(
+    project_id: int,
+    total_budget_euros: float,
+    exclude_months: set[tuple[int, int]],
+    rate_map: dict[int, float],
+    session: Session,
+) -> float:
+    """Budget still available for the given (new) months (B5).
+
+    remaining = total − Σ(invoiced amounts of closed/locked months, actual)
+                      − Σ(planned cost of already-existing open milestones not being
+                          (re)computed now)
+    Clamped to >= 0.
+    """
+    from app.models.invoice import MonthlyInvoice
+
+    invoiced = session.exec(
+        select(func.coalesce(func.sum(MonthlyInvoice.total_amount_euros), 0.0)).where(
+            MonthlyInvoice.project_id == project_id
+        )
+    ).one()
+    invoiced = float(invoiced or 0.0)
+
+    # Planned cost of existing OPEN milestones whose months are not being recomputed now.
+    existing = session.exec(
+        select(Milestone).where(
+            Milestone.project_id == project_id,
+            Milestone.is_locked == False,  # noqa: E712
+        )
+    ).all()
+    open_cost = 0.0
+    for ms in existing:
+        if (ms.year, ms.month) in exclude_months:
+            continue
+        budgets = session.exec(
+            select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
+        ).all()
+        open_cost += sum(b.current_hours * rate_map.get(b.person_id, 0.0) for b in budgets)
+
+    return max(0.0, total_budget_euros - invoiced - open_cost)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -268,15 +323,15 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
     Locked (invoiced) milestones are never touched.
 
     initial_hours = available capacity per person (working days minus holidays, absences,
-                    and proportional sick/vacation/training estimates from settings),
-                    scaled so that the budget-proportional euro allocation is met.
+                    and proportional sick/vacation/training estimates), distributed so the
+                    euro budget is maximally used but never exceeded (see distribute_budget).
     current_hours = same as initial_hours on first creation (editable afterwards).
 
-    Budget distribution:
-      If total_budget_euros > 0: each month receives euros proportional to its working-day
-      count relative to all project working days; initial_hours are scaled accordingly.
-      If only total_budget_hours is set: global hours scale (legacy behaviour).
-      Otherwise: initial_hours = raw available capacity (no scaling).
+    Budget distribution (§6.6):
+      If total_budget_euros > 0: a single global scale s = min(1, R / Cmax) caps hours by
+      the remaining euro budget R and by each person's capacity; member priority (B6) funds
+      higher tiers first. If total_budget_hours only: same logic with unit rates (hours cap).
+      Otherwise: initial_hours = full available capacity (no cap).
     """
     project = session.get(Project, project_id)
     if not project:
@@ -293,6 +348,18 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
         if pid not in person_cache:
             person_cache[pid] = session.get(Person, pid)
         return person_cache[pid]
+
+    # Guard (§8.1): milestones require personnel. At least one membership must overlap
+    # the project range, otherwise we refuse to (re-)initialize — no mutation happens.
+    active_memberships = [
+        m for m in memberships
+        if m.from_date <= project.end_date and m.to_date >= project.start_date
+    ]
+    if not active_memberships:
+        raise NoActiveMembership(
+            f"Project {project_id} has no active members. "
+            "Add at least one member before initializing milestones."
+        )
 
     current_person_ids = {m.person_id for m in memberships}
     all_project_months = _months_in_range(project.start_date, project.end_date)
@@ -353,39 +420,39 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
                 person_hours[m.person_id] = person_hours.get(m.person_id, 0.0) + stats.hours
         month_capacity[(year, month)] = person_hours
 
-    # Compute per-month scale factors based on budget allocation strategy
-    month_scale: dict[tuple[int, int], float] = {}
+    # Build the (person, month) availability map and distribute the budget across all new
+    # months jointly (§6.6). The budget cap is global, so a single distribution call spans
+    # every new month; member priority (B6) funds higher tiers first.
+    avail_map: dict[SlotKey, float] = {}
+    for (year, month), person_hours in month_capacity.items():
+        for pid, hours in person_hours.items():
+            avail_map[(pid, (year, month))] = hours
+
+    priorities = {m.person_id: m.priority for m in memberships}
+    new_month_set = set(new_months)
 
     budget_euros = project.total_budget_euros if project.total_budget_euros and project.total_budget_euros > 0 else 0.0
     budget_hours = project.total_budget_hours if project.total_budget_hours and project.total_budget_hours > 0 else 0.0
 
     if budget_euros > 0:
-        # Distribute euro budget proportionally by working-day count per month
-        work_days_map: dict[tuple[int, int], int] = {
-            (y, mo): _calendar_work_days(y, mo, project.holiday_country, project.holiday_state, session)
-            for y, mo in new_months
-        }
-        total_work_days = sum(work_days_map.values())
-        for year, month in new_months:
-            work_days = work_days_map.get((year, month), 0)
-            if total_work_days == 0 or work_days == 0:
-                month_scale[(year, month)] = 0.0
-                continue
-            plan_euros = budget_euros * (work_days / total_work_days)
-            available_cost = sum(
-                month_capacity[(year, month)].get(pid, 0.0) * membership_rate_map.get(pid, 0.0)
-                for pid in month_capacity[(year, month)]
-            )
-            month_scale[(year, month)] = (plan_euros / available_cost) if available_cost > 0 else 0.0
+        remaining = _remaining_euro_budget(
+            project_id, budget_euros, new_month_set, membership_rate_map, session
+        )
+        plan_map = distribute_budget(avail_map, membership_rate_map, priorities, remaining)
     elif budget_hours > 0:
-        # Legacy: scale all new months uniformly so total capacity matches hours budget
-        total_capacity = sum(sum(ph.values()) for ph in month_capacity.values())
-        global_scale = (budget_hours / total_capacity) if total_capacity > budget_hours else 1.0
-        for year, month in new_months:
-            month_scale[(year, month)] = global_scale
+        # Legacy hours cap: unit rates so the "cost" is measured in hours.
+        committed_hours = sum(
+            ms.current_hours
+            for ms in session.exec(
+                select(Milestone).where(Milestone.project_id == project_id)
+            ).all()
+            if (ms.year, ms.month) not in new_month_set
+        )
+        remaining_hours = max(0.0, budget_hours - committed_hours)
+        unit_rates = dict.fromkeys(priorities, 1.0)
+        plan_map = distribute_budget(avail_map, unit_rates, priorities, remaining_hours)
     else:
-        for year, month in new_months:
-            month_scale[(year, month)] = 1.0
+        plan_map = distribute_budget(avail_map, membership_rate_map, priorities, None)
 
     # Repair existing milestones: sync member budget rows
     for ms in repair_milestones:
@@ -423,29 +490,32 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
             ms.initial_hours = new_total
         session.add(ms)
 
-    # Create new milestone rows
+    # Create new milestone rows from the distributed plan
     created: list[Milestone] = []
     for year, month in new_months:
         person_hours = month_capacity[(year, month)]
-        scale = month_scale[(year, month)]
-        capacity_total = sum(person_hours.values())
+        month_plan = {pid: plan_map.get((pid, (year, month)), 0.0) for pid in person_hours}
+        total = sum(month_plan.values())
 
         milestone = Milestone(
             project_id=project_id,
             year=year,
             month=month,
-            initial_hours=capacity_total * scale,
-            current_hours=capacity_total * scale,
+            initial_hours=total,
+            current_hours=total,
         )
         session.add(milestone)
         session.flush()
 
-        for person_id, cap_hours in person_hours.items():
+        # Create a budget row for every active member this month (even 0 h, e.g. lower
+        # priority tiers not funded), so the per-person breakdown stays transparent.
+        for person_id in person_hours:
+            hours = month_plan.get(person_id, 0.0)
             session.add(MilestonePersonBudget(
                 milestone_id=milestone.id,
                 person_id=person_id,
-                initial_hours=cap_hours * scale,
-                current_hours=cap_hours * scale,
+                initial_hours=hours,
+                current_hours=hours,
             ))
 
         created.append(milestone)
@@ -514,6 +584,131 @@ def update_person_budget_by_person(
     if not budget:
         raise BudgetNotFound(f"No budget for person {person_id} in milestone {milestone_id}.")
     return update_person_budget(milestone_id, budget.id, new_hours, session)
+
+
+# ---------------------------------------------------------------------------
+# Referential actions (V11) — keep milestones consistent when memberships or the
+# project range change. Locked (invoiced) months are ALWAYS protected.
+# ---------------------------------------------------------------------------
+
+
+def _resync_milestone_totals(milestone: Milestone, session: Session) -> None:
+    """Recompute the milestone's denormalized hour caches from its budget rows (V10).
+
+    Milestone.initial_hours is the cache of Σ budget.initial_hours (baseline),
+    Milestone.current_hours the cache of Σ budget.current_hours. Both are kept in
+    sync whenever a budget row is added or removed.
+    """
+    budgets = session.exec(
+        select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == milestone.id)
+    ).all()
+    milestone.initial_hours = sum(b.initial_hours for b in budgets)
+    milestone.current_hours = sum(b.current_hours for b in budgets)
+    session.add(milestone)
+
+
+def remove_member_budgets(project_id: int, person_id: int, session: Session) -> list[Milestone]:
+    """Remove a person's budget rows from all OPEN milestones of a project (V11, BUG-7).
+
+    Locked (invoiced) months keep their historical rows untouched. Affected milestone
+    totals are re-synced. Does not commit — the caller owns the transaction.
+    Returns the list of milestones whose totals changed.
+    """
+    milestones = session.exec(
+        select(Milestone).where(Milestone.project_id == project_id)
+    ).all()
+    affected: list[Milestone] = []
+    for ms in milestones:
+        if ms.is_locked:
+            continue
+        rows = session.exec(
+            select(MilestonePersonBudget).where(
+                MilestonePersonBudget.milestone_id == ms.id,
+                MilestonePersonBudget.person_id == person_id,
+            )
+        ).all()
+        if not rows:
+            continue
+        for row in rows:
+            session.delete(row)
+        session.flush()
+        _resync_milestone_totals(ms, session)
+        affected.append(ms)
+    return affected
+
+
+def prune_member_budgets_to_range(
+    project_id: int,
+    person_id: int,
+    from_date: date,
+    to_date: date,
+    session: Session,
+) -> list[Milestone]:
+    """Remove a member's budget rows from OPEN milestones whose month no longer overlaps
+    the member's [from_date, to_date] range (V11, membership date change).
+
+    Locked months are protected. Budgets for months still inside the range are left as
+    they are — recomputing changed weekly hours into existing budgets is the resync path
+    (WP4/WP5), not this referential cleanup. Does not commit.
+    Returns the list of milestones whose totals changed.
+    """
+    milestones = session.exec(
+        select(Milestone).where(Milestone.project_id == project_id)
+    ).all()
+    affected: list[Milestone] = []
+    for ms in milestones:
+        if ms.is_locked:
+            continue
+        month_start, month_end = _month_bounds(ms.year, ms.month)
+        if from_date <= month_end and to_date >= month_start:
+            continue  # still overlaps — keep
+        rows = session.exec(
+            select(MilestonePersonBudget).where(
+                MilestonePersonBudget.milestone_id == ms.id,
+                MilestonePersonBudget.person_id == person_id,
+            )
+        ).all()
+        if not rows:
+            continue
+        for row in rows:
+            session.delete(row)
+        session.flush()
+        _resync_milestone_totals(ms, session)
+        affected.append(ms)
+    return affected
+
+
+def apply_project_range_change(project: Project, session: Session) -> list[str]:
+    """Reconcile milestones with a changed project range (V11, project date change).
+
+    Months now outside [project.start_date, project.end_date]:
+      - open milestone → deleted (with its budget rows),
+      - locked milestone → kept, and a warning string is returned so the UI can flag it.
+    Milestones inside the range are untouched. Does not commit.
+    Returns warning strings for locked out-of-range months.
+    """
+    valid_months = set(_months_in_range(project.start_date, project.end_date))
+    milestones = session.exec(
+        select(Milestone).where(Milestone.project_id == project.id)
+    ).all()
+    warnings: list[str] = []
+    for ms in milestones:
+        if (ms.year, ms.month) in valid_months:
+            continue
+        if ms.is_locked:
+            warnings.append(
+                f"{ms.year}-{ms.month:02d}: gesperrter Meilenstein liegt außerhalb des "
+                "neuen Projektzeitraums und bleibt erhalten."
+            )
+            continue
+        budgets = session.exec(
+            select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
+        ).all()
+        for b in budgets:
+            session.delete(b)
+        session.delete(ms)
+    session.flush()
+    return warnings
 
 
 def _person_hours_in_month(membership: ProjectMembership, year: int, month: int) -> float:
