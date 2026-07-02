@@ -53,6 +53,7 @@ class MilestonePersonDetailOut(SQLModel):
     holiday_days: int
     billing_rate_per_hour: float
     booked_hours: float = 0.0
+    is_manual_override: bool = False
 
 
 class MilestoneDetailOut(SQLModel):
@@ -189,6 +190,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=membership.billing_rate_per_hour,
                 booked_hours=booked_map.get(person.id, 0.0),
+                is_manual_override=budget.is_manual_override,
             ))
 
         # Milestone-level warnings (§8.1 / V11)

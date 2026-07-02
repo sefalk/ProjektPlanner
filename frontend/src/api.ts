@@ -2,6 +2,19 @@
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api';
 
+/** Error carrying the HTTP status and parsed response body so callers can react to
+ *  specific cases (e.g. a 409 budget-confirmation prompt with a `warnings` payload). */
+export class ApiError extends Error {
+  status: number;
+  body: unknown;
+  constructor(status: number, body: unknown, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -10,7 +23,13 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`${method} ${path} → ${res.status}: ${text}`);
+    let parsed: unknown = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      /* keep raw text */
+    }
+    throw new ApiError(res.status, parsed, `${method} ${path} → ${res.status}: ${text}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -61,6 +80,7 @@ export interface ProjectMembership {
   to_date: string;
   weekly_capacity_hours: number;
   billing_rate_per_hour: number;
+  priority: number;
   warnings?: string[];
 }
 
@@ -89,6 +109,18 @@ export interface MilestonePersonBudget {
   person_id: number;
   initial_hours: number;
   current_hours: number;
+  is_manual_override: boolean;
+}
+
+/** Response of a manual budget update (PUT persons/budgets): the row plus warnings. */
+export interface BudgetUpdateResult {
+  id: number;
+  milestone_id: number;
+  person_id: number;
+  initial_hours: number;
+  current_hours: number;
+  is_manual_override: boolean;
+  warnings: string[];
 }
 
 export interface MilestonePersonDetail {
@@ -104,11 +136,13 @@ export interface MilestonePersonDetail {
   holiday_days: number;
   billing_rate_per_hour: number;
   booked_hours: number;
+  is_manual_override: boolean;
 }
 
 export interface MilestoneDetail {
   milestone: Milestone;
   persons: MilestonePersonDetail[];
+  warnings: string[];
 }
 
 export interface PersonDrift {
@@ -130,7 +164,23 @@ export interface MilestoneSuggestion {
   year: number;
   month: number;
   total_current_hours: number;
+  suggested_total_hours: number;
   budgets: BudgetSuggestion[];
+}
+
+export interface UtilizationRecommendation {
+  person_id: number;
+  person_name: string;
+  free_weekly_hours: number;
+  budget_headroom_euros: number;
+  recommended_additional_hours: number;
+}
+
+export interface ResyncResult {
+  added: number;
+  removed: number;
+  recomputed: number;
+  changed_milestone_ids: number[];
 }
 
 export interface MonthlyInvoice {
@@ -206,9 +256,9 @@ export const projects = {
   update: (id: number, d: Omit<Project, 'id'>) => req<Project>('PUT', `/projects/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/projects/${id}`),
   memberships: (id: number) => req<ProjectMembership[]>('GET', `/projects/${id}/memberships`),
-  addMembership: (id: number, d: Omit<ProjectMembership, 'id' | 'project_id'>) =>
+  addMembership: (id: number, d: Omit<ProjectMembership, 'id' | 'project_id' | 'warnings'>) =>
     req<ProjectMembership>('POST', `/projects/${id}/memberships`, d),
-  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour'>) =>
+  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority'>) =>
     req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
   deleteMembership: (projectId: number, membershipId: number) =>
     req<void>('DELETE', `/projects/${projectId}/memberships/${membershipId}`),
@@ -220,8 +270,10 @@ export const projects = {
   milestones: (id: number) => req<Milestone[]>('GET', `/projects/${id}/milestones`),
   milestonesDetail: (id: number) => req<MilestoneDetail[]>('GET', `/projects/${id}/milestones/detail`),
   initMilestones: (id: number, force?: boolean) => req<Milestone[]>('POST', `/projects/${id}/milestones/initialize${force ? '?force=true' : ''}`),
-  updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number) =>
-    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}`, { current_hours: hours }),
+  resyncMilestones: (id: number) => req<ResyncResult>('POST', `/projects/${id}/milestones/resync`),
+  updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number, confirm?: boolean) =>
+    req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
+  recommendations: (id: number) => req<UtilizationRecommendation[]>('GET', `/projects/${id}/milestones/recommendations`),
   drift: (id: number) => req<PersonDrift[]>('GET', `/projects/${id}/rebalancing/drift`),
   suggestions: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/rebalancing/suggestions`),
   applyRebalancing: (id: number) => req<unknown[]>('POST', `/projects/${id}/rebalancing/apply`),

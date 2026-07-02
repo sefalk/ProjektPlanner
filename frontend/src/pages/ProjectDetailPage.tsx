@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
 import {
-  projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi,
+  projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason,
 } from '../api'
 import Modal from '../components/Modal'
@@ -341,14 +341,16 @@ export default function ProjectDetailPage() {
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
   const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
-  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
+  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
   const [editBudget, setEditBudget] = useState<{ milestoneId: number; personId: number; personName: string; currentHours: number } | null>(null)
   const [editHours, setEditHours] = useState(0)
+  const [budgetWarnings, setBudgetWarnings] = useState<string[]>([])   // manual-edit warnings (V6)
+  const [budgetNeedsConfirm, setBudgetNeedsConfirm] = useState(false)  // budget overrun awaiting confirm
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
-  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
+  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
   const [error, setError] = useState<string | null>(null)
   const [memberWarnings, setMemberWarnings] = useState<string[]>([])
   const [closeWarnings, setCloseWarnings] = useState<string[]>([])
@@ -368,6 +370,7 @@ export default function ProjectDetailPage() {
   const { data: milestonesDetail = [] } = useQuery({ queryKey: ['milestones-detail', projectId], queryFn: () => projects.milestonesDetail(projectId) })
   const { data: drift = [] } = useQuery({ queryKey: ['drift', projectId], queryFn: () => projects.drift(projectId) })
   const { data: suggestions = [] } = useQuery({ queryKey: ['suggestions', projectId], queryFn: () => projects.suggestions(projectId) })
+  const { data: recommendations = [] } = useQuery({ queryKey: ['recommendations', projectId], queryFn: () => projects.recommendations(projectId) })
   const { data: invoiceList = [] } = useQuery({ queryKey: ['invoices', projectId], queryFn: () => projects.invoices(projectId) })
   const { data: memberships = [] } = useQuery({ queryKey: ['memberships', projectId], queryFn: () => projects.memberships(projectId) })
   const { data: billingPositions = [] } = useQuery({ queryKey: ['billingPositions', projectId], queryFn: () => projects.billingPositions(projectId) })
@@ -379,18 +382,41 @@ export default function ProjectDetailPage() {
   const invalidateMilestones = () => {
     qc.invalidateQueries({ queryKey: ['milestones', projectId] })
     qc.invalidateQueries({ queryKey: ['milestones-detail', projectId] })
+    qc.invalidateQueries({ queryKey: ['suggestions', projectId] })
+    qc.invalidateQueries({ queryKey: ['recommendations', projectId] })
   }
 
   const initMilestones = useMutation({
     mutationFn: (force?: boolean) => projects.initMilestones(projectId, force),
     onSuccess: invalidateMilestones,
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const resyncMilestones = useMutation({
+    mutationFn: () => projects.resyncMilestones(projectId),
+    onSuccess: invalidateMilestones,
+    onError: (e: Error) => setError(e.message),
   })
 
   const updatePersonBudget = useMutation({
-    mutationFn: ({ milestoneId, personId, hours }: { milestoneId: number; personId: number; hours: number }) =>
-      projects.updatePersonBudget(projectId, milestoneId, personId, hours),
-    onSuccess: () => { invalidateMilestones(); setEditBudget(null) },
-    onError: (e: Error) => setError(e.message),
+    mutationFn: ({ milestoneId, personId, hours, confirm }: { milestoneId: number; personId: number; hours: number; confirm?: boolean }) =>
+      projects.updatePersonBudget(projectId, milestoneId, personId, hours, confirm),
+    onSuccess: () => {
+      invalidateMilestones()
+      setEditBudget(null)
+      setBudgetWarnings([])
+      setBudgetNeedsConfirm(false)
+    },
+    onError: (e: unknown) => {
+      // Budget overrun without confirm → 409 with a warnings payload (V6, §8.2).
+      if (e instanceof ApiError && e.status === 409) {
+        const body = e.body as { detail?: { warnings?: string[] } }
+        setBudgetWarnings(body?.detail?.warnings ?? ['Budget würde überschritten.'])
+        setBudgetNeedsConfirm(true)
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
   })
   const applyRebalancing = useMutation({
     mutationFn: () => projects.applyRebalancing(projectId),
@@ -544,23 +570,66 @@ export default function ProjectDetailPage() {
             }),
             { initial: 0, current: 0, planEuros: 0, currentEuros: 0 },
           )
+          const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
+          const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
+            const ms = new Date(y, mo - 1, 1)
+            const me = new Date(y, mo, 0)
+            return new Date(m.from_date) <= me && new Date(m.to_date) >= ms
+          }
+          // "veraltet": an open milestone is missing a budget row for a member active that
+          // month (member added/changed after the last (re)initialization) → resync needed.
+          const isStale = milestonesDetail.some((d) =>
+            !d.milestone.is_locked &&
+            memberships.some((m) => overlapsMonth(m, d.milestone.year, d.milestone.month)
+              && !d.persons.some((p) => p.person_id === m.person_id)))
           return (
             <div>
               <div className="flex justify-between items-center mb-4">
-                <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
-                <button onClick={() => {
-                  if (memberships.length === 0) {
-                    setError('Bitte zuerst Mitglieder anlegen, bevor Meilensteine initialisiert werden.')
-                  } else if (milestonesDetail.length > 0) {
-                    setShowReinitConfirm(true)
-                  } else {
-                    initMilestones.mutate(false)
-                  }
-                }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                  <RefreshCw size={14} /> Initialisieren
-                </button>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
+                  {isStale && (
+                    <span title="Mitglieder wurden nach der letzten Initialisierung geändert. Resync gleicht die offenen Meilensteine an (manuelle Anpassungen bleiben erhalten)."
+                      className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                      veraltet
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {milestonesDetail.length > 0 && (
+                    <button onClick={() => resyncMilestones.mutate()}
+                      title="Offene Meilensteine an den aktuellen Mitglieder-Stand angleichen (nicht-destruktiv, manuelle Anpassungen bleiben erhalten)."
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                      <RotateCcw size={14} /> Resync
+                    </button>
+                  )}
+                  <button onClick={() => {
+                    if (memberships.length === 0) {
+                      setError('Bitte zuerst Mitglieder anlegen, bevor Meilensteine initialisiert werden.')
+                    } else if (milestonesDetail.length > 0) {
+                      setShowReinitConfirm(true)
+                    } else {
+                      initMilestones.mutate(false)
+                    }
+                  }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                    <RefreshCw size={14} /> Initialisieren
+                  </button>
+                </div>
               </div>
+              {recommendations.length > 0 && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                  <p className="font-medium mb-1">Auslastungs-Empfehlungen</p>
+                  <ul className="list-disc list-inside space-y-0.5 text-xs">
+                    {recommendations.map((r) => (
+                      <li key={r.person_id}>
+                        <strong>{r.person_name}</strong> hat noch {r.free_weekly_hours.toFixed(1)} h/Woche freie Kapazität —
+                        Projekt-Wochenstunden könnten um bis zu {r.recommended_additional_hours.toFixed(1)} h erhöht werden
+                        (Budget-Spielraum: {r.budget_headroom_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })}).
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
@@ -591,12 +660,23 @@ export default function ProjectDetailPage() {
                       const eurPct = currentEuros > 0 ? Math.min(150, (bookedEuros / currentEuros) * 100) : 0
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       const fmtEur = (n: number) => n > 0 ? n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : null
+                      const sug = suggestionByMs.get(ms.id)
+                      const rebalDelta = sug ? sug.suggested_total_hours - ms.current_hours : 0
                       return [
                         <tr key={ms.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(ms.id)}>
                           <td className="px-4 py-3 text-gray-400">
                             {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                           </td>
-                          <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[ms.month]} {ms.year}</td>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-700">
+                            <div className="flex items-center gap-1.5">
+                              <span>{MONTH_NAMES[ms.month]} {ms.year}</span>
+                              {d.warnings.length > 0 && (
+                                <span title={d.warnings.join('\n')} className="text-amber-500" aria-label="Warnung">
+                                  <Flag size={12} />
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td className="px-4 py-3 text-sm text-gray-600">{ms.initial_hours.toFixed(1)} h</td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
@@ -612,6 +692,11 @@ export default function ProjectDetailPage() {
                                   </span>
                                 )}
                               </div>
+                              {sug && !ms.is_locked && Math.abs(rebalDelta) > 0.1 && (
+                                <div className="mt-1 text-[11px] text-amber-600" title="Vorschlag aus dem Rebalancing (Budget-Ausschöpfung). Im Tab Rebalancing anwenden.">
+                                  Rebalanciert: {sug.suggested_total_hours.toFixed(1)} h ({rebalDelta > 0 ? '+' : ''}{rebalDelta.toFixed(1)})
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-600">
@@ -710,7 +795,15 @@ export default function ProjectDetailPage() {
                                           title={planOverbooked ? 'Überbucht: Plan übersteigt verfügbare Kapazität' : planUnderbooked ? 'Unterbucht: Plan liegt unter verfügbarer Kapazität' : undefined}>
                                         {p.initial_hours.toFixed(1)} h
                                       </td>
-                                      <td className="px-4 py-2 text-gray-700 font-medium">{p.current_hours.toFixed(1)} h</td>
+                                      <td className="px-4 py-2 text-gray-700 font-medium">
+                                        {p.current_hours.toFixed(1)} h
+                                        {p.is_manual_override && (
+                                          <span title="Manuell angepasst — bleibt beim Resync erhalten"
+                                            className="ml-1.5 px-1 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700 align-middle">
+                                            M
+                                          </span>
+                                        )}
+                                      </td>
                                       <td className="px-4 py-2 text-gray-500">{(p.booked_hours ?? 0).toFixed(1)} h</td>
                                       <td className="px-4 py-2 text-gray-600 font-medium">
                                         {effPws !== null ? `${effPws.toFixed(1)} h/W` : <span className="text-gray-300">–</span>}
@@ -816,7 +909,8 @@ export default function ProjectDetailPage() {
               {suggestions.map((s) => (
                 <div key={s.milestone_id} className="mb-4 bg-white rounded-lg border border-gray-200 overflow-hidden">
                   <div className="px-4 py-2 bg-gray-50 text-sm font-medium text-gray-700 border-b">
-                    {MONTH_NAMES[s.month]} {s.year} · Gesamt: {s.total_current_hours.toFixed(1)} h
+                    {MONTH_NAMES[s.month]} {s.year} · Aktuell: {s.total_current_hours.toFixed(1)} h
+                    <span className="text-blue-600"> · Vorschlag: {s.suggested_total_hours.toFixed(1)} h</span>
                   </div>
                   <table className="min-w-full divide-y divide-gray-100">
                     <thead>
@@ -1020,11 +1114,19 @@ export default function ProjectDetailPage() {
                   { key: 'weekly_capacity_hours', header: 'h/Woche', render: (m: ProjectMembership) => `${m.weekly_capacity_hours} h` },
                   { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => `${m.billing_rate_per_hour} €` },
                   {
+                    key: 'priority', header: 'Priorität',
+                    render: (m: ProjectMembership) => (
+                      <span title="Budget-Priorität: kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral">
+                        {m.priority === 0 ? <span className="text-gray-300">–</span> : m.priority}
+                      </span>
+                    ),
+                  },
+                  {
                     key: 'actions', header: '',
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour }); setError(null) }}
+                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
@@ -1285,8 +1387,10 @@ export default function ProjectDetailPage() {
       )}
 
       {/* Edit person budget modal */}
-      {editBudget && (
-        <Modal title={`Stunden anpassen — ${editBudget.personName}`} onClose={() => setEditBudget(null)}>
+      {editBudget && (() => {
+        const closeEdit = () => { setEditBudget(null); setBudgetWarnings([]); setBudgetNeedsConfirm(false) }
+        return (
+        <Modal title={`Stunden anpassen — ${editBudget.personName}`} onClose={closeEdit}>
           <form onSubmit={(e) => { e.preventDefault(); updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours }) }} className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Aktuelle Stunden</label>
@@ -1295,19 +1399,34 @@ export default function ProjectDetailPage() {
                 required type="number" min={0} step={0.01}
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 value={editHours}
-                onChange={(e) => setEditHours(parseFloat(e.target.value))}
+                onChange={(e) => { setEditHours(parseFloat(e.target.value)); setBudgetNeedsConfirm(false); setBudgetWarnings([]) }}
               />
             </div>
+            {budgetWarnings.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                <p className="font-medium mb-1">{budgetNeedsConfirm ? 'Bestätigung erforderlich' : 'Hinweis'}</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {budgetWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            )}
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => setEditBudget(null)}
+              <button type="button" onClick={closeEdit}
                 className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-              <button type="submit"
-                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+              {budgetNeedsConfirm ? (
+                <button type="button"
+                  onClick={() => updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours, confirm: true })}
+                  className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700">Trotzdem speichern</button>
+              ) : (
+                <button type="submit"
+                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+              )}
             </div>
           </form>
         </Modal>
-      )}
+        )
+      })()}
 
       {/* Reopen invoice confirmation */}
       {confirmReopenId !== null && (
@@ -1407,6 +1526,15 @@ export default function ProjectDetailPage() {
                   onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
               </div>
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
+              </label>
+              <input type="number" step={1}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={addMemberForm.priority}
+                onChange={(e) => setAddMemberForm({ ...addMemberForm, priority: parseInt(e.target.value) || 0 })} />
+            </div>
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={() => { setShowAddMember(false); setError(null) }}
@@ -1452,6 +1580,15 @@ export default function ProjectDetailPage() {
                   value={editMemberForm.billing_rate_per_hour}
                   onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
+              </label>
+              <input type="number" step={1}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={editMemberForm.priority}
+                onChange={(e) => setEditMemberForm({ ...editMemberForm, priority: parseInt(e.target.value) || 0 })} />
             </div>
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
