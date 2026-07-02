@@ -14,6 +14,7 @@ from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
 from app.services.milestones import (
+    BudgetConfirmationRequired,
     BudgetNotFound,
     MilestoneLocked,
     MilestoneNotFound,
@@ -24,9 +25,9 @@ from app.services.milestones import (
     _person_available_hours,
     get_milestone_budgets,
     initialize_milestones,
+    manual_budget_update,
+    manual_budget_update_by_person,
     resync_milestones,
-    update_person_budget,
-    update_person_budget_by_person,
 )
 
 router = APIRouter(prefix="/projects", tags=["milestones"])
@@ -64,6 +65,17 @@ class ResyncResultOut(SQLModel):
     removed: int
     recomputed: int
     changed_milestone_ids: list[int]
+
+
+class BudgetUpdateOut(SQLModel):
+    """A budget row plus any informational warnings from a manual edit (V6)."""
+    id: int
+    milestone_id: int
+    person_id: int
+    initial_hours: float
+    current_hours: float
+    is_manual_override: bool
+    warnings: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -233,9 +245,21 @@ def list_budgets(project_id: int, milestone_id: int, session: SessionDep):
     return get_milestone_budgets(milestone_id, session)
 
 
+def _budget_out(budget: MilestonePersonBudget, warnings: list[str]) -> "BudgetUpdateOut":
+    return BudgetUpdateOut(
+        id=budget.id,
+        milestone_id=budget.milestone_id,
+        person_id=budget.person_id,
+        initial_hours=budget.initial_hours,
+        current_hours=budget.current_hours,
+        is_manual_override=budget.is_manual_override,
+        warnings=warnings,
+    )
+
+
 @router.put(
     "/{project_id}/milestones/{milestone_id}/budgets/{budget_id}",
-    response_model=MilestonePersonBudget,
+    response_model=BudgetUpdateOut,
 )
 def put_budget(
     project_id: int,
@@ -243,24 +267,35 @@ def put_budget(
     budget_id: int,
     body: BudgetUpdate,
     session: SessionDep,
+    confirm: bool = False,
 ):
+    """Manually set a person's current_hours (V6, §8.2).
+
+    Without `confirm`, a change that would exceed the project euro budget returns HTTP 409
+    with a `warnings` body and is NOT saved. With `confirm=true` it is saved anyway and the
+    row is flagged as a manual override. Exceeding available capacity only warns (soft).
+    """
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        budget, _ = update_person_budget(milestone_id, budget_id, body.current_hours, session)
+        budget, _, warnings = manual_budget_update(
+            milestone_id, budget_id, body.current_hours, session, confirm=confirm
+        )
+    except BudgetConfirmationRequired as exc:
+        raise HTTPException(409, {"message": "Confirmation required.", "warnings": exc.warnings}) from exc
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return budget
+    return _budget_out(budget, warnings)
 
 
 @router.put(
     "/{project_id}/milestones/{milestone_id}/persons/{person_id}",
-    response_model=MilestonePersonBudget,
+    response_model=BudgetUpdateOut,
 )
 def put_person_budget(
     project_id: int,
@@ -268,17 +303,25 @@ def put_person_budget(
     person_id: int,
     body: BudgetUpdate,
     session: SessionDep,
+    confirm: bool = False,
 ):
-    """Update a person's current_hours within a milestone (by person_id)."""
+    """Update a person's current_hours within a milestone by person_id (V6, §8.2).
+
+    Same confirmation semantics as the budget-id variant.
+    """
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        budget, _ = update_person_budget_by_person(milestone_id, person_id, body.current_hours, session)
+        budget, _, warnings = manual_budget_update_by_person(
+            milestone_id, person_id, body.current_hours, session, confirm=confirm
+        )
+    except BudgetConfirmationRequired as exc:
+        raise HTTPException(409, {"message": "Confirmation required.", "warnings": exc.warnings}) from exc
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return budget
+    return _budget_out(budget, warnings)

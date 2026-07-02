@@ -52,6 +52,15 @@ class NoActiveMembership(Exception):
     lives in the backend, not only in the UI."""
 
 
+class BudgetConfirmationRequired(Exception):
+    """Raised when a manual budget edit would exceed the project euro budget and no
+    explicit confirmation was given (§8.2, V6). Carries the warnings for the UI dialog."""
+
+    def __init__(self, warnings: list[str]) -> None:
+        self.warnings = warnings
+        super().__init__("; ".join(warnings))
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -502,10 +511,13 @@ def update_person_budget(
     budget_id: int,
     new_hours: float,
     session: Session,
+    *,
+    mark_override: bool = False,
 ) -> tuple[MilestonePersonBudget, Milestone]:
     """Update a person's current_hours budget and sync Milestone.current_hours.
 
-    Raises MilestoneLocked if the milestone is locked.
+    When mark_override=True the row is flagged is_manual_override so resync preserves it
+    (V5). Raises MilestoneLocked if the milestone is locked.
     Raises MilestoneNotFound / BudgetNotFound for missing records.
     Raises ValueError if new_hours < 0 or the budget does not belong to the milestone.
     """
@@ -523,6 +535,8 @@ def update_person_budget(
         raise ValueError("Budget hours cannot be negative.")
 
     budget.current_hours = new_hours
+    if mark_override:
+        budget.is_manual_override = True
 
     all_budgets = session.exec(
         select(MilestonePersonBudget).where(
@@ -555,6 +569,146 @@ def update_person_budget_by_person(
     if not budget:
         raise BudgetNotFound(f"No budget for person {person_id} in milestone {milestone_id}.")
     return update_person_budget(milestone_id, budget.id, new_hours, session)
+
+
+# ---------------------------------------------------------------------------
+# Manual adjustment with confirmation (V6, §8.2, WP5)
+# ---------------------------------------------------------------------------
+
+
+def _projected_budget_after_edit(
+    milestone: Milestone,
+    budget: MilestonePersonBudget,
+    new_hours: float,
+    session: Session,
+) -> tuple[float, float]:
+    """Return (projected_total_cost, budget_euros) if `budget.current_hours` becomes
+    `new_hours`. Projected = invoiced (locked, Ist) + planned cost of all OPEN milestones,
+    with the edited row substituted. Budget is the project euro budget (B1, §8.2)."""
+    from app.models.invoice import MonthlyInvoice
+
+    project = session.get(Project, milestone.project_id)
+    budget_euros = project.total_budget_euros if project else 0.0
+
+    rate_map = {
+        m.person_id: m.billing_rate_per_hour
+        for m in session.exec(
+            select(ProjectMembership).where(ProjectMembership.project_id == milestone.project_id)
+        ).all()
+    }
+
+    invoiced = session.exec(
+        select(func.coalesce(func.sum(MonthlyInvoice.total_amount_euros), 0.0)).where(
+            MonthlyInvoice.project_id == milestone.project_id
+        )
+    ).one()
+    projected = float(invoiced or 0.0)
+
+    open_ms = session.exec(
+        select(Milestone).where(
+            Milestone.project_id == milestone.project_id,
+            Milestone.is_locked == False,  # noqa: E712
+        )
+    ).all()
+    for ms in open_ms:
+        for b in session.exec(
+            select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
+        ).all():
+            hrs = new_hours if b.id == budget.id else b.current_hours
+            projected += hrs * rate_map.get(b.person_id, 0.0)
+
+    return projected, budget_euros
+
+
+def manual_budget_update(
+    milestone_id: int,
+    budget_id: int,
+    new_hours: float,
+    session: Session,
+    *,
+    confirm: bool = False,
+) -> tuple[MilestonePersonBudget, Milestone, list[str]]:
+    """Manual budget edit with budget/capacity validation (V6, §8.2, BUG-6).
+
+    * new_hours < 0                → ValueError.
+    * new_hours > available (avail) → soft warning only; the save proceeds (leadership may
+      deliberately overbook a manual override, §9.2).
+    * would exceed the project euro budget → without `confirm`, raise
+      BudgetConfirmationRequired (HTTP 409, no save); with `confirm=True`, save anyway.
+    * every successful manual edit sets is_manual_override=True so resync preserves it.
+
+    Returns (budget, milestone, warnings). warnings are informational (avail/budget notes
+    that accompanied a confirmed save).
+    """
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone:
+        raise MilestoneNotFound(f"Milestone {milestone_id} not found.")
+    if milestone.is_locked:
+        raise MilestoneLocked(f"Milestone {milestone_id} is locked.")
+
+    budget = session.get(MilestonePersonBudget, budget_id)
+    if not budget or budget.milestone_id != milestone_id:
+        raise BudgetNotFound(f"Budget {budget_id} not found in milestone {milestone_id}.")
+
+    if new_hours < 0:
+        raise ValueError("Budget hours cannot be negative.")
+
+    warnings: list[str] = []
+
+    # Soft capacity warning (B2 stays hard only for the automatic distribution, §9.2).
+    project = session.get(Project, milestone.project_id)
+    membership = session.exec(
+        select(ProjectMembership).where(
+            ProjectMembership.project_id == milestone.project_id,
+            ProjectMembership.person_id == budget.person_id,
+        )
+    ).first()
+    person = session.get(Person, budget.person_id)
+    if project and membership and person:
+        avail = _person_available_hours(
+            person, membership, project, milestone.year, milestone.month, session
+        ).hours
+        if new_hours > avail + 1e-6:
+            warnings.append(
+                f"Über verfügbarer Kapazität: {new_hours:.1f} h geplant, "
+                f"aber nur {avail:.1f} h verfügbar."
+            )
+
+    # Budget guard (B1): requires confirmation on overrun.
+    projected, budget_euros = _projected_budget_after_edit(milestone, budget, new_hours, session)
+    if budget_euros > 0 and projected > budget_euros + 1e-6:
+        budget_warning = (
+            f"Budget würde überschritten: geplant {projected:.2f} € > "
+            f"Budget {budget_euros:.2f} € (Δ {projected - budget_euros:.2f} €)."
+        )
+        if not confirm:
+            raise BudgetConfirmationRequired(warnings + [budget_warning])
+        warnings.append(budget_warning)
+
+    budget, milestone = update_person_budget(
+        milestone_id, budget_id, new_hours, session, mark_override=True
+    )
+    return budget, milestone, warnings
+
+
+def manual_budget_update_by_person(
+    milestone_id: int,
+    person_id: int,
+    new_hours: float,
+    session: Session,
+    *,
+    confirm: bool = False,
+) -> tuple[MilestonePersonBudget, Milestone, list[str]]:
+    """manual_budget_update resolved by person_id (detail-view convenience)."""
+    budget = session.exec(
+        select(MilestonePersonBudget).where(
+            MilestonePersonBudget.milestone_id == milestone_id,
+            MilestonePersonBudget.person_id == person_id,
+        )
+    ).first()
+    if not budget:
+        raise BudgetNotFound(f"No budget for person {person_id} in milestone {milestone_id}.")
+    return manual_budget_update(milestone_id, budget.id, new_hours, session, confirm=confirm)
 
 
 # ---------------------------------------------------------------------------

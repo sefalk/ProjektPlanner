@@ -206,6 +206,58 @@ def test_update_budget(client):
     assert r.json()["current_hours"] == 100.0
 
 
+def test_update_budget_sets_override_flag(client):
+    """A manual edit flags the row as an override and echoes an (empty) warnings list (V6)."""
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    budget = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{budget['id']}",
+        json={"current_hours": 10.0},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_manual_override"] is True
+    assert body["warnings"] == []
+
+
+def test_update_budget_over_budget_requires_confirm(client):
+    """Exceeding the euro budget without confirm → 409 with warnings, no save (§8.2)."""
+    proj_id, _ = _setup(client)  # budget 50000 €, rate 90 €/h
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    budget = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{budget['id']}",
+        json={"current_hours": 2000.0},  # 2000×90 = 180000 » 50000
+    )
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["warnings"]
+    assert any("Budget" in w for w in detail["warnings"])
+
+    # Not saved.
+    after = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+    assert after["current_hours"] != 2000.0
+    assert after["is_manual_override"] is False
+
+
+def test_update_budget_over_budget_with_confirm_saves(client):
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    budget = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{budget['id']}?confirm=true",
+        json={"current_hours": 2000.0},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["current_hours"] == 2000.0
+    assert body["is_manual_override"] is True
+    assert any("Budget" in w for w in body["warnings"])
+
+
 def test_update_budget_syncs_milestone(client):
     proj_id, _ = _setup(client)
     ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
