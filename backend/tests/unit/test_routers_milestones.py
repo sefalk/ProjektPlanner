@@ -85,6 +85,29 @@ def test_resync_adds_new_member_scaled(client):
     assert all(len(d["persons"]) == 2 for d in detail)
 
 
+def test_recommendations_project_not_found(client):
+    assert client.get("/projects/9999/milestones/recommendations").status_code == 404
+
+
+def test_recommendations_endpoint_returns_underbooked_member(client):
+    """A member using less than their general weekly capacity yields a recommendation (V8)."""
+    proj = client.post("/projects", json=_project("PREC01")).json()
+    person = client.post("/persons", json=_person()).json()
+    # 20 of 40 h/week used → 20 h free.
+    client.post(f"/projects/{proj['id']}/memberships", json={
+        **_membership(proj["id"], person["id"]), "weekly_capacity_hours": 20.0,
+    })
+    client.post(f"/projects/{proj['id']}/milestones/initialize")
+
+    r = client.get(f"/projects/{proj['id']}/milestones/recommendations")
+    assert r.status_code == 200
+    recs = r.json()
+    assert len(recs) == 1
+    assert recs[0]["person_id"] == person["id"]
+    assert recs[0]["free_weekly_hours"] == 20.0
+    assert recs[0]["recommended_additional_hours"] > 0
+
+
 def test_detail_zero_hours_month_flagged(client):
     """A month with personnel but zero planned hours is flagged with a warning (§8.1)."""
     proj_id, person_id = _setup(client)

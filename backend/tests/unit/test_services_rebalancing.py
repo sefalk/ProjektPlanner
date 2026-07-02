@@ -9,7 +9,12 @@ from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import ImportBatch, SageProjectMapping, TimeBooking
 from app.services.milestones import initialize_milestones
-from app.services.rebalancing import apply_rebalancing, compute_drift, suggest_rebalancing
+from app.services.rebalancing import (
+    apply_rebalancing,
+    compute_drift,
+    compute_recommendations,
+    suggest_rebalancing,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -277,3 +282,120 @@ def test_apply_rebalancing_idempotent(session):
 
     for bid in updated1:
         assert updated1[bid] == pytest.approx(updated2[bid])
+
+
+# ---------------------------------------------------------------------------
+# WP6: budget-oriented, drift-aware rebalancing (V7, BUG-9/10)
+# ---------------------------------------------------------------------------
+
+
+def _suggested_cost(session, project_id):
+    rates = {m.person_id: m.billing_rate_per_hour for m in session.exec(
+        __import__("sqlmodel").select(ProjectMembership).where(
+            ProjectMembership.project_id == project_id)).all()}
+    total = 0.0
+    for s in suggest_rebalancing(project_id, session):
+        for b in s.budgets:
+            total += b.suggested_hours * rates.get(b.person_id, 0.0)
+    return total
+
+
+def test_suggest_rebalancing_maxes_out_binding_budget(session):
+    """With a binding budget, the suggested plan cost reaches R without exceeding it (B1)."""
+    proj = _project(session, number="RBBIND")
+    proj.total_budget_euros = 10000.0  # small → binds
+    session.add(proj)
+    a = _person(session, "Alice")
+    b = _person(session, "Bob")
+    _membership(session, proj.id, a.id, weekly_hours=40.0)
+    _membership(session, proj.id, b.id, weekly_hours=40.0)
+    session.commit()
+    initialize_milestones(proj.id, session)
+
+    cost = _suggested_cost(session, proj.id)
+    assert cost <= 10000.0 + 1e-6
+    assert cost == pytest.approx(10000.0, rel=1e-3)  # maximally used
+
+
+def test_suggest_rebalancing_drift_reduces_plan(session):
+    """Already-booked hours in open months reduce the distributable budget (BUG-10)."""
+    proj = _project(session, number="RBDRIFT")
+    proj.total_budget_euros = 30000.0  # binds
+    session.add(proj)
+    a = _person(session, "Alice")
+    b = _person(session, "Bob")
+    _membership(session, proj.id, a.id, weekly_hours=40.0)
+    _membership(session, proj.id, b.id, weekly_hours=40.0)
+    session.commit()
+    initialize_milestones(proj.id, session)
+
+    cost_before = _suggested_cost(session, proj.id)
+    # Book 100 h in January (an open month) → 100×90 = 9000 € consumed.
+    _booking(session, proj.id, a.id, date(2026, 1, 15), 100.0)
+    session.commit()
+    cost_after = _suggested_cost(session, proj.id)
+
+    assert cost_after < cost_before - 1.0  # plan shrank by roughly the booked cost
+    assert cost_after == pytest.approx(30000.0 - 9000.0, rel=1e-2)
+
+
+def test_suggest_rebalancing_preserves_override(session):
+    proj, alice, bob = _setup(session)
+    ms_jan = session.exec(__import__("sqlmodel").select(Milestone).where(
+        Milestone.project_id == proj.id, Milestone.month == 1)).first()
+    alice_jan = session.exec(__import__("sqlmodel").select(MilestonePersonBudget).where(
+        MilestonePersonBudget.milestone_id == ms_jan.id,
+        MilestonePersonBudget.person_id == alice.id)).first()
+    alice_jan.current_hours = 7.0
+    alice_jan.is_manual_override = True
+    session.add(alice_jan)
+    session.commit()
+
+    for s in suggest_rebalancing(proj.id, session):
+        for b in s.budgets:
+            if b.budget_id == alice_jan.id:
+                assert b.suggested_hours == pytest.approx(7.0)  # override kept
+
+
+# ---------------------------------------------------------------------------
+# WP6: utilization recommendations (V8, B4)
+# ---------------------------------------------------------------------------
+
+
+def test_recommendations_for_underbooked_member(session):
+    proj = _project(session, number="RECREC")  # budget 50000, headroom present
+    a = _person(session, "Alice")
+    _membership(session, proj.id, a.id, weekly_hours=20.0)  # 20 of 40 h/week used
+    session.commit()
+    initialize_milestones(proj.id, session)
+
+    recs = compute_recommendations(proj.id, session)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec.person_id == a.id
+    assert rec.free_weekly_hours == pytest.approx(20.0)
+    assert rec.budget_headroom_euros > 0
+    assert rec.recommended_additional_hours > 0
+
+
+def test_recommendations_none_when_fully_committed(session):
+    proj = _project(session, number="RECFULL")
+    a = _person(session, "Alice")
+    _membership(session, proj.id, a.id, weekly_hours=40.0)  # 40 of 40 → no free capacity
+    session.commit()
+    initialize_milestones(proj.id, session)
+
+    assert compute_recommendations(proj.id, session) == []
+
+
+def test_recommendations_none_when_no_budget_headroom(session):
+    proj = _project(session, number="RECNOB")
+    proj.total_budget_euros = 100.0  # tiny budget → no meaningful headroom
+    session.add(proj)
+    a = _person(session, "Alice")
+    _membership(session, proj.id, a.id, weekly_hours=20.0)
+    session.commit()
+    initialize_milestones(proj.id, session)
+
+    # Budget is essentially consumed by the plan → recommendation capped away.
+    assert compute_recommendations(proj.id, session) == []

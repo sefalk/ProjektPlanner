@@ -13,6 +13,7 @@ from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
+from app.services.rebalancing import UtilizationRecommendation, compute_recommendations
 from app.services.milestones import (
     BudgetConfirmationRequired,
     BudgetNotFound,
@@ -208,6 +209,19 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         result.append(MilestoneDetailOut(milestone=ms, persons=persons_out, warnings=warnings))
 
     return result
+
+
+@router.get(
+    "/{project_id}/milestones/recommendations",
+    response_model=list[UtilizationRecommendation],
+)
+def get_recommendations(project_id: int, session: SessionDep):
+    """Utilization recommendations (V8, B4): where a member still has untapped general
+    weekly capacity and the project has budget headroom, suggest raising the project
+    weekly hours. Informational only."""
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+    return compute_recommendations(project_id, session)
 
 
 @router.get("/{project_id}/milestones", response_model=list[Milestone])
