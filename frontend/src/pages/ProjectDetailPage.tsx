@@ -8,6 +8,9 @@ import {
 } from '../api'
 import Modal from '../components/Modal'
 import Table from '../components/Table'
+import PageIntro from '../components/PageIntro'
+import HelpPopover from '../components/HelpPopover'
+import { MILESTONE_INTRO, MilestoneHelpContent } from '../content/milestoneHelp'
 
 const MONTH_NAMES = [
   '', 'Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
@@ -584,6 +587,11 @@ export default function ProjectDetailPage() {
               && !d.persons.some((p) => p.person_id === m.person_id)))
           return (
             <div>
+              <PageIntro
+                text={MILESTONE_INTRO}
+                helpTitle="Meilenstein-Planung — Hilfe"
+                helpContent={<MilestoneHelpContent />}
+              />
               <div className="flex justify-between items-center mb-4">
                 <div className="flex items-center gap-2">
                   <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
@@ -636,7 +644,14 @@ export default function ProjectDetailPage() {
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-6"></th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monat</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Geplante Stunden bei Initialisierung (verfügbare Kapazität × Budget-Skalierung)">Plan (Std.)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        <span className="inline-flex items-center gap-1">
+                          Plan (Std.)
+                          <HelpPopover label="Plan-Stunden erklären">
+                            Baseline bei Anlage: Verfügbar × s, mit s = min(1, Restbudget / Kosten bei voller Kapazität).
+                          </HelpPopover>
+                        </span>
+                      </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Stunden inkl. manueller Anpassungen. Fortschrittsbalken = gebuchte / geplante Stunden.">Aktuell (Std.)</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Budgetanteil dieses Monats in €: Summe(Plan-Std. × Stundensatz)">Plan (€)</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Kosten: Summe(Aktuell-Std. × Stundensatz)">Aktuell (€)</th>
