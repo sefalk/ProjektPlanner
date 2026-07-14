@@ -239,6 +239,37 @@ def update_invoice_status(
     return invoice
 
 
+def update_invoice_amount(
+    invoice_id: int,
+    total_amount_euros: float,
+    total_hours: float | None,
+    session: Session,
+) -> MonthlyInvoice:
+    """Adjust the invoiced (Ist) amount of a closed month to keep it in sync with the
+    external billing system (F4). The corrected amount is what actually consumed the
+    budget, so it feeds the remaining-budget calculation R (§9.3).
+
+    Raises:
+        InvoiceNotFoundError: invoice does not exist
+        ValueError: negative amount/hours
+    """
+    invoice = session.get(MonthlyInvoice, invoice_id)
+    if not invoice:
+        raise InvoiceNotFoundError(f"Invoice {invoice_id} not found.")
+    if total_amount_euros < 0:
+        raise ValueError("Invoice amount cannot be negative.")
+    if total_hours is not None and total_hours < 0:
+        raise ValueError("Invoice hours cannot be negative.")
+
+    invoice.total_amount_euros = total_amount_euros
+    if total_hours is not None:
+        invoice.total_hours = total_hours
+    session.add(invoice)
+    session.commit()
+    session.refresh(invoice)
+    return invoice
+
+
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
