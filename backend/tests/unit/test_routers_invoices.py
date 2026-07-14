@@ -183,37 +183,3 @@ def test_status_update_invalid_transition_returns_409(client):
 def test_status_update_not_found(client):
     r = client.put("/invoices/9999/status", json={"status": "invoiced"})
     assert r.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# PUT /invoices/{id}/amount  (external billing sync, F4)
-# ---------------------------------------------------------------------------
-
-
-def test_amount_update_syncs_ist(client):
-    proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
-    r = client.put(f"/invoices/{inv['id']}/amount", json={"total_amount_euros": 12345.67, "total_hours": 137.0})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["total_amount_euros"] == 12345.67
-    assert body["total_hours"] == 137.0
-
-
-def test_amount_update_amount_only(client):
-    proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
-    r = client.put(f"/invoices/{inv['id']}/amount", json={"total_amount_euros": 5000.0})
-    assert r.status_code == 200
-    assert r.json()["total_amount_euros"] == 5000.0
-
-
-def test_amount_update_negative_returns_422(client):
-    proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
-    r = client.put(f"/invoices/{inv['id']}/amount", json={"total_amount_euros": -1.0})
-    assert r.status_code == 422
-
-
-def test_amount_update_not_found(client):
-    assert client.put("/invoices/9999/amount", json={"total_amount_euros": 100.0}).status_code == 404

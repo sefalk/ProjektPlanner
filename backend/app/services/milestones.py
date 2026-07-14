@@ -711,6 +711,89 @@ def manual_budget_update_by_person(
     return manual_budget_update(milestone_id, budget.id, new_hours, session, confirm=confirm)
 
 
+def set_milestone_target_budget(
+    project_id: int,
+    milestone_id: int,
+    target_euros: float,
+    session: Session,
+) -> tuple[Milestone, float, list[str]]:
+    """Set an explicit € target for one month and (re)distribute the members' hours to
+    hit it (B1: € leads, hours follow, capped by available capacity and priority).
+
+    The target mirrors the external billing system. The month's per-person rows are set to
+    the distributed plan and flagged is_manual_override so a later global resync/rebalance
+    preserves them. Returns (milestone, achieved_euros, warnings). achieved_euros < target
+    (with a warning) when the available capacity cannot absorb the full target.
+
+    Raises MilestoneNotFound, MilestoneLocked, ValueError (negative target).
+    """
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone or milestone.project_id != project_id:
+        raise MilestoneNotFound(f"Milestone {milestone_id} not found in project {project_id}.")
+    if milestone.is_locked:
+        raise MilestoneLocked(f"Milestone {milestone_id} is locked.")
+    if target_euros < 0:
+        raise ValueError("Target budget cannot be negative.")
+
+    project = session.get(Project, project_id)
+    memberships = session.exec(
+        select(ProjectMembership).where(ProjectMembership.project_id == project_id)
+    ).all()
+    rate_map = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    priorities = {m.person_id: m.priority for m in memberships}
+
+    month_start, month_end = _month_bounds(milestone.year, milestone.month)
+    active = [m for m in memberships if m.from_date <= month_end and m.to_date >= month_start]
+
+    # Available net capacity per active member this month.
+    avail_map: dict[SlotKey, float] = {}
+    for m in active:
+        person = session.get(Person, m.person_id)
+        if person is None:
+            continue
+        avail = _person_available_hours(person, m, project, milestone.year, milestone.month, session).hours
+        if avail > 0:
+            avail_map[(m.person_id, (milestone.year, milestone.month))] = avail
+
+    plan = distribute_budget(avail_map, rate_map, priorities, target_euros)
+    achieved = sum(hours * rate_map.get(pid, 0.0) for (pid, _ym), hours in plan.items())
+
+    # Apply the plan: upsert a manual-override row per active member.
+    existing = {
+        b.person_id: b
+        for b in session.exec(
+            select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == milestone_id)
+        ).all()
+    }
+    for m in active:
+        hours = plan.get((m.person_id, (milestone.year, milestone.month)), 0.0)
+        row = existing.get(m.person_id)
+        if row is None:
+            session.add(MilestonePersonBudget(
+                milestone_id=milestone_id, person_id=m.person_id,
+                initial_hours=hours, current_hours=hours, is_manual_override=True,
+            ))
+        else:
+            row.current_hours = hours
+            row.is_manual_override = True
+            session.add(row)
+
+    milestone.target_budget_euros = target_euros
+    session.add(milestone)
+    session.flush()
+    _resync_milestone_totals(milestone, session)
+    session.commit()
+    session.refresh(milestone)
+
+    warnings: list[str] = []
+    if achieved < target_euros - 1e-6:
+        warnings.append(
+            f"Ziel-Budget übersteigt die verfügbare Kapazität dieses Monats — "
+            f"nur {achieved:.2f} € von {target_euros:.2f} € planbar."
+        )
+    return milestone, achieved, warnings
+
+
 # ---------------------------------------------------------------------------
 # Referential actions (V11) — keep milestones consistent when memberships or the
 # project range change. Locked (invoiced) months are ALWAYS protected.

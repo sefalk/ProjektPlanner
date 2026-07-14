@@ -15,7 +15,6 @@ from app.services.invoices import (
     close_month,
     get_invoice_entries,
     reopen_month,
-    update_invoice_amount,
     update_invoice_status,
 )
 
@@ -32,11 +31,6 @@ class CloseRequest(SQLModel):
 
 class StatusUpdate(SQLModel):
     status: InvoiceStatus
-
-
-class AmountUpdate(SQLModel):
-    total_amount_euros: float = Field(ge=0)
-    total_hours: float | None = Field(default=None, ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -109,15 +103,3 @@ def set_status(invoice_id: int, body: StatusUpdate, session: SessionDep):
         raise HTTPException(404, str(exc)) from exc
     except InvalidStatusTransitionError as exc:
         raise HTTPException(409, str(exc)) from exc
-
-
-@router.put("/invoices/{invoice_id}/amount", response_model=MonthlyInvoice)
-def set_amount(invoice_id: int, body: AmountUpdate, session: SessionDep):
-    """Adjust the invoiced (Ist) amount of a closed month to sync with the external
-    billing system (F4). Feeds the remaining-budget calculation."""
-    try:
-        return update_invoice_amount(invoice_id, body.total_amount_euros, body.total_hours, session)
-    except InvoiceNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc

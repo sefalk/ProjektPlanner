@@ -29,6 +29,7 @@ from app.services.milestones import (
     manual_budget_update,
     manual_budget_update_by_person,
     resync_milestones,
+    set_milestone_target_budget,
 )
 
 router = APIRouter(prefix="/projects", tags=["milestones"])
@@ -80,6 +81,16 @@ class BudgetUpdateOut(SQLModel):
     warnings: list[str] = []
 
 
+class TargetBudgetUpdate(SQLModel):
+    target_euros: float = Field(ge=0)
+
+
+class TargetBudgetOut(SQLModel):
+    milestone: Milestone
+    achieved_euros: float
+    warnings: list[str] = []
+
+
 # ---------------------------------------------------------------------------
 # Milestone endpoints (nested under /projects/{project_id})
 # ---------------------------------------------------------------------------
@@ -124,6 +135,26 @@ def resync(project_id: int, session: SessionDep):
         recomputed=summary.recomputed,
         changed_milestone_ids=summary.changed_milestone_ids,
     )
+
+
+@router.put(
+    "/{project_id}/milestones/{milestone_id}/target-budget",
+    response_model=TargetBudgetOut,
+)
+def set_target_budget(project_id: int, milestone_id: int, body: TargetBudgetUpdate, session: SessionDep):
+    """Set a month's € target (sync with the external billing system) and redistribute the
+    members' hours to hit it — € leads, hours follow (B1). Only for open (unlocked) months."""
+    try:
+        milestone, achieved, warnings = set_milestone_target_budget(
+            project_id, milestone_id, body.target_euros, session
+        )
+    except MilestoneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except MilestoneLocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return TargetBudgetOut(milestone=milestone, achieved_euros=achieved, warnings=warnings)
 
 
 @router.get("/{project_id}/milestones/detail", response_model=list[MilestoneDetailOut])

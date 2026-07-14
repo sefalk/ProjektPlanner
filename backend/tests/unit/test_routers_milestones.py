@@ -108,6 +108,40 @@ def test_recommendations_endpoint_returns_underbooked_member(client):
     assert recs[0]["recommended_additional_hours"] > 0
 
 
+def test_set_target_budget_redistributes_hours(client):
+    """Setting a month's € target drives the hours to hit it (A)."""
+    proj_id, _ = _setup(client)  # budget 50000, rate 90, 3 months
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/target-budget", json={"target_euros": 4500.0})
+    assert r.status_code == 200
+    body = r.json()
+    assert abs(body["achieved_euros"] - 4500.0) < 1e-6  # 50 h × 90
+    assert body["milestone"]["target_budget_euros"] == 4500.0
+
+    budgets = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()
+    total_cost = sum(b["current_hours"] * 90.0 for b in budgets)
+    assert abs(total_cost - 4500.0) < 1e-6
+
+
+def test_set_target_budget_locked_returns_409(client):
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    # close the month to lock it
+    bpos = client.post(f"/projects/{proj_id}/billing-positions",
+                       json={"position_number": "BP", "description": "", "budget_euros": 1000.0}).json()
+    client.post(f"/projects/{proj_id}/invoices/close",
+                json={"year": ms["year"], "month": ms["month"], "billing_position_id": bpos["id"]})
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/target-budget", json={"target_euros": 1000.0})
+    assert r.status_code == 409
+
+
+def test_set_target_budget_milestone_not_found(client):
+    proj_id, _ = _setup(client)
+    r = client.put(f"/projects/{proj_id}/milestones/9999/target-budget", json={"target_euros": 1000.0})
+    assert r.status_code == 404
+
+
 def test_detail_zero_hours_month_flagged(client):
     """A month with personnel but zero planned hours is flagged with a warning (§8.1)."""
     proj_id, person_id = _setup(client)
