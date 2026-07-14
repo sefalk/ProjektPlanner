@@ -564,15 +564,27 @@ export default function ProjectDetailPage() {
               return next
             })
           }
+          const fmtEur = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          const fmtH = (n: number) => `${n.toFixed(2)} h`
+          // Invoiced (Ist) amount per closed month — this is what a locked month actually
+          // consumed of the budget (§9.3), not its frozen plan.
+          const invByMonth = new Map(invoiceList.map((i) => [`${i.year}-${i.month}`, i.total_amount_euros]))
+          const plannedCost = (d: MilestoneDetail) => d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+          // Budget-relevant € of a month: locked → invoiced Ist, open → planned current cost.
+          // Summed this is the forecast (Prognose), which never exceeds the budget.
+          const monthEuros = (d: MilestoneDetail) => {
+            const inv = invByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
+            return d.milestone.is_locked && inv != null ? inv : plannedCost(d)
+          }
           const totals = milestonesDetail.reduce(
             (acc, d: MilestoneDetail) => ({
-              initial: acc.initial + d.milestone.initial_hours,
               current: acc.current + d.milestone.current_hours,
               planEuros: acc.planEuros + d.persons.reduce((s, p) => s + p.initial_hours * p.billing_rate_per_hour, 0),
-              currentEuros: acc.currentEuros + d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0),
+              forecastEuros: acc.forecastEuros + monthEuros(d),
             }),
-            { initial: 0, current: 0, planEuros: 0, currentEuros: 0 },
+            { current: 0, planEuros: 0, forecastEuros: 0 },
           )
+          const overBudget = totals.forecastEuros > project.total_budget_euros + 0.01
           const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
           const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
             const ms = new Date(y, mo - 1, 1)
@@ -646,35 +658,40 @@ export default function ProjectDetailPage() {
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monat</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                         <span className="inline-flex items-center gap-1">
-                          Plan (Std.)
-                          <HelpPopover label="Plan-Stunden erklären">
-                            Baseline bei Anlage: Verfügbar × s, mit s = min(1, Restbudget / Kosten bei voller Kapazität).
+                          Plan (€)
+                          <HelpPopover label="Plan-Budget erklären">
+                            Budget-Baseline des Monats: Summe(Plan-Std. × Stundensatz), festgeschrieben bei Anlage.
                           </HelpPopover>
                         </span>
                       </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Stunden inkl. manueller Anpassungen. Fortschrittsbalken = gebuchte / geplante Stunden.">Aktuell (Std.)</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Budgetanteil dieses Monats in €: Summe(Plan-Std. × Stundensatz)">Plan (€)</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Kosten: Summe(Aktuell-Std. × Stundensatz)">Aktuell (€)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Stunden inkl. manueller Anpassungen. Balken = gebuchte / geplante Stunden.">Aktuell (Std.)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        <span className="inline-flex items-center gap-1">
+                          Aktuell (€)
+                          <HelpPopover label="Aktuell-€ erklären">
+                            Budgetwirksame Kosten: offene Monate = Aktuell-Std. × Satz; abgeschlossene Monate = abgerechneter Ist-Betrag. Summe = Prognose (≤ Budget).
+                          </HelpPopover>
+                        </span>
+                      </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {milestonesDetail.length === 0 && (
-                      <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
+                      <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
                     )}
                     {milestonesDetail.map((d: MilestoneDetail) => {
                       const ms = d.milestone
                       const expanded = expandedMilestones.has(ms.id)
                       const planEuros = d.persons.reduce((s, p) => s + p.initial_hours * p.billing_rate_per_hour, 0)
-                      const currentEuros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+                      const rowEuros = monthEuros(d)  // budget-relevant: Ist for locked, plan for open
                       const bookedEuros = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0) * p.billing_rate_per_hour, 0)
                       const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
                       const barColor = pct > 100 ? 'bg-red-500' : pct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
-                      const eurPct = currentEuros > 0 ? Math.min(150, (bookedEuros / currentEuros) * 100) : 0
+                      const eurPct = rowEuros > 0 ? Math.min(150, (bookedEuros / rowEuros) * 100) : 0
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
-                      const fmtEur = (n: number) => n > 0 ? n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : null
                       const sug = suggestionByMs.get(ms.id)
                       const rebalDelta = sug ? sug.suggested_total_hours - ms.current_hours : 0
                       return [
@@ -692,12 +709,14 @@ export default function ProjectDetailPage() {
                               )}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">{ms.initial_hours.toFixed(1)} h</td>
+                          <td className="px-4 py-3 text-sm text-gray-600">
+                            {planEuros > 0 ? fmtEur(planEuros) : <span className="text-gray-300">–</span>}
+                          </td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
                               <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                <span>{totalBooked.toFixed(1)} h</span>
-                                <span>{ms.current_hours.toFixed(1)} h</span>
+                                <span>{fmtH(totalBooked)}</span>
+                                <span>{fmtH(ms.current_hours)}</span>
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${barColor}`} style={{ width: `${Math.min(100, pct)}%` }} />
@@ -709,19 +728,19 @@ export default function ProjectDetailPage() {
                               </div>
                               {sug && !ms.is_locked && Math.abs(rebalDelta) > 0.1 && (
                                 <div className="mt-1 text-[11px] text-amber-600" title="Vorschlag aus dem Rebalancing (Budget-Ausschöpfung). Im Tab Rebalancing anwenden.">
-                                  Rebalanciert: {sug.suggested_total_hours.toFixed(1)} h ({rebalDelta > 0 ? '+' : ''}{rebalDelta.toFixed(1)})
+                                  Rebalanciert: {fmtH(sug.suggested_total_hours)} ({rebalDelta > 0 ? '+' : ''}{rebalDelta.toFixed(2)})
                                 </div>
                               )}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">
-                            {fmtEur(planEuros) ?? <span className="text-gray-300">–</span>}
-                          </td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
                               <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                <span>{fmtEur(bookedEuros) ?? '0 €'}</span>
-                                <span>{fmtEur(currentEuros) ?? '–'}</span>
+                                <span>{fmtEur(bookedEuros)}</span>
+                                <span className="flex items-center gap-1">
+                                  {rowEuros > 0 ? fmtEur(rowEuros) : '–'}
+                                  {ms.is_locked && <span className="text-[10px] text-gray-400">(Ist)</span>}
+                                </span>
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${eurBarColor}`} style={{ width: `${Math.min(100, eurPct)}%` }} />
@@ -776,20 +795,15 @@ export default function ProjectDetailPage() {
                         </tr>,
                         expanded && d.persons.length > 0 && (
                           <tr key={`${ms.id}-persons`}>
-                            <td colSpan={9} className="p-0">
+                            <td colSpan={7} className="p-0">
                               <table className="w-full bg-slate-50 border-t border-slate-100">
                                 <thead>
                                   <tr className="text-xs text-gray-400 border-b border-slate-100">
                                     <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Verfügbare Kapazität: Arbeitstage × h/Woche minus Abwesenheits- und Urlaubsschätzung">Verfügbarkeit</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Geplante Stunden (Budget-proportional verteilt)">Plan</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Aktuell geplante Stunden (manuell anpassbar)">Aktuell</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Aus Sage importierte Buchungen">Gebucht</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Effektive Personenwochenstunden: Aktuell ÷ (Arbeitstage / Tage-je-Woche). Zeigt den impliziten wöchentlichen Aufwand aus den geplanten Stunden.">Eff. PWS</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Abweichung der effektiven PWS zur Ziel-PWS aus der Projektmitgliedschaft.">Δ PWS</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage im Monat (Mo–Fr, exkl. Feiertage)">Arbeitstage</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Abwesenheit</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Feiertage</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Verfügbare Kapazität: Arbeitstage × h/Woche minus Abwesenheits- und Urlaubsschätzung">Verfügbar</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Gebucht / Aktuell geplant (Balken). Marker = Plan-Baseline.">Planung (gebucht / aktuell)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Personenwochenstunden: Ziel aus der Projektmitgliedschaft vs. effektiver Ist-Wert (Aktuell ÷ Arbeitstage × Tage/Woche).">PWS (Ziel / Ist)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · Abwesenheit (Abw) · Feiertage (FT)">Tage (AT · Abw · FT)</th>
                                     <th className="px-4 py-1.5"></th>
                                   </tr>
                                 </thead>
@@ -800,18 +814,21 @@ export default function ProjectDetailPage() {
                                     const effPws = p.work_days > 0 ? p.current_hours * dpw / p.work_days : null
                                     const deltaPws = effPws !== null && targetPws !== null ? effPws - targetPws : null
                                     const avail = p.available_hours ?? null
-                                    const planOverbooked = avail !== null && p.initial_hours > avail + 0.1
-                                    const planUnderbooked = avail !== null && p.initial_hours < avail - 0.1
+                                    const booked = p.booked_hours ?? 0
+                                    const cur = p.current_hours
+                                    // Planning bar: booked fill over current-plan track, plan-baseline as a marker.
+                                    const bookedPct = cur > 0 ? Math.min(100, booked / cur * 100) : 0
+                                    const planMarkerPct = cur > 0 ? Math.min(100, p.initial_hours / cur * 100) : 0
+                                    const barColor = booked > cur + 0.01 ? 'bg-red-500' : booked >= cur * 0.8 ? 'bg-orange-400' : 'bg-blue-500'
+                                    // PWS gauge: target vs effective (Ist) as vertical markers, delta as a segment.
+                                    const pwsMax = Math.max(targetPws ?? 0, effPws ?? 0, 1) * 1.15
+                                    const tPos = targetPws !== null ? Math.min(100, targetPws / pwsMax * 100) : null
+                                    const iPos = effPws !== null ? Math.min(100, effPws / pwsMax * 100) : null
+                                    const deltaColor = deltaPws === null ? '' : deltaPws > 0.05 ? 'text-orange-600' : deltaPws < -0.05 ? 'text-blue-600' : 'text-green-600'
                                     return (
                                     <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
-                                      <td className="pl-12 pr-4 py-2 text-gray-700">{p.person_name}</td>
-                                      <td className="px-4 py-2 text-gray-400">{avail !== null ? `${avail.toFixed(1)} h` : <span className="text-gray-300">–</span>}</td>
-                                      <td className={`px-4 py-2 font-medium ${planOverbooked ? 'text-red-600' : planUnderbooked ? 'text-blue-600' : 'text-gray-500'}`}
-                                          title={planOverbooked ? 'Überbucht: Plan übersteigt verfügbare Kapazität' : planUnderbooked ? 'Unterbucht: Plan liegt unter verfügbarer Kapazität' : undefined}>
-                                        {p.initial_hours.toFixed(1)} h
-                                      </td>
-                                      <td className="px-4 py-2 text-gray-700 font-medium">
-                                        {p.current_hours.toFixed(1)} h
+                                      <td className="pl-12 pr-4 py-2 text-gray-700 whitespace-nowrap">
+                                        {p.person_name}
                                         {p.is_manual_override && (
                                           <span title="Manuell angepasst — bleibt beim Resync erhalten"
                                             className="ml-1.5 px-1 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700 align-middle">
@@ -819,20 +836,52 @@ export default function ProjectDetailPage() {
                                           </span>
                                         )}
                                       </td>
-                                      <td className="px-4 py-2 text-gray-500">{(p.booked_hours ?? 0).toFixed(1)} h</td>
-                                      <td className="px-4 py-2 text-gray-600 font-medium">
-                                        {effPws !== null ? `${effPws.toFixed(1)} h/W` : <span className="text-gray-300">–</span>}
+                                      <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}</td>
+                                      <td className="px-4 py-2">
+                                        <div className="min-w-[11rem]">
+                                          <div className="flex justify-between text-[11px] text-gray-500 mb-1">
+                                            <span>{fmtH(booked)}</span>
+                                            <span title="Plan-Baseline">Plan {fmtH(p.initial_hours)} · {fmtH(cur)}</span>
+                                          </div>
+                                          <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
+                                            <div className={`h-full rounded ${barColor}`} style={{ width: `${bookedPct}%` }} />
+                                            {cur > 0 && (
+                                              <div className="absolute top-0 bottom-0 w-0.5 bg-gray-500/70" style={{ left: `${planMarkerPct}%` }} title={`Plan-Baseline ${fmtH(p.initial_hours)}`} />
+                                            )}
+                                            {cur > 0 && (
+                                              <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
+                                                {fmtH(booked)} · {Math.round(bookedPct)} %
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
                                       </td>
-                                      <td className="px-4 py-2 font-medium">
-                                        {deltaPws !== null
-                                          ? <span className={deltaPws > 0.05 ? 'text-orange-600' : deltaPws < -0.05 ? 'text-blue-600' : 'text-green-600'}>
-                                              {deltaPws > 0 ? '+' : ''}{deltaPws.toFixed(1)} h/W
-                                            </span>
-                                          : <span className="text-gray-300">–</span>}
+                                      <td className="px-4 py-2">
+                                        {tPos !== null || iPos !== null ? (
+                                          <div className="min-w-[9rem]">
+                                            <div className="relative h-5 bg-gray-100 rounded">
+                                              {tPos !== null && iPos !== null && (
+                                                <div className={`absolute top-1/2 -translate-y-1/2 h-0.5 ${deltaPws! > 0 ? 'bg-orange-400' : 'bg-blue-400'}`}
+                                                  style={{ left: `${Math.min(tPos, iPos)}%`, width: `${Math.abs(iPos - tPos)}%` }} />
+                                              )}
+                                              {tPos !== null && (
+                                                <div className="absolute top-0 bottom-0 w-0.5 bg-gray-500" style={{ left: `${tPos}%` }} title={`Ziel-PWS ${targetPws?.toFixed(2)} h/W`} />
+                                              )}
+                                              {iPos !== null && (
+                                                <div className="absolute top-0 bottom-0 w-0.5 bg-emerald-500" style={{ left: `${iPos}%` }} title={`Ist eff. PWS ${effPws?.toFixed(2)} h/W`} />
+                                              )}
+                                            </div>
+                                            <div className="flex justify-between text-[10px] mt-0.5">
+                                              <span className="text-gray-500">Ziel {targetPws !== null ? targetPws.toFixed(1) : '–'}</span>
+                                              <span className="text-emerald-600">Ist {effPws !== null ? effPws.toFixed(1) : '–'}</span>
+                                              <span className={deltaColor}>{deltaPws !== null ? `${deltaPws > 0 ? '+' : ''}${deltaPws.toFixed(1)}` : ''}</span>
+                                            </div>
+                                          </div>
+                                        ) : <span className="text-gray-300">–</span>}
                                       </td>
-                                      <td className="px-4 py-2 text-gray-500">{p.work_days} T</td>
-                                      <td className="px-4 py-2 text-gray-500">{p.absence_days} T</td>
-                                      <td className="px-4 py-2 text-gray-500">{p.holiday_days} T</td>
+                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title="Arbeitstage · Abwesenheit · Feiertage">
+                                        {p.work_days} · {p.absence_days} · {p.holiday_days}
+                                      </td>
                                       <td className="px-4 py-2">
                                         {ms.status === 'open' && !ms.is_locked && (
                                           <button
@@ -856,17 +905,16 @@ export default function ProjectDetailPage() {
                       <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200">
                         <td></td>
                         <td className="px-4 py-3 text-gray-700">Gesamt</td>
-                        <td className="px-4 py-3 text-gray-700">{totals.initial.toFixed(1)} h</td>
-                        <td className="px-4 py-3 text-gray-700">{totals.current.toFixed(1)} h</td>
                         <td className="px-4 py-3 text-gray-700">
-                          {totals.planEuros > 0 ? totals.planEuros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : '–'}
+                          {totals.planEuros > 0 ? fmtEur(totals.planEuros) : '–'}
                         </td>
-                        <td className="px-4 py-3 text-gray-700">
-                          {totals.currentEuros > 0 ? totals.currentEuros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : '–'}
-                        </td>
-                        <td className="px-4 py-3 text-gray-500 text-sm font-normal">
-                          Vertrag: {project.total_budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                          {project.total_budget_hours != null && <><br/>{project.total_budget_hours.toLocaleString('de-DE')} h</>}
+                        <td className="px-4 py-3 text-gray-700">{fmtH(totals.current)}</td>
+                        <td className="px-4 py-3">
+                          <div className={overBudget ? 'text-red-600' : 'text-gray-700'}>{fmtEur(totals.forecastEuros)}</div>
+                          <div className={`text-xs font-normal ${overBudget ? 'text-red-600' : 'text-gray-400'}`}
+                            title="Prognose = abgerechnete (gesperrte) Monate + geplante Kosten offener Monate. Darf das Vertragsbudget nicht überschreiten.">
+                            Prognose · Vertrag {fmtEur(project.total_budget_euros)}
+                          </div>
                         </td>
                         <td colSpan={2}></td>
                       </tr>
