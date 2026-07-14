@@ -351,6 +351,8 @@ export const invoices = {
   get: (id: number) => req<MonthlyInvoice>('GET', `/invoices/${id}`),
   setStatus: (id: number, status: MonthlyInvoice['status']) =>
     req<MonthlyInvoice>('PUT', `/invoices/${id}/status`, { status }),
+  setAmount: (id: number, d: { total_amount_euros: number; total_hours?: number }) =>
+    req<MonthlyInvoice>('PUT', `/invoices/${id}/amount`, d),
   reopen: (id: number) => req<void>('DELETE', `/invoices/${id}`),
 };
 

@@ -352,6 +352,8 @@ export default function ProjectDetailPage() {
   const [editHours, setEditHours] = useState(0)
   const [budgetWarnings, setBudgetWarnings] = useState<string[]>([])   // manual-edit warnings (V6)
   const [budgetNeedsConfirm, setBudgetNeedsConfirm] = useState(false)  // budget overrun awaiting confirm
+  const [editInvoice, setEditInvoice] = useState<{ invoiceId: number; year: number; month: number } | null>(null)  // F4: edit Ist
+  const [editInvoiceAmount, setEditInvoiceAmount] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
   const [error, setError] = useState<string | null>(null)
@@ -420,6 +422,16 @@ export default function ProjectDetailPage() {
         setError(e instanceof Error ? e.message : String(e))
       }
     },
+  })
+  const updateInvoiceAmount = useMutation({
+    mutationFn: ({ invoiceId, amount }: { invoiceId: number; amount: number }) =>
+      invoiceApi.setAmount(invoiceId, { total_amount_euros: amount }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices', projectId] })
+      invalidateMilestones()
+      setEditInvoice(null)
+    },
+    onError: (e: Error) => setError(e.message),
   })
   const applyRebalancing = useMutation({
     mutationFn: () => projects.applyRebalancing(projectId),
@@ -566,25 +578,39 @@ export default function ProjectDetailPage() {
           }
           const fmtEur = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
           const fmtH = (n: number) => `${n.toFixed(2)} h`
-          // Invoiced (Ist) amount per closed month — this is what a locked month actually
-          // consumed of the budget (§9.3), not its frozen plan.
-          const invByMonth = new Map(invoiceList.map((i) => [`${i.year}-${i.month}`, i.total_amount_euros]))
+          // Invoice (Ist) per closed month — what a locked month actually consumed of the
+          // budget (§9.3), not its frozen plan.
+          const invoiceByMonth = new Map(invoiceList.map((i) => [`${i.year}-${i.month}`, i]))
           const plannedCost = (d: MilestoneDetail) => d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
           // Budget-relevant € of a month: locked → invoiced Ist, open → planned current cost.
           // Summed this is the forecast (Prognose), which never exceeds the budget.
           const monthEuros = (d: MilestoneDetail) => {
-            const inv = invByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
-            return d.milestone.is_locked && inv != null ? inv : plannedCost(d)
+            const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
+            return d.milestone.is_locked && inv != null ? inv.total_amount_euros : plannedCost(d)
           }
           const totals = milestonesDetail.reduce(
             (acc, d: MilestoneDetail) => ({
               current: acc.current + d.milestone.current_hours,
-              planEuros: acc.planEuros + d.persons.reduce((s, p) => s + p.initial_hours * p.billing_rate_per_hour, 0),
+              booked: acc.booked + d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0),
               forecastEuros: acc.forecastEuros + monthEuros(d),
             }),
-            { current: 0, planEuros: 0, forecastEuros: 0 },
+            { current: 0, booked: 0, forecastEuros: 0 },
           )
-          const overBudget = totals.forecastEuros > project.total_budget_euros + 0.01
+          const istEuros = invoiceList.reduce((s, i) => s + i.total_amount_euros, 0)  // abgerechnet
+          const budget = project.total_budget_euros
+          const deltaEuros = totals.forecastEuros - budget  // >0 = Überschreitung, <0 = Rest
+          const overBudget = deltaEuros > 0.01
+          // Per-member breakdown of current (Ziel) vs booked (Ist) hours across all months (F2).
+          const perMember = new Map<number, { name: string; ziel: number; ist: number }>()
+          for (const d of milestonesDetail) {
+            for (const p of d.persons) {
+              const e = perMember.get(p.person_id) ?? { name: p.person_name, ziel: 0, ist: 0 }
+              e.ziel += p.current_hours
+              e.ist += p.booked_hours ?? 0
+              perMember.set(p.person_id, e)
+            }
+          }
+          const memberBreakdown = [...perMember.values()].filter((e) => e.ziel > 0 || e.ist > 0)
           const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
           const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
             const ms = new Date(y, mo - 1, 1)
@@ -656,14 +682,6 @@ export default function ProjectDetailPage() {
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-6"></th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monat</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        <span className="inline-flex items-center gap-1">
-                          Plan (€)
-                          <HelpPopover label="Plan-Budget erklären">
-                            Budget-Baseline des Monats: Summe(Plan-Std. × Stundensatz), festgeschrieben bei Anlage.
-                          </HelpPopover>
-                        </span>
-                      </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Stunden inkl. manueller Anpassungen. Balken = gebuchte / geplante Stunden.">Aktuell (Std.)</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                         <span className="inline-flex items-center gap-1">
@@ -674,18 +692,17 @@ export default function ProjectDetailPage() {
                         </span>
                       </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {milestonesDetail.length === 0 && (
-                      <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
+                      <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
                     )}
                     {milestonesDetail.map((d: MilestoneDetail) => {
                       const ms = d.milestone
                       const expanded = expandedMilestones.has(ms.id)
-                      const planEuros = d.persons.reduce((s, p) => s + p.initial_hours * p.billing_rate_per_hour, 0)
                       const rowEuros = monthEuros(d)  // budget-relevant: Ist for locked, plan for open
+                      const rowInvoice = invoiceByMonth.get(`${ms.year}-${ms.month}`)
                       const bookedEuros = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0) * p.billing_rate_per_hour, 0)
                       const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
@@ -708,9 +725,6 @@ export default function ProjectDetailPage() {
                                 </span>
                               )}
                             </div>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">
-                            {planEuros > 0 ? fmtEur(planEuros) : <span className="text-gray-300">–</span>}
                           </td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
@@ -740,6 +754,14 @@ export default function ProjectDetailPage() {
                                 <span className="flex items-center gap-1">
                                   {rowEuros > 0 ? fmtEur(rowEuros) : '–'}
                                   {ms.is_locked && <span className="text-[10px] text-gray-400">(Ist)</span>}
+                                  {ms.is_locked && rowInvoice && (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setEditInvoice({ invoiceId: rowInvoice.id, year: ms.year, month: ms.month }); setEditInvoiceAmount(rowInvoice.total_amount_euros) }}
+                                      title="Abgerechneten Ist-Betrag anpassen (Sync mit externem Abrechnungssystem)"
+                                      className="p-0.5 text-gray-400 hover:text-blue-600">
+                                      <Pencil size={11} />
+                                    </button>
+                                  )}
                                 </span>
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
@@ -752,14 +774,12 @@ export default function ProjectDetailPage() {
                               </div>
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-sm">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
-                              {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
-                            </span>
-                          </td>
                           <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center gap-2">
-                              {ms.is_locked ? <Lock size={13} className="text-gray-400" /> : <Unlock size={13} className="text-gray-300" />}
+                            <div className="flex flex-col items-start gap-1">
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
+                                {ms.is_locked ? <Lock size={11} /> : <Unlock size={11} className="text-green-600" />}
+                                {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
+                              </span>
                               {ms.status === 'open' && !ms.is_locked && (
                                 <button
                                   onClick={() => {
@@ -795,12 +815,12 @@ export default function ProjectDetailPage() {
                         </tr>,
                         expanded && d.persons.length > 0 && (
                           <tr key={`${ms.id}-persons`}>
-                            <td colSpan={7} className="p-0">
+                            <td colSpan={5} className="p-0">
                               <table className="w-full bg-slate-50 border-t border-slate-100">
                                 <thead>
                                   <tr className="text-xs text-gray-400 border-b border-slate-100">
                                     <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Verfügbare Kapazität: Arbeitstage × h/Woche minus Abwesenheits- und Urlaubsschätzung">Verfügbar</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Netto planbare Kapazität auf Basis der im Projekt festgelegten Projekt-Wochenstunden dieses MA (nicht der allgemeinen Arbeitszeit): Arbeitstage × Projekt-h/Woche minus Feiertage, Abwesenheiten und Rest-Urlaubsschätzung. Ungenutzte allgemeine Kapazität erscheint separat als Empfehlung.">Verfügbar</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Gebucht / Aktuell geplant (Balken). Marker = Plan-Baseline.">Planung (gebucht / aktuell)</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Personenwochenstunden: Ziel aus der Projektmitgliedschaft vs. effektiver Ist-Wert (Aktuell ÷ Arbeitstage × Tage/Woche).">PWS (Ziel / Ist)</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · Abwesenheit (Abw) · Feiertage (FT)">Tage (AT · Abw · FT)</th>
@@ -902,21 +922,53 @@ export default function ProjectDetailPage() {
                       ]
                     })}
                     {milestonesDetail.length > 0 && (
-                      <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200">
+                      <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200 align-top">
                         <td></td>
                         <td className="px-4 py-3 text-gray-700">Gesamt</td>
+                        {/* F2: total current hours + per-member Ist/Ziel breakdown */}
                         <td className="px-4 py-3 text-gray-700">
-                          {totals.planEuros > 0 ? fmtEur(totals.planEuros) : '–'}
+                          <div>{fmtH(totals.current)}</div>
+                          <div className="text-xs font-normal text-gray-400">
+                            gebucht {fmtH(totals.booked)}
+                          </div>
+                          {memberBreakdown.length > 0 && (
+                            <div className="mt-1.5 space-y-0.5 font-normal">
+                              {memberBreakdown.map((e) => (
+                                <div key={e.name} className="text-[11px] text-gray-500 whitespace-nowrap"
+                                  title="Ist (gebucht) / Ziel (aktuell geplant), Summe über alle Monate">
+                                  {e.name}: <span className="text-gray-600">{e.ist.toFixed(2)}</span> / {e.ziel.toFixed(2)} h
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </td>
-                        <td className="px-4 py-3 text-gray-700">{fmtH(totals.current)}</td>
+                        {/* F1: differentiated budget view */}
                         <td className="px-4 py-3">
-                          <div className={overBudget ? 'text-red-600' : 'text-gray-700'}>{fmtEur(totals.forecastEuros)}</div>
-                          <div className={`text-xs font-normal ${overBudget ? 'text-red-600' : 'text-gray-400'}`}
-                            title="Prognose = abgerechnete (gesperrte) Monate + geplante Kosten offener Monate. Darf das Vertragsbudget nicht überschreiten.">
-                            Prognose · Vertrag {fmtEur(project.total_budget_euros)}
+                          <div className="space-y-0.5 font-normal">
+                            <div className="flex justify-between gap-4">
+                              <span className="text-gray-400 text-xs">Abgerechnet (Ist)</span>
+                              <span className="text-gray-600">{fmtEur(istEuros)}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className={`text-xs ${overBudget ? 'text-red-600' : 'text-gray-500'}`}>Prognose</span>
+                              <span className={`font-semibold ${overBudget ? 'text-red-600' : deltaEuros < -0.01 ? 'text-amber-600' : 'text-gray-700'}`}>{fmtEur(totals.forecastEuros)}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className="text-gray-400 text-xs">Vertrag (Ziel)</span>
+                              <span className="text-gray-600">{fmtEur(budget)}</span>
+                            </div>
+                            <div className="flex justify-between gap-4 border-t border-gray-200 pt-0.5">
+                              <span className={`text-xs ${overBudget ? 'text-red-600' : deltaEuros < -0.01 ? 'text-amber-600' : 'text-gray-500'}`}>
+                                {overBudget ? 'Überschreitung' : 'Restbudget'}
+                              </span>
+                              <span className={`font-medium ${overBudget ? 'text-red-600' : deltaEuros < -0.01 ? 'text-amber-600' : 'text-gray-700'}`}>
+                                {/* Restbudget = Vertrag − Prognose (positiv = übrig); Überschreitung = Prognose − Vertrag */}
+                                {overBudget ? '+' : ''}{fmtEur(Math.abs(deltaEuros))}
+                              </span>
+                            </div>
                           </div>
                         </td>
-                        <td colSpan={2}></td>
+                        <td></td>
                       </tr>
                     )}
                   </tbody>
@@ -1490,6 +1542,34 @@ export default function ProjectDetailPage() {
         </Modal>
         )
       })()}
+
+      {/* Edit invoiced (Ist) amount — external billing sync (F4) */}
+      {editInvoice && (
+        <Modal title={`Abgerechneten Betrag anpassen — ${MONTH_NAMES[editInvoice.month]} ${editInvoice.year}`} onClose={() => setEditInvoice(null)}>
+          <form onSubmit={(e) => { e.preventDefault(); updateInvoiceAmount.mutate({ invoiceId: editInvoice.invoiceId, amount: editInvoiceAmount }) }} className="space-y-3">
+            <p className="text-xs text-gray-500">
+              Passe den abgerechneten Ist-Betrag an, falls er im externen Abrechnungssystem geändert wurde.
+              Der Wert fließt in Restbudget und Prognose ein.
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Abgerechnet (€)</label>
+              <input
+                autoFocus required type="number" min={0} step={0.01}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={editInvoiceAmount}
+                onChange={(e) => setEditInvoiceAmount(parseFloat(e.target.value))}
+              />
+            </div>
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setEditInvoice(null)}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              <button type="submit"
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* Reopen invoice confirmation */}
       {confirmReopenId !== null && (
