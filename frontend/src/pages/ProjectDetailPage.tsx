@@ -352,8 +352,9 @@ export default function ProjectDetailPage() {
   const [editHours, setEditHours] = useState(0)
   const [budgetWarnings, setBudgetWarnings] = useState<string[]>([])   // manual-edit warnings (V6)
   const [budgetNeedsConfirm, setBudgetNeedsConfirm] = useState(false)  // budget overrun awaiting confirm
-  const [editInvoice, setEditInvoice] = useState<{ invoiceId: number; year: number; month: number } | null>(null)  // F4: edit Ist
-  const [editInvoiceAmount, setEditInvoiceAmount] = useState(0)
+  const [editTarget, setEditTarget] = useState<{ milestoneId: number; year: number; month: number } | null>(null)  // edit monthly € target
+  const [editTargetAmount, setEditTargetAmount] = useState(0)
+  const [targetWarnings, setTargetWarnings] = useState<string[]>([])
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
   const [error, setError] = useState<string | null>(null)
@@ -423,13 +424,18 @@ export default function ProjectDetailPage() {
       }
     },
   })
-  const updateInvoiceAmount = useMutation({
-    mutationFn: ({ invoiceId, amount }: { invoiceId: number; amount: number }) =>
-      invoiceApi.setAmount(invoiceId, { total_amount_euros: amount }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['invoices', projectId] })
+  const setTargetBudget = useMutation({
+    mutationFn: ({ milestoneId, amount }: { milestoneId: number; amount: number }) =>
+      projects.setMilestoneTargetBudget(projectId, milestoneId, amount),
+    onSuccess: (result) => {
       invalidateMilestones()
-      setEditInvoice(null)
+      setError(null)
+      if (result.warnings && result.warnings.length > 0) {
+        setTargetWarnings(result.warnings)  // keep dialog open to show the capacity warning
+      } else {
+        setEditTarget(null)
+        setTargetWarnings([])
+      }
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -682,12 +688,19 @@ export default function ProjectDetailPage() {
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-6"></th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monat</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Stunden inkl. manueller Anpassungen. Balken = gebuchte / geplante Stunden.">Aktuell (Std.)</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                         <span className="inline-flex items-center gap-1">
-                          Aktuell (€)
-                          <HelpPopover label="Aktuell-€ erklären">
-                            Budgetwirksame Kosten: offene Monate = Aktuell-Std. × Satz; abgeschlossene Monate = abgerechneter Ist-Betrag. Summe = Prognose (≤ Budget).
+                          Aufwand (Std.)
+                          <HelpPopover label="Aufwand erklären">
+                            Abgeleiteter Zeitaufwand: Balken = gebuchte Ist- über geplanten Soll-Stunden. Stunden folgen aus dem €-Budget, sind selbst keine harte Grenze.
+                          </HelpPopover>
+                        </span>
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        <span className="inline-flex items-center gap-1">
+                          Budget (€)
+                          <HelpPopover label="Budget-€ erklären">
+                            Führendes €-Budget: Balken = gebuchte Ist- über geplanten Soll-Kosten. Offene Monate: Soll = Ziel (editierbar); abgeschlossene: abgerechneter Ist-Betrag. Summe = Prognose (≤ Budget).
                           </HelpPopover>
                         </span>
                       </th>
@@ -701,13 +714,14 @@ export default function ProjectDetailPage() {
                     {milestonesDetail.map((d: MilestoneDetail) => {
                       const ms = d.milestone
                       const expanded = expandedMilestones.has(ms.id)
-                      const rowEuros = monthEuros(d)  // budget-relevant: Ist for locked, plan for open
-                      const rowInvoice = invoiceByMonth.get(`${ms.year}-${ms.month}`)
+                      const plannedEuros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+                      // Soll €: open month → the target (editable) or the planned cost; closed → invoiced Ist.
+                      const sollEuros = ms.is_locked ? monthEuros(d) : (ms.target_budget_euros ?? plannedEuros)
                       const bookedEuros = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0) * p.billing_rate_per_hour, 0)
                       const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
                       const barColor = pct > 100 ? 'bg-red-500' : pct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
-                      const eurPct = rowEuros > 0 ? Math.min(150, (bookedEuros / rowEuros) * 100) : 0
+                      const eurPct = sollEuros > 0 ? Math.min(150, (bookedEuros / sollEuros) * 100) : 0
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       const sug = suggestionByMs.get(ms.id)
                       const rebalDelta = sug ? sug.suggested_total_hours - ms.current_hours : 0
@@ -728,15 +742,14 @@ export default function ProjectDetailPage() {
                           </td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
-                              <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                <span>{fmtH(totalBooked)}</span>
-                                <span>{fmtH(ms.current_hours)}</span>
+                              <div className="flex justify-end text-xs text-gray-500 mb-1">
+                                <span>{fmtH(ms.current_hours)} <span className="text-[10px] text-gray-400">(Soll)</span></span>
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${barColor}`} style={{ width: `${Math.min(100, pct)}%` }} />
                                 {pct > 0 && (
                                   <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
-                                    {Math.round(pct)} %
+                                    {fmtH(totalBooked)} · {Math.round(pct)} %
                                   </span>
                                 )}
                               </div>
@@ -749,29 +762,29 @@ export default function ProjectDetailPage() {
                           </td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
-                              <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                <span>{fmtEur(bookedEuros)}</span>
-                                <span className="flex items-center gap-1">
-                                  {rowEuros > 0 ? fmtEur(rowEuros) : '–'}
-                                  {ms.is_locked && <span className="text-[10px] text-gray-400">(Ist)</span>}
-                                  {ms.is_locked && rowInvoice && (
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); setEditInvoice({ invoiceId: rowInvoice.id, year: ms.year, month: ms.month }); setEditInvoiceAmount(rowInvoice.total_amount_euros) }}
-                                      title="Abgerechneten Ist-Betrag anpassen (Sync mit externem Abrechnungssystem)"
-                                      className="p-0.5 text-gray-400 hover:text-blue-600">
-                                      <Pencil size={11} />
-                                    </button>
-                                  )}
-                                </span>
+                              <div className="flex justify-end items-center gap-1 text-xs text-gray-500 mb-1">
+                                <span>{sollEuros > 0 ? fmtEur(sollEuros) : '–'}</span>
+                                <span className="text-[10px] text-gray-400">({ms.is_locked ? 'Ist' : 'Soll'})</span>
+                                {!ms.is_locked && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setEditTarget({ milestoneId: ms.id, year: ms.year, month: ms.month }); setEditTargetAmount(Math.round(sollEuros * 100) / 100); setTargetWarnings([]) }}
+                                    title="Budget-Ziel dieses Monats setzen (verteilt die Stunden automatisch)"
+                                    className="p-0.5 text-gray-400 hover:text-blue-600">
+                                    <Pencil size={11} />
+                                  </button>
+                                )}
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${eurBarColor}`} style={{ width: `${Math.min(100, eurPct)}%` }} />
                                 {eurPct > 0 && (
                                   <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
-                                    {Math.round(eurPct)} %
+                                    {fmtEur(bookedEuros)} · {Math.round(eurPct)} %
                                   </span>
                                 )}
                               </div>
+                              {ms.target_budget_euros != null && !ms.is_locked && (
+                                <div className="mt-1 text-[10px] text-blue-500" title="Manuell gesetztes Budget-Ziel (Sync mit externem System)">Ziel gesetzt</div>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
@@ -821,10 +834,9 @@ export default function ProjectDetailPage() {
                                   <tr className="text-xs text-gray-400 border-b border-slate-100">
                                     <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Netto planbare Kapazität auf Basis der im Projekt festgelegten Projekt-Wochenstunden dieses MA (nicht der allgemeinen Arbeitszeit): Arbeitstage × Projekt-h/Woche minus Feiertage, Abwesenheiten und Rest-Urlaubsschätzung. Ungenutzte allgemeine Kapazität erscheint separat als Empfehlung.">Verfügbar</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Gebucht / Aktuell geplant (Balken). Marker = Plan-Baseline.">Planung (gebucht / aktuell)</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Personenwochenstunden: Ziel aus der Projektmitgliedschaft vs. effektiver Ist-Wert (Aktuell ÷ Arbeitstage × Tage/Woche).">PWS (Ziel / Ist)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Balken = gebuchte Ist- über geplanten Soll-Stunden. Stift = Soll-Stunden dieser Person anpassen.">Aufwand (Std.)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Personenwochenstunden: Ziel aus der Projektmitgliedschaft vs. effektiver Ist-Wert (Soll-Std. ÷ Arbeitstage × Tage/Woche).">PWS (Ziel / Ist)</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · Abwesenheit (Abw) · Feiertage (FT)">Tage (AT · Abw · FT)</th>
-                                    <th className="px-4 py-1.5"></th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -836,10 +848,13 @@ export default function ProjectDetailPage() {
                                     const avail = p.available_hours ?? null
                                     const booked = p.booked_hours ?? 0
                                     const cur = p.current_hours
-                                    // Planning bar: booked fill over current-plan track, plan-baseline as a marker.
+                                    // Planning bar: booked (Ist) fill over the current-plan (Soll) track.
                                     const bookedPct = cur > 0 ? Math.min(100, booked / cur * 100) : 0
-                                    const planMarkerPct = cur > 0 ? Math.min(100, p.initial_hours / cur * 100) : 0
                                     const barColor = booked > cur + 0.01 ? 'bg-red-500' : booked >= cur * 0.8 ? 'bg-orange-400' : 'bg-blue-500'
+                                    const editable = ms.status === 'open' && !ms.is_locked
+                                    // Suppress the per-person "M" badge when the whole month is target-driven
+                                    // (all rows are override there — the milestone-level "Ziel gesetzt" says it instead).
+                                    const showOverrideBadge = p.is_manual_override && ms.target_budget_euros == null
                                     // PWS gauge: target vs effective (Ist) as vertical markers, delta as a segment.
                                     const pwsMax = Math.max(targetPws ?? 0, effPws ?? 0, 1) * 1.15
                                     const tPos = targetPws !== null ? Math.min(100, targetPws / pwsMax * 100) : null
@@ -849,7 +864,7 @@ export default function ProjectDetailPage() {
                                     <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
                                       <td className="pl-12 pr-4 py-2 text-gray-700 whitespace-nowrap">
                                         {p.person_name}
-                                        {p.is_manual_override && (
+                                        {showOverrideBadge && (
                                           <span title="Manuell angepasst — bleibt beim Resync erhalten"
                                             className="ml-1.5 px-1 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700 align-middle">
                                             M
@@ -859,15 +874,19 @@ export default function ProjectDetailPage() {
                                       <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}</td>
                                       <td className="px-4 py-2">
                                         <div className="min-w-[11rem]">
-                                          <div className="flex justify-between text-[11px] text-gray-500 mb-1">
-                                            <span>{fmtH(booked)}</span>
-                                            <span title="Plan-Baseline">Plan {fmtH(p.initial_hours)} · {fmtH(cur)}</span>
+                                          <div className="flex justify-end items-center gap-1 text-[11px] text-gray-500 mb-1">
+                                            <span>{fmtH(cur)} <span className="text-[10px] text-gray-400">(Soll)</span></span>
+                                            {editable && (
+                                              <button
+                                                onClick={() => { setEditBudget({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
+                                                title="Soll-Stunden dieser Person anpassen"
+                                                className="p-0.5 text-gray-400 hover:text-blue-600">
+                                                <Pencil size={11} />
+                                              </button>
+                                            )}
                                           </div>
                                           <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                             <div className={`h-full rounded ${barColor}`} style={{ width: `${bookedPct}%` }} />
-                                            {cur > 0 && (
-                                              <div className="absolute top-0 bottom-0 w-0.5 bg-gray-500/70" style={{ left: `${planMarkerPct}%` }} title={`Plan-Baseline ${fmtH(p.initial_hours)}`} />
-                                            )}
                                             {cur > 0 && (
                                               <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
                                                 {fmtH(booked)} · {Math.round(bookedPct)} %
@@ -901,15 +920,6 @@ export default function ProjectDetailPage() {
                                       </td>
                                       <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title="Arbeitstage · Abwesenheit · Feiertage">
                                         {p.work_days} · {p.absence_days} · {p.holiday_days}
-                                      </td>
-                                      <td className="px-4 py-2">
-                                        {ms.status === 'open' && !ms.is_locked && (
-                                          <button
-                                            onClick={() => { setEditBudget({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
-                                            className="p-1 text-gray-400 hover:text-blue-600">
-                                            <Pencil size={12} />
-                                          </button>
-                                        )}
                                       </td>
                                     </tr>
                                     )
@@ -1543,33 +1553,46 @@ export default function ProjectDetailPage() {
         )
       })()}
 
-      {/* Edit invoiced (Ist) amount — external billing sync (F4) */}
-      {editInvoice && (
-        <Modal title={`Abgerechneten Betrag anpassen — ${MONTH_NAMES[editInvoice.month]} ${editInvoice.year}`} onClose={() => setEditInvoice(null)}>
-          <form onSubmit={(e) => { e.preventDefault(); updateInvoiceAmount.mutate({ invoiceId: editInvoice.invoiceId, amount: editInvoiceAmount }) }} className="space-y-3">
+      {/* Edit monthly € target budget — drives hour distribution (sync with external system) */}
+      {editTarget && (() => {
+        const closeTarget = () => { setEditTarget(null); setTargetWarnings([]) }
+        return (
+        <Modal title={`Budget-Ziel anpassen — ${MONTH_NAMES[editTarget.month]} ${editTarget.year}`} onClose={closeTarget}>
+          <form onSubmit={(e) => { e.preventDefault(); setTargetBudget.mutate({ milestoneId: editTarget.milestoneId, amount: editTargetAmount }) }} className="space-y-3">
             <p className="text-xs text-gray-500">
-              Passe den abgerechneten Ist-Betrag an, falls er im externen Abrechnungssystem geändert wurde.
-              Der Wert fließt in Restbudget und Prognose ein.
+              Setze das €-Ziel dieses Monats (z. B. aus dem externen Abrechnungssystem). Die Stunden der
+              Mitarbeiter werden automatisch so verteilt, dass das Ziel erreicht wird — begrenzt durch die
+              verfügbare Kapazität.
             </p>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Abgerechnet (€)</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Budget-Ziel (€)</label>
               <input
                 autoFocus required type="number" min={0} step={0.01}
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={editInvoiceAmount}
-                onChange={(e) => setEditInvoiceAmount(parseFloat(e.target.value))}
+                value={editTargetAmount}
+                onChange={(e) => { setEditTargetAmount(parseFloat(e.target.value)); setTargetWarnings([]) }}
               />
             </div>
+            {targetWarnings.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                <ul className="list-disc list-inside space-y-0.5">
+                  {targetWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            )}
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => setEditInvoice(null)}
-                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              <button type="button" onClick={closeTarget}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">
+                {targetWarnings.length > 0 ? 'Schließen' : 'Abbrechen'}
+              </button>
               <button type="submit"
                 className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
             </div>
           </form>
         </Modal>
-      )}
+        )
+      })()}
 
       {/* Reopen invoice confirmation */}
       {confirmReopenId !== null && (

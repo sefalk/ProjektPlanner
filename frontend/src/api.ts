@@ -101,6 +101,13 @@ export interface Milestone {
   current_hours: number;
   status: 'open' | 'closed';
   is_locked: boolean;
+  target_budget_euros: number | null;
+}
+
+export interface MilestoneTargetResult {
+  milestone: Milestone;
+  achieved_euros: number;
+  warnings: string[];
 }
 
 export interface MilestonePersonBudget {
@@ -271,6 +278,8 @@ export const projects = {
   milestonesDetail: (id: number) => req<MilestoneDetail[]>('GET', `/projects/${id}/milestones/detail`),
   initMilestones: (id: number, force?: boolean) => req<Milestone[]>('POST', `/projects/${id}/milestones/initialize${force ? '?force=true' : ''}`),
   resyncMilestones: (id: number) => req<ResyncResult>('POST', `/projects/${id}/milestones/resync`),
+  setMilestoneTargetBudget: (projectId: number, milestoneId: number, targetEuros: number) =>
+    req<MilestoneTargetResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/target-budget`, { target_euros: targetEuros }),
   updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number, confirm?: boolean) =>
     req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
   recommendations: (id: number) => req<UtilizationRecommendation[]>('GET', `/projects/${id}/milestones/recommendations`),
@@ -351,8 +360,6 @@ export const invoices = {
   get: (id: number) => req<MonthlyInvoice>('GET', `/invoices/${id}`),
   setStatus: (id: number, status: MonthlyInvoice['status']) =>
     req<MonthlyInvoice>('PUT', `/invoices/${id}/status`, { status }),
-  setAmount: (id: number, d: { total_amount_euros: number; total_hours?: number }) =>
-    req<MonthlyInvoice>('PUT', `/invoices/${id}/amount`, d),
   reopen: (id: number) => req<void>('DELETE', `/invoices/${id}`),
 };
 
