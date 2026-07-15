@@ -737,8 +737,10 @@ export default function ProjectDetailPage() {
                       const ms = d.milestone
                       const expanded = expandedMilestones.has(ms.id)
                       const plannedEuros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
-                      // Soll €: open month → the target (editable) or the planned cost; closed → invoiced Ist.
-                      const sollEuros = ms.is_locked ? monthEuros(d) : (ms.target_budget_euros ?? plannedEuros)
+                      // Soll € = planned cost (Σ current×rate) — consistent with the Aufwand column
+                      // (Soll above, Ist/booked in the bar) for open AND closed months. An explicit
+                      // €-target on an open month is shown as the Soll instead.
+                      const sollEuros = (!ms.is_locked && ms.target_budget_euros != null) ? ms.target_budget_euros : plannedEuros
                       const bookedEuros = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0) * p.billing_rate_per_hour, 0)
                       const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
@@ -790,7 +792,7 @@ export default function ProjectDetailPage() {
                             <div className="min-w-[9rem]">
                               <div className="flex justify-end items-center gap-1 text-xs text-gray-500 mb-1">
                                 <span>{sollEuros > 0 ? fmtEur(sollEuros) : '–'}</span>
-                                <span className="text-[10px] text-gray-400">({ms.is_locked ? 'Ist' : 'Soll'})</span>
+                                <span className="text-[10px] text-gray-400">(Soll)</span>
                                 {!ms.is_locked && (
                                   <button
                                     onClick={(e) => { e.stopPropagation(); setEditTarget({ milestoneId: ms.id, year: ms.year, month: ms.month }); setEditTargetAmount(Math.round(sollEuros * 100) / 100); setTargetWarnings([]) }}
@@ -837,35 +839,35 @@ export default function ProjectDetailPage() {
                                 )
                               })()}
                               {ms.status === 'open' && !ms.is_locked && (
-                                <button
-                                  onClick={() => planningLock.mutate({ milestoneId: ms.id, locked: !ms.is_planning_locked })}
-                                  title={ms.is_planning_locked ? 'Planung gesperrt — „Neu berechnen“ lässt den Monat unangetastet. Klicken zum Entsperren.' : 'Monat für die Planung sperren — „Neu berechnen“ ändert ihn dann nicht mehr.'}
-                                  className="text-xs text-purple-600 hover:underline whitespace-nowrap">
-                                  {ms.is_planning_locked ? 'Entsperren' : 'Sperren'}
-                                </button>
-                              )}
-                              {ms.status === 'open' && !ms.is_locked && (
-                                <button
-                                  onClick={() => {
-                                    const form = { year: ms.year, month: ms.month, billing_position_id: billingPositions[0]?.id ?? 0 }
-                                    const warnings: string[] = []
-                                    if (ms.current_hours > 0 && totalBooked < ms.current_hours * 0.8) {
-                                      warnings.push(`Nur ${totalBooked.toFixed(1)} von ${ms.current_hours.toFixed(1)} h gebucht (${Math.round(totalBooked / ms.current_hours * 100)} %)`)
-                                    }
-                                    d.persons.forEach((p) => {
-                                      if (p.booked_hours === 0) warnings.push(`${p.person_name}: keine Buchungen vorhanden`)
-                                    })
-                                    if (warnings.length > 0) {
-                                      setCloseWarnings(warnings)
-                                      setPendingCloseForm(form)
-                                    } else {
-                                      setCloseForm(form)
-                                      setShowCloseModal(true)
-                                    }
-                                  }}
-                                  className="text-xs text-blue-600 hover:underline whitespace-nowrap">
-                                  Abschließen
-                                </button>
+                                <div className="flex items-center gap-3">
+                                  <button
+                                    onClick={() => planningLock.mutate({ milestoneId: ms.id, locked: !ms.is_planning_locked })}
+                                    title={ms.is_planning_locked ? 'Planung gesperrt — „Neu berechnen“ lässt den Monat unangetastet. Klicken zum Entsperren.' : 'Monat für die Planung sperren — „Neu berechnen“ ändert ihn dann nicht mehr.'}
+                                    className="text-xs text-purple-600 hover:underline whitespace-nowrap">
+                                    {ms.is_planning_locked ? 'Entsperren' : 'Sperren'}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      const form = { year: ms.year, month: ms.month, billing_position_id: billingPositions[0]?.id ?? 0 }
+                                      const warnings: string[] = []
+                                      if (ms.current_hours > 0 && totalBooked < ms.current_hours * 0.8) {
+                                        warnings.push(`Nur ${totalBooked.toFixed(1)} von ${ms.current_hours.toFixed(1)} h gebucht (${Math.round(totalBooked / ms.current_hours * 100)} %)`)
+                                      }
+                                      d.persons.forEach((p) => {
+                                        if (p.booked_hours === 0) warnings.push(`${p.person_name}: keine Buchungen vorhanden`)
+                                      })
+                                      if (warnings.length > 0) {
+                                        setCloseWarnings(warnings)
+                                        setPendingCloseForm(form)
+                                      } else {
+                                        setCloseForm(form)
+                                        setShowCloseModal(true)
+                                      }
+                                    }}
+                                    className="text-xs text-blue-600 hover:underline whitespace-nowrap">
+                                    Abschließen
+                                  </button>
+                                </div>
                               )}
                               {ms.status === 'closed' && (
                                 <button
