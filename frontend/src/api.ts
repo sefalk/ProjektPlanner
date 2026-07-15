@@ -83,6 +83,7 @@ export interface ProjectMembership {
   weekly_capacity_hours: number;
   billing_rate_per_hour: number;
   priority: number;
+  vacation_days_taken: number;
   warnings?: string[];
 }
 
@@ -267,7 +268,7 @@ export const projects = {
   memberships: (id: number) => req<ProjectMembership[]>('GET', `/projects/${id}/memberships`),
   addMembership: (id: number, d: Omit<ProjectMembership, 'id' | 'project_id' | 'warnings'>) =>
     req<ProjectMembership>('POST', `/projects/${id}/memberships`, d),
-  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority'>) =>
+  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority' | 'vacation_days_taken'>) =>
     req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
   deleteMembership: (projectId: number, membershipId: number) =>
     req<void>('DELETE', `/projects/${projectId}/memberships/${membershipId}`),

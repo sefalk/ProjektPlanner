@@ -344,7 +344,7 @@ export default function ProjectDetailPage() {
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
   const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
-  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
+  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0 })
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
@@ -358,7 +358,7 @@ export default function ProjectDetailPage() {
   const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; personId: number; personName: string } | null>(null)  // edit estimated absence
   const [editAbsenceDays, setEditAbsenceDays] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
-  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
+  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0 })
   const [error, setError] = useState<string | null>(null)
   const [memberWarnings, setMemberWarnings] = useState<string[]>([])
   const [closeWarnings, setCloseWarnings] = useState<string[]>([])
@@ -610,29 +610,39 @@ export default function ProjectDetailPage() {
             const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
             return d.milestone.is_locked && inv != null ? inv.total_amount_euros : plannedCost(d)
           }
+          // Budget-relevant hours (forecast): closed → invoiced Ist hours, open → planned.
+          // Summed this reconciles with the € Prognose ÷ Satz (unlike Σ plan of all months,
+          // whose closed part uses the frozen plan, not the Ist).
+          const monthHours = (d: MilestoneDetail) => {
+            const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
+            return d.milestone.is_locked && inv != null ? inv.total_hours : d.milestone.current_hours
+          }
           const totals = milestonesDetail.reduce(
             (acc, d: MilestoneDetail) => ({
-              current: acc.current + d.milestone.current_hours,
+              forecastHours: acc.forecastHours + monthHours(d),
               booked: acc.booked + d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0),
               forecastEuros: acc.forecastEuros + monthEuros(d),
             }),
-            { current: 0, booked: 0, forecastEuros: 0 },
+            { forecastHours: 0, booked: 0, forecastEuros: 0 },
           )
           const istEuros = invoiceList.reduce((s, i) => s + i.total_amount_euros, 0)  // abgerechnet
           const budget = project.total_budget_euros
           const deltaEuros = totals.forecastEuros - budget  // >0 = Überschreitung, <0 = Rest
           const overBudget = deltaEuros > 0.01
           // Per-member breakdown across all months: hours (Ziel/Ist) + day totals (AT/FT/Abw).
-          const perMember = new Map<number, { name: string; ziel: number; ist: number; at: number; ft: number; abwG: number; abwE: number }>()
+          const perMember = new Map<number, { name: string; ziel: number; ist: number; at: number; ft: number; abwG: number; abwE: number; vac: number; sick: number; train: number }>()
           for (const d of milestonesDetail) {
             for (const p of d.persons) {
-              const e = perMember.get(p.person_id) ?? { name: p.person_name, ziel: 0, ist: 0, at: 0, ft: 0, abwG: 0, abwE: 0 }
+              const e = perMember.get(p.person_id) ?? { name: p.person_name, ziel: 0, ist: 0, at: 0, ft: 0, abwG: 0, abwE: 0, vac: 0, sick: 0, train: 0 }
               e.ziel += p.current_hours
               e.ist += p.booked_hours ?? 0
               e.at += p.work_days
               e.ft += p.holiday_days
               e.abwG += p.absence_days
               e.abwE += p.estimated_absence_days ?? 0
+              e.vac += p.vacation_estimate_days ?? 0
+              e.sick += p.sick_estimate_days ?? 0
+              e.train += p.training_estimate_days ?? 0
               perMember.set(p.person_id, e)
             }
           }
@@ -1023,9 +1033,9 @@ export default function ProjectDetailPage() {
                       <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200 align-top">
                         <td></td>
                         <td className="px-4 py-3 text-gray-700">Gesamt</td>
-                        {/* F2: total current hours + per-member Ist/Ziel breakdown */}
+                        {/* F2: forecast hours (closed=Ist, open=Plan) + per-member Ist/Ziel breakdown */}
                         <td className="px-4 py-3 text-gray-700">
-                          <div>{fmtH(totals.current)}</div>
+                          <div title="Prognose-Stunden: abgeschlossene Monate mit Ist, offene mit Plan (rekonziliert mit der €-Prognose ÷ Satz).">{fmtH(totals.forecastHours)}</div>
                           <div className="text-xs font-normal text-gray-400">
                             gebucht {fmtH(totals.booked)}
                           </div>
@@ -1073,7 +1083,7 @@ export default function ProjectDetailPage() {
                               <div className="text-[10px] uppercase text-gray-400 tracking-wide">Tage gesamt (AT·FT·Abw.)</div>
                               {daysBreakdown.map((e) => (
                                 <div key={e.name} className="text-[11px] text-gray-500 whitespace-nowrap"
-                                  title={`${e.name}: Arbeitstage ${e.at} · Feiertage ${e.ft} · Abw. geplant ${e.abwG} · Abw. geschätzt ${e.abwE.toFixed(1)} — Summe über alle Meilensteine`}>
+                                  title={`${e.name} (Summe über alle Meilensteine):\nArbeitstage ${e.at} · Feiertage ${e.ft} · Abw. geplant ${e.abwG}\nAbw. geschätzt ${e.abwE.toFixed(1)}:\n  · Resturlaub ${e.vac.toFixed(1)}\n  · Fortbildung ${e.train.toFixed(1)}\n  · Krankheit ${e.sick.toFixed(1)}`}>
                                   {e.name}: {e.at} · {e.ft} · {e.abwG} · <span className="text-gray-400">~{e.abwE.toFixed(1)}</span>
                                 </div>
                               ))}
@@ -1269,11 +1279,19 @@ export default function ProjectDetailPage() {
                     ),
                   },
                   {
+                    key: 'vacation_days_taken', header: 'Urlaub genommen',
+                    render: (m: ProjectMembership) => (
+                      <span title="Bereits genommene Urlaubstage (pauschal, projektbezogen). Werden vom Jahres-Urlaubskontingent abgezogen und senken die geschätzte Abwesenheit.">
+                        {m.vacation_days_taken > 0 ? `${m.vacation_days_taken} T` : <span className="text-gray-300">–</span>}
+                      </span>
+                    ),
+                  },
+                  {
                     key: 'actions', header: '',
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority }); setError(null) }}
+                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority, vacation_days_taken: m.vacation_days_taken }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
@@ -1784,6 +1802,15 @@ export default function ProjectDetailPage() {
                 value={addMemberForm.priority}
                 onChange={(e) => setAddMemberForm({ ...addMemberForm, priority: parseInt(e.target.value) || 0 })} />
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Bereits genommener Urlaub <span className="text-gray-400 font-normal">(Tage, projektbezogen — reduziert die geschätzte Abwesenheit)</span>
+              </label>
+              <input type="number" min={0} step={0.5}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={addMemberForm.vacation_days_taken}
+                onChange={(e) => setAddMemberForm({ ...addMemberForm, vacation_days_taken: parseFloat(e.target.value) || 0 })} />
+            </div>
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={() => { setShowAddMember(false); setError(null) }}
@@ -1838,6 +1865,15 @@ export default function ProjectDetailPage() {
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                 value={editMemberForm.priority}
                 onChange={(e) => setEditMemberForm({ ...editMemberForm, priority: parseInt(e.target.value) || 0 })} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Bereits genommener Urlaub <span className="text-gray-400 font-normal">(Tage, projektbezogen — reduziert die geschätzte Abwesenheit)</span>
+              </label>
+              <input type="number" min={0} step={0.5}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={editMemberForm.vacation_days_taken}
+                onChange={(e) => setEditMemberForm({ ...editMemberForm, vacation_days_taken: parseFloat(e.target.value) || 0 })} />
             </div>
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
