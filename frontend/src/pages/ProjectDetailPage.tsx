@@ -630,11 +630,12 @@ export default function ProjectDetailPage() {
           const deltaEuros = totals.forecastEuros - budget  // >0 = Überschreitung, <0 = Rest
           const overBudget = deltaEuros > 0.01
           // Per-member breakdown across all months: hours (Ziel/Ist) + day totals (AT/FT/Abw).
-          const perMember = new Map<number, { name: string; ziel: number; ist: number; at: number; ft: number; abwG: number; abwE: number; vac: number; sick: number; train: number }>()
+          const perMember = new Map<number, { name: string; fc: number; ist: number; at: number; ft: number; abwG: number; abwE: number; vac: number; sick: number; train: number }>()
           for (const d of milestonesDetail) {
             for (const p of d.persons) {
-              const e = perMember.get(p.person_id) ?? { name: p.person_name, ziel: 0, ist: 0, at: 0, ft: 0, abwG: 0, abwE: 0, vac: 0, sick: 0, train: 0 }
-              e.ziel += p.current_hours
+              const e = perMember.get(p.person_id) ?? { name: p.person_name, fc: 0, ist: 0, at: 0, ft: 0, abwG: 0, abwE: 0, vac: 0, sick: 0, train: 0 }
+              // Forecast hours per member on the same basis as the total: closed → Ist (booked), open → plan.
+              e.fc += d.milestone.is_locked ? (p.booked_hours ?? 0) : p.current_hours
               e.ist += p.booked_hours ?? 0
               e.at += p.work_days
               e.ft += p.holiday_days
@@ -646,7 +647,7 @@ export default function ProjectDetailPage() {
               perMember.set(p.person_id, e)
             }
           }
-          const memberBreakdown = [...perMember.values()].filter((e) => e.ziel > 0 || e.ist > 0)
+          const memberBreakdown = [...perMember.values()].filter((e) => e.fc > 0 || e.ist > 0)
           const daysBreakdown = [...perMember.values()].filter((e) => e.at || e.ft || e.abwG || e.abwE)
           const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
           const rateByPid = new Map(memberships.map((m) => [m.person_id, m.billing_rate_per_hour]))
@@ -1043,8 +1044,8 @@ export default function ProjectDetailPage() {
                             <div className="mt-1.5 space-y-0.5 font-normal">
                               {memberBreakdown.map((e) => (
                                 <div key={e.name} className="text-[11px] text-gray-500 whitespace-nowrap"
-                                  title="Ist (gebucht) / Ziel (aktuell geplant), Summe über alle Monate">
-                                  {e.name}: <span className="text-gray-600">{e.ist.toFixed(2)}</span> / {e.ziel.toFixed(2)} h
+                                  title="gebucht (Ist) / Prognose (abgeschlossene Monate = Ist, offene = Plan). Die Prognose-Werte summieren sich zum Gesamt oben.">
+                                  {e.name}: <span className="text-gray-600">{e.ist.toFixed(2)}</span> / {e.fc.toFixed(2)} h
                                 </div>
                               ))}
                             </div>
