@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
+import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason,
@@ -332,7 +332,7 @@ const STATUS_LABELS: Record<MonthlyInvoice['status'], string> = {
   paid: 'Bezahlt',
 }
 
-type Tab = 'milestones' | 'rebalancing' | 'invoices' | 'members' | 'bookings' | 'settings'
+type Tab = 'milestones' | 'invoices' | 'members' | 'bookings' | 'settings'
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -376,8 +376,7 @@ export default function ProjectDetailPage() {
     enabled: !!project?.program_id,
   })
   const { data: milestonesDetail = [] } = useQuery({ queryKey: ['milestones-detail', projectId], queryFn: () => projects.milestonesDetail(projectId) })
-  const { data: drift = [] } = useQuery({ queryKey: ['drift', projectId], queryFn: () => projects.drift(projectId) })
-  const { data: suggestions = [] } = useQuery({ queryKey: ['suggestions', projectId], queryFn: () => projects.suggestions(projectId) })
+  const { data: suggestions = [] } = useQuery({ queryKey: ['recalc-preview', projectId], queryFn: () => projects.recalcPreview(projectId) })
   const { data: recommendations = [] } = useQuery({ queryKey: ['recommendations', projectId], queryFn: () => projects.recommendations(projectId) })
   const { data: invoiceList = [] } = useQuery({ queryKey: ['invoices', projectId], queryFn: () => projects.invoices(projectId) })
   const { data: memberships = [] } = useQuery({ queryKey: ['memberships', projectId], queryFn: () => projects.memberships(projectId) })
@@ -390,7 +389,7 @@ export default function ProjectDetailPage() {
   const invalidateMilestones = () => {
     qc.invalidateQueries({ queryKey: ['milestones', projectId] })
     qc.invalidateQueries({ queryKey: ['milestones-detail', projectId] })
-    qc.invalidateQueries({ queryKey: ['suggestions', projectId] })
+    qc.invalidateQueries({ queryKey: ['recalc-preview', projectId] })
     qc.invalidateQueries({ queryKey: ['recommendations', projectId] })
   }
 
@@ -458,12 +457,11 @@ export default function ProjectDetailPage() {
     onSuccess: () => { invalidateMilestones(); setEditAbsence(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
-  const applyRebalancing = useMutation({
-    mutationFn: () => projects.applyRebalancing(projectId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['milestones', projectId] })
-      qc.invalidateQueries({ queryKey: ['suggestions', projectId] })
-    },
+  const planningLock = useMutation({
+    mutationFn: ({ milestoneId, locked }: { milestoneId: number; locked: boolean }) =>
+      projects.setPlanningLock(projectId, milestoneId, locked),
+    onSuccess: invalidateMilestones,
+    onError: (e: Error) => setError(e.message),
   })
   const closeMonth = useMutation({
     mutationFn: () => projects.closeMonth(projectId, closeForm),
@@ -541,7 +539,6 @@ export default function ProjectDetailPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'milestones', label: 'Meilensteine' },
-    { id: 'rebalancing', label: 'Rebalancing' },
     { id: 'invoices', label: 'Rechnungen' },
     { id: 'members', label: 'Mitglieder' },
     { id: 'bookings', label: 'Buchungen' },
@@ -642,6 +639,7 @@ export default function ProjectDetailPage() {
           const memberBreakdown = [...perMember.values()].filter((e) => e.ziel > 0 || e.ist > 0)
           const daysBreakdown = [...perMember.values()].filter((e) => e.at || e.ft || e.abwG || e.abwE)
           const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
+          const rateByPid = new Map(memberships.map((m) => [m.person_id, m.billing_rate_per_hour]))
           const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
             const ms = new Date(y, mo - 1, 1)
             const me = new Date(y, mo, 0)
@@ -664,7 +662,7 @@ export default function ProjectDetailPage() {
                 <div className="flex items-center gap-2">
                   <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
                   {isStale && (
-                    <span title="Mitglieder wurden nach der letzten Initialisierung geändert. Resync gleicht die offenen Meilensteine an (manuelle Anpassungen bleiben erhalten)."
+                    <span title="Mitglieder wurden nach der letzten Berechnung geändert. „Neu berechnen“ gleicht die offenen Meilensteine an (gesperrte Werte/Monate bleiben erhalten)."
                       className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
                       veraltet
                     </span>
@@ -673,9 +671,9 @@ export default function ProjectDetailPage() {
                 <div className="flex items-center gap-2">
                   {milestonesDetail.length > 0 && (
                     <button onClick={() => resyncMilestones.mutate()}
-                      title="Offene Meilensteine an den aktuellen Mitglieder-Stand angleichen (nicht-destruktiv, manuelle Anpassungen bleiben erhalten)."
+                      title="Offene Meilensteine neu berechnen: Mitglieder angleichen und Budget verteilen. Gesperrte Werte/Monate und manuelle Anpassungen bleiben erhalten."
                       className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                      <RotateCcw size={14} /> Resync
+                      <RotateCcw size={14} /> Neu berechnen
                     </button>
                   )}
                   <button onClick={() => {
@@ -749,6 +747,10 @@ export default function ProjectDetailPage() {
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       const sug = suggestionByMs.get(ms.id)
                       const rebalDelta = sug ? sug.suggested_total_hours - ms.current_hours : 0
+                      const sugByPid = sug ? new Map(sug.budgets.map((b) => [b.person_id, b.suggested_hours])) : null
+                      const rebalSuggestedEuros = sug ? sug.budgets.reduce((s, b) => s + b.suggested_hours * (rateByPid.get(b.person_id) ?? 0), 0) : 0
+                      const rebalDeltaEuros = sug ? rebalSuggestedEuros - plannedEuros : 0
+                      const showRebal = sug && !ms.is_locked && !ms.is_planning_locked && Math.abs(rebalDelta) > 0.1
                       return [
                         <tr key={ms.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(ms.id)}>
                           <td className="px-4 py-3 text-gray-400">
@@ -777,9 +779,9 @@ export default function ProjectDetailPage() {
                                   </span>
                                 )}
                               </div>
-                              {sug && !ms.is_locked && Math.abs(rebalDelta) > 0.1 && (
-                                <div className="mt-1 text-[11px] text-amber-600" title="Vorschlag aus dem Rebalancing (Budget-Ausschöpfung). Im Tab Rebalancing anwenden.">
-                                  Rebalanciert: {fmtH(sug.suggested_total_hours)} ({rebalDelta > 0 ? '+' : ''}{rebalDelta.toFixed(2)})
+                              {showRebal && (
+                                <div className="mt-1 text-[11px] text-indigo-600" title="Vorschlag aus „Neu berechnen“ (Budget-Ausschöpfung). Über den Button oben anwenden.">
+                                  → {fmtH(sug!.suggested_total_hours)} ({rebalDelta > 0 ? '+' : ''}{rebalDelta.toFixed(2)})
                                 </div>
                               )}
                             </div>
@@ -814,14 +816,34 @@ export default function ProjectDetailPage() {
                                   </span>
                                 )}
                               </div>
+                              {showRebal && Math.abs(rebalDeltaEuros) > 0.5 && (
+                                <div className="mt-1 text-[11px] text-indigo-600" title="Budget-Ausschöpfung nach „Neu berechnen“.">
+                                  → {fmtEur(rebalSuggestedEuros)} ({rebalDeltaEuros > 0 ? '+' : ''}{fmtEur(rebalDeltaEuros)})
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
                             <div className="flex flex-col items-start gap-1">
-                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
-                                {ms.is_locked ? <Lock size={11} /> : <Unlock size={11} className="text-green-600" />}
-                                {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
-                              </span>
+                              {(() => {
+                                const label = ms.is_locked ? 'Abgeschlossen' : ms.is_planning_locked ? 'Gesperrt' : 'Offen'
+                                const cls = ms.is_locked ? 'bg-gray-100 text-gray-500' : ms.is_planning_locked ? 'bg-purple-50 text-purple-700' : 'bg-green-50 text-green-700'
+                                const Icon = ms.is_locked || ms.is_planning_locked ? Lock : Unlock
+                                return (
+                                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
+                                    <Icon size={11} className={label === 'Offen' ? 'text-green-600' : undefined} />
+                                    {label}
+                                  </span>
+                                )
+                              })()}
+                              {ms.status === 'open' && !ms.is_locked && (
+                                <button
+                                  onClick={() => planningLock.mutate({ milestoneId: ms.id, locked: !ms.is_planning_locked })}
+                                  title={ms.is_planning_locked ? 'Planung gesperrt — „Neu berechnen“ lässt den Monat unangetastet. Klicken zum Entsperren.' : 'Monat für die Planung sperren — „Neu berechnen“ ändert ihn dann nicht mehr.'}
+                                  className="text-xs text-purple-600 hover:underline whitespace-nowrap">
+                                  {ms.is_planning_locked ? 'Entsperren' : 'Sperren'}
+                                </button>
+                              )}
                               {ms.status === 'open' && !ms.is_locked && (
                                 <button
                                   onClick={() => {
@@ -885,6 +907,10 @@ export default function ProjectDetailPage() {
                                     const barColor = booked > cur + 0.01 ? 'bg-red-500' : booked >= cur * 0.8 ? 'bg-orange-400' : 'bg-blue-500'
                                     const editable = ms.status === 'open' && !ms.is_locked
                                     const absOverride = p.estimated_absence_days_override
+                                    // Per-member rebalance hint (share of the "Neu berechnen" preview for this person).
+                                    const pSug = sugByPid ? sugByPid.get(p.person_id) : undefined
+                                    const pRebalDelta = pSug != null ? pSug - cur : 0
+                                    const showPRebal = showRebal && pSug != null && Math.abs(pRebalDelta) > 0.1
                                     // PWS gauge: target vs effective (Ist) as vertical markers, delta as a segment.
                                     const pwsMax = Math.max(targetPws ?? 0, effPws ?? 0, 1) * 1.15
                                     const tPos = targetPws !== null ? Math.min(100, targetPws / pwsMax * 100) : null
@@ -895,7 +921,14 @@ export default function ProjectDetailPage() {
                                       <td className="pl-12 pr-4 py-2 text-gray-700 whitespace-nowrap">
                                         {p.person_name}
                                       </td>
-                                      <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}</td>
+                                      <td className="px-4 py-2 text-gray-400 whitespace-nowrap">
+                                        {avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}
+                                        {showPRebal && (
+                                          <div className="text-[11px] text-indigo-600" title="Vorschlag aus „Neu berechnen“ für diese Person.">
+                                            → {fmtH(pSug!)} ({pRebalDelta > 0 ? '+' : ''}{pRebalDelta.toFixed(2)})
+                                          </div>
+                                        )}
+                                      </td>
                                       <td className="px-4 py-2">
                                         <div className="min-w-[11rem]">
                                           <div className="flex justify-end items-center gap-1 text-[11px] text-gray-500 mb-1">
@@ -950,7 +983,7 @@ export default function ProjectDetailPage() {
                                           </div>
                                         ) : <span className="text-gray-300">–</span>}
                                       </td>
-                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title={`Arbeitstage ${p.work_days} · Feiertage ${p.holiday_days} · Abw. geplant ${p.absence_days} · Abw. geschätzt ${estAbs.toFixed(1)} (${absOverride != null ? 'manuell gesetzt/gesperrt' : 'Resturlaub anteilig + pauschal Krank/Fortbildung abzüglich eingetragener Tage'})`}>
+                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title={`Arbeitstage ${p.work_days} · Feiertage ${p.holiday_days} · Abw. geplant ${p.absence_days} (aus Abwesenheits-Einträgen)\nAbw. geschätzt ${estAbs.toFixed(1)}${absOverride != null ? ' — manuell gesetzt/gesperrt' : `:\n  · Resturlaub ${p.vacation_estimate_days.toFixed(1)}\n  · Fortbildung ${p.training_estimate_days.toFixed(1)}\n  · Krankheit ${p.sick_estimate_days.toFixed(1)}`}`}>
                                         <span className="inline-flex items-center gap-1">
                                           <span>{p.work_days} · {p.holiday_days} · {p.absence_days} · </span>
                                           <span className={absOverride != null ? 'text-purple-600 font-medium' : 'text-gray-400'}>
@@ -1053,85 +1086,6 @@ export default function ProjectDetailPage() {
             </div>
           )
         })()}
-
-        {/* ── Rebalancing ── */}
-        {tab === 'rebalancing' && (
-          <div className="space-y-6">
-            {/* Drift summary */}
-            <div>
-              <h3 className="font-medium text-gray-700 mb-3">Abweichung (Ist vs. Plan)</h3>
-              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      {['Person', 'Geplant', 'Gebucht', 'Abweichung'].map((h) => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {drift.length === 0 && (
-                      <tr><td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-400">Keine Daten. Meilensteine initialisieren und Sage-Import durchführen.</td></tr>
-                    )}
-                    {drift.map((d) => (
-                      <tr key={d.person_id}>
-                        <td className="px-4 py-3 text-sm text-gray-700">{personName(d.person_id)}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{d.planned_hours.toFixed(1)} h</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{d.actual_hours.toFixed(1)} h</td>
-                        <td className={`px-4 py-3 text-sm font-medium ${d.drift_hours > 0 ? 'text-red-600' : d.drift_hours < 0 ? 'text-amber-600' : 'text-gray-600'}`}>
-                          {d.drift_hours > 0 ? '+' : ''}{d.drift_hours.toFixed(1)} h
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Suggestions + apply */}
-            <div>
-              <div className="flex justify-between items-center mb-3">
-                <h3 className="font-medium text-gray-700">Verteilungsvorschlag (offene Monate)</h3>
-                <button onClick={() => applyRebalancing.mutate()}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
-                  <TrendingUp size={14} /> Anwenden
-                </button>
-              </div>
-              {suggestions.map((s) => (
-                <div key={s.milestone_id} className="mb-4 bg-white rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-2 bg-gray-50 text-sm font-medium text-gray-700 border-b">
-                    {MONTH_NAMES[s.month]} {s.year} · Aktuell: {s.total_current_hours.toFixed(1)} h
-                    <span className="text-blue-600"> · Vorschlag: {s.suggested_total_hours.toFixed(1)} h</span>
-                  </div>
-                  <table className="min-w-full divide-y divide-gray-100">
-                    <thead>
-                      <tr>
-                        {['Person', 'Aktuell', 'Vorschlag', 'Δ'].map((h) => (
-                          <th key={h} className="px-4 py-2 text-left text-xs text-gray-500">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {s.budgets.map((b) => (
-                        <tr key={b.budget_id}>
-                          <td className="px-4 py-2 text-sm text-gray-700">{personName(b.person_id)}</td>
-                          <td className="px-4 py-2 text-sm text-gray-600">{b.current_hours.toFixed(1)} h</td>
-                          <td className="px-4 py-2 text-sm text-blue-600 font-medium">{b.suggested_hours.toFixed(1)} h</td>
-                          <td className={`px-4 py-2 text-sm ${Math.abs(b.suggested_hours - b.current_hours) > 0.1 ? 'text-amber-600' : 'text-gray-400'}`}>
-                            {(b.suggested_hours - b.current_hours) > 0 ? '+' : ''}{(b.suggested_hours - b.current_hours).toFixed(1)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ))}
-              {suggestions.length === 0 && (
-                <p className="text-sm text-gray-400">Keine offenen Meilensteine vorhanden.</p>
-              )}
-            </div>
-          </div>
-        )}
 
         {/* ── Invoices ── */}
         {tab === 'invoices' && (() => {

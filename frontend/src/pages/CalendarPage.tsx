@@ -422,8 +422,8 @@ function ForecastChart({
 
   const suggestionQueries = useQueries({
     queries: projectIds.map((id) => ({
-      queryKey: ['suggestions', id],
-      queryFn: () => projectsApi.suggestions(id),
+      queryKey: ['recalc-preview', id],
+      queryFn: () => projectsApi.recalcPreview(id),
       staleTime: 30_000,
     })),
   })

@@ -103,6 +103,7 @@ export interface Milestone {
   current_hours: number;
   status: 'open' | 'closed';
   is_locked: boolean;
+  is_planning_locked: boolean;
   target_budget_euros: number | null;
 }
 
@@ -144,6 +145,9 @@ export interface MilestonePersonDetail {
   work_days: number;
   absence_days: number;
   estimated_absence_days: number;
+  vacation_estimate_days: number;
+  sick_estimate_days: number;
+  training_estimate_days: number;
   holiday_days: number;
   billing_rate_per_hour: number;
   booked_hours: number;
@@ -155,13 +159,6 @@ export interface MilestoneDetail {
   milestone: Milestone;
   persons: MilestonePersonDetail[];
   warnings: string[];
-}
-
-export interface PersonDrift {
-  person_id: number;
-  planned_hours: number;
-  actual_hours: number;
-  drift_hours: number;
 }
 
 export interface BudgetSuggestion {
@@ -294,9 +291,9 @@ export const projects = {
   updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number, confirm?: boolean) =>
     req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
   recommendations: (id: number) => req<UtilizationRecommendation[]>('GET', `/projects/${id}/milestones/recommendations`),
-  drift: (id: number) => req<PersonDrift[]>('GET', `/projects/${id}/rebalancing/drift`),
-  suggestions: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/rebalancing/suggestions`),
-  applyRebalancing: (id: number) => req<unknown[]>('POST', `/projects/${id}/rebalancing/apply`),
+  recalcPreview: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/milestones/recalc-preview`),
+  setPlanningLock: (projectId: number, milestoneId: number, locked: boolean) =>
+    req<Milestone>('PUT', `/projects/${projectId}/milestones/${milestoneId}/planning-lock`, { locked }),
   invoices: (id: number) => req<MonthlyInvoice[]>('GET', `/projects/${id}/invoices`),
   closeMonth: (id: number, d: { year: number; month: number; billing_position_id: number }) =>
     req<MonthlyInvoice>('POST', `/projects/${id}/invoices/close`, d),
