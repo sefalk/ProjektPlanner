@@ -355,6 +355,8 @@ export default function ProjectDetailPage() {
   const [editTarget, setEditTarget] = useState<{ milestoneId: number; year: number; month: number } | null>(null)  // edit monthly € target
   const [editTargetAmount, setEditTargetAmount] = useState(0)
   const [targetWarnings, setTargetWarnings] = useState<string[]>([])
+  const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; personId: number; personName: string } | null>(null)  // edit estimated absence
+  const [editAbsenceDays, setEditAbsenceDays] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
   const [error, setError] = useState<string | null>(null)
@@ -437,6 +439,23 @@ export default function ProjectDetailPage() {
         setTargetWarnings([])
       }
     },
+    onError: (e: Error) => setError(e.message),
+  })
+  const clearTarget = useMutation({
+    mutationFn: (milestoneId: number) => projects.clearMilestoneTargetBudget(projectId, milestoneId),
+    onSuccess: () => { invalidateMilestones(); setError(null) },
+    onError: (e: Error) => setError(e.message),
+  })
+  const toggleHoursLock = useMutation({
+    mutationFn: ({ milestoneId, personId, locked }: { milestoneId: number; personId: number; locked: boolean }) =>
+      projects.setHoursLock(projectId, milestoneId, personId, locked),
+    onSuccess: () => { invalidateMilestones(); setError(null) },
+    onError: (e: Error) => setError(e.message),
+  })
+  const setEstAbsence = useMutation({
+    mutationFn: ({ milestoneId, personId, days }: { milestoneId: number; personId: number; days: number | null }) =>
+      projects.setEstimatedAbsence(projectId, milestoneId, personId, days),
+    onSuccess: () => { invalidateMilestones(); setEditAbsence(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const applyRebalancing = useMutation({
@@ -773,6 +792,14 @@ export default function ProjectDetailPage() {
                                     <Pencil size={11} />
                                   </button>
                                 )}
+                                {!ms.is_locked && ms.target_budget_euros != null && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); clearTarget.mutate(ms.id) }}
+                                    title="Budget-Ziel gesperrt (Sync mit externem System) — klicken zum Entsperren; Neuberechnung darf den Monat dann wieder anpassen"
+                                    className="p-0.5 text-blue-500 hover:text-blue-700">
+                                    <Lock size={11} />
+                                  </button>
+                                )}
                               </div>
                               <div className="relative w-full h-6 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${eurBarColor}`} style={{ width: `${Math.min(100, eurPct)}%` }} />
@@ -782,9 +809,6 @@ export default function ProjectDetailPage() {
                                   </span>
                                 )}
                               </div>
-                              {ms.target_budget_euros != null && !ms.is_locked && (
-                                <div className="mt-1 text-[10px] text-blue-500" title="Manuell gesetztes Budget-Ziel (Sync mit externem System)">Ziel gesetzt</div>
-                              )}
                             </div>
                           </td>
                           <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
@@ -836,7 +860,7 @@ export default function ProjectDetailPage() {
                                     <th className="px-4 py-1.5 text-left font-normal" title="Netto planbare Kapazität auf Basis der im Projekt festgelegten Projekt-Wochenstunden dieses MA (nicht der allgemeinen Arbeitszeit): Arbeitstage × Projekt-h/Woche minus Feiertage, Abwesenheiten und Rest-Urlaubsschätzung. Ungenutzte allgemeine Kapazität erscheint separat als Empfehlung.">Verfügbar</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Balken = gebuchte Ist- über geplanten Soll-Stunden. Stift = Soll-Stunden dieser Person anpassen.">Aufwand (Std.)</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Personenwochenstunden: Ziel aus der Projektmitgliedschaft vs. effektiver Ist-Wert (Soll-Std. ÷ Arbeitstage × Tage/Woche).">PWS (Ziel / Ist)</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · geplante Abwesenheit (gepl., aus Abwesenheits-Einträgen) · geschätzte Abwesenheit (gesch., Resturlaub anteilig + pauschal Krank/Fortbildung) · Feiertage (FT)">Tage (AT · gepl. · gesch. · FT)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · Feiertage (FT) · geplante Abwesenheit (Abw. gepl., aus Abwesenheits-Einträgen) · geschätzte Abwesenheit (Abw. gesch., Resturlaub anteilig + pauschal Krank/Fortbildung abzüglich bereits eingetragener Tage)">Tage (AT · FT · Abw. gepl./gesch.)</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -855,9 +879,7 @@ export default function ProjectDetailPage() {
                                     const bookedPct = cur > 0 ? Math.min(100, booked / cur * 100) : 0
                                     const barColor = booked > cur + 0.01 ? 'bg-red-500' : booked >= cur * 0.8 ? 'bg-orange-400' : 'bg-blue-500'
                                     const editable = ms.status === 'open' && !ms.is_locked
-                                    // Suppress the per-person "M" badge when the whole month is target-driven
-                                    // (all rows are override there — the milestone-level "Ziel gesetzt" says it instead).
-                                    const showOverrideBadge = p.is_manual_override && ms.target_budget_euros == null
+                                    const absOverride = p.estimated_absence_days_override
                                     // PWS gauge: target vs effective (Ist) as vertical markers, delta as a segment.
                                     const pwsMax = Math.max(targetPws ?? 0, effPws ?? 0, 1) * 1.15
                                     const tPos = targetPws !== null ? Math.min(100, targetPws / pwsMax * 100) : null
@@ -867,12 +889,6 @@ export default function ProjectDetailPage() {
                                     <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
                                       <td className="pl-12 pr-4 py-2 text-gray-700 whitespace-nowrap">
                                         {p.person_name}
-                                        {showOverrideBadge && (
-                                          <span title="Manuell angepasst — bleibt beim Resync erhalten"
-                                            className="ml-1.5 px-1 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700 align-middle">
-                                            M
-                                          </span>
-                                        )}
                                       </td>
                                       <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}</td>
                                       <td className="px-4 py-2">
@@ -885,6 +901,14 @@ export default function ProjectDetailPage() {
                                                 title="Soll-Stunden dieser Person anpassen"
                                                 className="p-0.5 text-gray-400 hover:text-blue-600">
                                                 <Pencil size={11} />
+                                              </button>
+                                            )}
+                                            {editable && (
+                                              <button
+                                                onClick={() => toggleHoursLock.mutate({ milestoneId: ms.id, personId: p.person_id, locked: !p.is_manual_override })}
+                                                title={p.is_manual_override ? 'Stunden gesperrt — bleiben bei Neuberechnung erhalten. Klicken zum Entsperren.' : 'Stunden entsperrt — Neuberechnung darf anpassen. Klicken zum Sperren.'}
+                                                className={`p-0.5 ${p.is_manual_override ? 'text-purple-500 hover:text-purple-700' : 'text-gray-300 hover:text-gray-500'}`}>
+                                                {p.is_manual_override ? <Lock size={11} /> : <Unlock size={11} />}
                                               </button>
                                             )}
                                           </div>
@@ -921,8 +945,29 @@ export default function ProjectDetailPage() {
                                           </div>
                                         ) : <span className="text-gray-300">–</span>}
                                       </td>
-                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title={`Arbeitstage ${p.work_days} · geplante Abwesenheit ${p.absence_days} · geschätzte Abwesenheit ${estAbs.toFixed(1)} (Resturlaub anteilig + pauschal Krank/Fortbildung) · Feiertage ${p.holiday_days}`}>
-                                        {p.work_days} · {p.absence_days} · <span className="text-gray-400">~{estAbs.toFixed(1)}</span> · {p.holiday_days}
+                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title={`Arbeitstage ${p.work_days} · Feiertage ${p.holiday_days} · Abw. geplant ${p.absence_days} · Abw. geschätzt ${estAbs.toFixed(1)} (${absOverride != null ? 'manuell gesetzt/gesperrt' : 'Resturlaub anteilig + pauschal Krank/Fortbildung abzüglich eingetragener Tage'})`}>
+                                        <span className="inline-flex items-center gap-1">
+                                          <span>{p.work_days} · {p.holiday_days} · {p.absence_days} · </span>
+                                          <span className={absOverride != null ? 'text-purple-600 font-medium' : 'text-gray-400'}>
+                                            {absOverride != null ? '' : '~'}{estAbs.toFixed(1)}
+                                          </span>
+                                          {editable && (
+                                            <button
+                                              onClick={() => { setEditAbsence({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name }); setEditAbsenceDays(Math.round(estAbs * 10) / 10) }}
+                                              title="Geschätzte Abwesenheit (Tage) manuell setzen"
+                                              className="p-0.5 text-gray-400 hover:text-blue-600">
+                                              <Pencil size={11} />
+                                            </button>
+                                          )}
+                                          {editable && absOverride != null && (
+                                            <button
+                                              onClick={() => setEstAbsence.mutate({ milestoneId: ms.id, personId: p.person_id, days: null })}
+                                              title="Geschätzte Abwesenheit gesperrt (manuell) — klicken zum Entsperren (zurück auf automatische Schätzung)"
+                                              className="p-0.5 text-purple-500 hover:text-purple-700">
+                                              <Lock size={11} />
+                                            </button>
+                                          )}
+                                        </span>
                                       </td>
                                     </tr>
                                     )
@@ -1596,6 +1641,34 @@ export default function ProjectDetailPage() {
         </Modal>
         )
       })()}
+
+      {/* Edit estimated absence (days) — manual override */}
+      {editAbsence && (
+        <Modal title={`Geschätzte Abwesenheit — ${editAbsence.personName}`} onClose={() => setEditAbsence(null)}>
+          <form onSubmit={(e) => { e.preventDefault(); setEstAbsence.mutate({ milestoneId: editAbsence.milestoneId, personId: editAbsence.personId, days: editAbsenceDays }) }} className="space-y-3">
+            <p className="text-xs text-gray-500">
+              Manuell angenommene Abwesenheitstage (nicht verplanter Resturlaub, pauschal Krank/Fortbildung).
+              Ein gesetzter Wert ersetzt die automatische Schätzung, ist gesperrt und fließt in die Verfügbarkeit ein.
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Geschätzte Abwesenheit (Tage)</label>
+              <input
+                autoFocus required type="number" min={0} step={0.1}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={editAbsenceDays}
+                onChange={(e) => setEditAbsenceDays(parseFloat(e.target.value))}
+              />
+            </div>
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={() => setEditAbsence(null)}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              <button type="submit"
+                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern (sperren)</button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* Reopen invoice confirmation */}
       {confirmReopenId !== null && (

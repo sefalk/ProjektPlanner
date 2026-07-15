@@ -117,6 +117,7 @@ export interface MilestonePersonBudget {
   initial_hours: number;
   current_hours: number;
   is_manual_override: boolean;
+  estimated_absence_days_override: number | null;
 }
 
 /** Response of a manual budget update (PUT persons/budgets): the row plus warnings. */
@@ -145,6 +146,7 @@ export interface MilestonePersonDetail {
   billing_rate_per_hour: number;
   booked_hours: number;
   is_manual_override: boolean;
+  estimated_absence_days_override: number | null;
 }
 
 export interface MilestoneDetail {
@@ -281,6 +283,12 @@ export const projects = {
   resyncMilestones: (id: number) => req<ResyncResult>('POST', `/projects/${id}/milestones/resync`),
   setMilestoneTargetBudget: (projectId: number, milestoneId: number, targetEuros: number) =>
     req<MilestoneTargetResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/target-budget`, { target_euros: targetEuros }),
+  clearMilestoneTargetBudget: (projectId: number, milestoneId: number) =>
+    req<Milestone>('DELETE', `/projects/${projectId}/milestones/${milestoneId}/target-budget`),
+  setHoursLock: (projectId: number, milestoneId: number, personId: number, locked: boolean) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/lock`, { locked }),
+  setEstimatedAbsence: (projectId: number, milestoneId: number, personId: number, days: number | null) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/estimated-absence`, { days }),
   updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number, confirm?: boolean) =>
     req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
   recommendations: (id: number) => req<UtilizationRecommendation[]>('GET', `/projects/${id}/milestones/recommendations`),
