@@ -175,6 +175,39 @@ def test_estimated_absence_override_endpoint(client):
     assert r3.status_code == 422
 
 
+def test_recalc_preview_endpoint(client):
+    proj_id, _ = _setup(client)
+    client.post(f"/projects/{proj_id}/milestones/initialize")
+    r = client.get(f"/projects/{proj_id}/milestones/recalc-preview")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 3  # Jan-Mar
+    assert all("suggested_total_hours" in s and "budgets" in s for s in body)
+
+
+def test_planning_lock_toggle_and_status(client):
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/planning-lock", json={"locked": True})
+    assert r.status_code == 200
+    assert r.json()["is_planning_locked"] is True
+    # locked month is excluded from the recalc preview
+    preview = client.get(f"/projects/{proj_id}/milestones/recalc-preview").json()
+    assert ms["id"] not in [s["milestone_id"] for s in preview]
+    # unlock
+    r2 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/planning-lock", json={"locked": False})
+    assert r2.json()["is_planning_locked"] is False
+
+
+def test_detail_exposes_estimate_breakdown(client):
+    proj_id, _ = _setup(client)
+    client.post(f"/projects/{proj_id}/milestones/initialize")
+    d = client.get(f"/projects/{proj_id}/milestones/detail").json()
+    p = d[0]["persons"][0]
+    for k in ("vacation_estimate_days", "sick_estimate_days", "training_estimate_days"):
+        assert k in p
+
+
 def test_detail_zero_hours_month_flagged(client):
     """A month with personnel but zero planned hours is flagged with a warning (§8.1)."""
     proj_id, person_id = _setup(client)

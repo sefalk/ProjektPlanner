@@ -195,6 +195,11 @@ class PersonMonthStats:
     absence_days: int            # concrete/planned absences (from PersonAbsence)
     holiday_days: int
     estimated_absence_days: float = 0.0  # estimated (remaining vacation + sick + training)
+    # Breakdown of the auto-estimate (for the tooltip). When a manual override is active,
+    # estimated_absence_days is the override and these components are the underlying auto parts.
+    vacation_estimate_days: float = 0.0
+    sick_estimate_days: float = 0.0
+    training_estimate_days: float = 0.0
 
 
 def _person_available_hours(
@@ -288,6 +293,9 @@ def _person_available_hours(
         absence_days=int(abs_days),
         holiday_days=holiday_days_count,
         estimated_absence_days=estimated_absence,
+        vacation_estimate_days=vacation_estimate,
+        sick_estimate_days=sick_estimate,
+        training_estimate_days=training_estimate,
     )
 
 
@@ -449,12 +457,14 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
     current_person_ids = {m.person_id for m in memberships}
     all_project_months = _months_in_range(project.start_date, project.end_date)
 
-    # When force=True, delete all unlocked milestones so they get fully re-created below
+    # When force=True, delete all unlocked milestones so they get fully re-created below.
+    # Closed (invoiced) AND planning-locked months are protected from the hard reset.
     if force:
         unlocked = session.exec(
             select(Milestone).where(
                 Milestone.project_id == project_id,
                 Milestone.is_locked == False,  # noqa: E712
+                Milestone.is_planning_locked == False,  # noqa: E712
             )
         ).all()
         for ms in unlocked:
@@ -891,6 +901,22 @@ def clear_milestone_target_budget(project_id: int, milestone_id: int, session: S
     return milestone
 
 
+def set_milestone_planning_lock(milestone_id: int, locked: bool, session: Session) -> Milestone:
+    """Freeze/unfreeze a whole month for planning (distinct from closed/invoiced). A
+    planning-locked month is left untouched by "Neu berechnen"/force-init. Rejected on
+    closed (invoiced) milestones (those are already fully protected)."""
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone:
+        raise MilestoneNotFound(f"Milestone {milestone_id} not found.")
+    if milestone.is_locked:
+        raise MilestoneLocked(f"Milestone {milestone_id} is closed (invoiced).")
+    milestone.is_planning_locked = locked
+    session.add(milestone)
+    session.commit()
+    session.refresh(milestone)
+    return milestone
+
+
 def set_budget_hours_lock(
     milestone_id: int, person_id: int, locked: bool, session: Session
 ) -> MilestonePersonBudget:
@@ -1115,6 +1141,7 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
         select(Milestone).where(
             Milestone.project_id == project_id,
             Milestone.is_locked == False,  # noqa: E712
+            Milestone.is_planning_locked == False,  # noqa: E712 — planning-locked months are frozen
         ).order_by(Milestone.year, Milestone.month)
     ).all()
 

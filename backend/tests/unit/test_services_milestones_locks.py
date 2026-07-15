@@ -11,6 +11,7 @@ from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
 from app.models.setting import Setting
 from app.services.milestones import (
+    MilestoneLocked,
     _person_available_hours,
     clear_milestone_target_budget,
     initialize_milestones,
@@ -18,6 +19,7 @@ from app.services.milestones import (
     resync_milestones,
     set_budget_hours_lock,
     set_estimated_absence,
+    set_milestone_planning_lock,
     set_milestone_target_budget,
 )
 
@@ -207,3 +209,42 @@ def test_clear_target_unlocks_rows_and_keeps_hours(session):
         MilestonePersonBudget.milestone_id == ms.id)).all()
     assert all(not r.is_manual_override for r in rows)  # unlocked
     assert rows[0].current_hours == pytest.approx(hours_before)  # value kept until recompute
+
+
+def test_planning_lock_freezes_month_from_recompute(session):
+    proj = _project(session, "LK06", euros=20000.0)
+    a = _person(session, "Alice")
+    _membership(session, proj.id, a.id, rate=90.0)
+    session.commit()
+    initialize_milestones(proj.id, session)
+    ms, b = _ms_and_budget(session, proj.id, a.id)
+
+    # Manually pin the month's row to an off value, then planning-lock the month.
+    b.current_hours = 3.0
+    session.add(b); session.commit()
+    set_milestone_planning_lock(ms.id, True, session)
+    session.refresh(ms)
+    assert ms.is_planning_locked is True
+
+    resync_milestones(proj.id, session)  # must skip the locked month entirely
+    session.refresh(b)
+    assert b.current_hours == pytest.approx(3.0)  # untouched despite not being an override
+
+    # Unlock → recompute may change it again.
+    set_milestone_planning_lock(ms.id, False, session)
+    resync_milestones(proj.id, session)
+    session.refresh(b)
+    assert b.current_hours != pytest.approx(3.0)
+
+
+def test_planning_lock_rejected_on_closed(session):
+    proj = _project(session, "LK07", euros=20000.0)
+    a = _person(session, "Alice")
+    _membership(session, proj.id, a.id)
+    session.commit()
+    initialize_milestones(proj.id, session)
+    ms, _ = _ms_and_budget(session, proj.id, a.id)
+    ms.is_locked = True
+    session.add(ms); session.commit()
+    with pytest.raises(MilestoneLocked):
+        set_milestone_planning_lock(ms.id, True, session)

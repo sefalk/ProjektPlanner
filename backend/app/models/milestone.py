@@ -30,7 +30,10 @@ class Milestone(ValidatedSQLModel, table=True):
     initial_hours: float = Field(ge=0)
     current_hours: float = Field(ge=0)
     status: MilestoneStatus = MilestoneStatus.open
-    is_locked: bool = False
+    is_locked: bool = False  # closed/invoiced — protected from all changes
+    # Planning lock (distinct from closed): when True the whole month is frozen and the
+    # "Neu berechnen" recompute leaves it untouched — without being invoiced/closed.
+    is_planning_locked: bool = False
     # Explicit monthly € target (synced with the external billing system). When set, the
     # month's hours are (re)distributed to hit it (B1: € leads, hours follow). None = the
     # target is derived from the global budget distribution.

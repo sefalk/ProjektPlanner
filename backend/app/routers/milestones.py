@@ -13,7 +13,12 @@ from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
-from app.services.rebalancing import UtilizationRecommendation, compute_recommendations
+from app.services.rebalancing import (
+    MilestoneSuggestion,
+    UtilizationRecommendation,
+    compute_recommendations,
+    preview_recalculation,
+)
 from app.services.milestones import (
     BudgetConfirmationRequired,
     BudgetNotFound,
@@ -32,6 +37,7 @@ from app.services.milestones import (
     resync_milestones,
     set_budget_hours_lock,
     set_estimated_absence,
+    set_milestone_planning_lock,
     set_milestone_target_budget,
 )
 
@@ -55,6 +61,9 @@ class MilestonePersonDetailOut(SQLModel):
     work_days: int
     absence_days: int
     estimated_absence_days: float = 0.0
+    vacation_estimate_days: float = 0.0
+    sick_estimate_days: float = 0.0
+    training_estimate_days: float = 0.0
     holiday_days: int
     billing_rate_per_hour: float
     booked_hours: float = 0.0
@@ -217,6 +226,21 @@ def put_estimated_absence(project_id: int, milestone_id: int, person_id: int, bo
         raise HTTPException(422, str(exc)) from exc
 
 
+@router.put("/{project_id}/milestones/{milestone_id}/planning-lock", response_model=Milestone)
+def put_planning_lock(project_id: int, milestone_id: int, body: LockUpdate, session: SessionDep):
+    """Freeze/unfreeze a whole month for planning (status 'gesperrt') — the recompute
+    leaves it untouched. Distinct from closing/invoicing."""
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone or milestone.project_id != project_id:
+        raise HTTPException(404, "Milestone not found.")
+    try:
+        return set_milestone_planning_lock(milestone_id, body.locked, session)
+    except MilestoneLocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except MilestoneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.get("/{project_id}/milestones/detail", response_model=list[MilestoneDetailOut])
 def list_milestones_detail(project_id: int, session: SessionDep):
     """Return all milestones with per-person breakdown including day statistics."""
@@ -279,6 +303,9 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 work_days=stats.work_days,
                 absence_days=stats.absence_days,
                 estimated_absence_days=stats.estimated_absence_days,
+                vacation_estimate_days=stats.vacation_estimate_days,
+                sick_estimate_days=stats.sick_estimate_days,
+                training_estimate_days=stats.training_estimate_days,
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=membership.billing_rate_per_hour,
                 booked_hours=booked_map.get(person.id, 0.0),
@@ -304,6 +331,14 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         result.append(MilestoneDetailOut(milestone=ms, persons=persons_out, warnings=warnings))
 
     return result
+
+
+@router.get("/{project_id}/milestones/recalc-preview", response_model=list[MilestoneSuggestion])
+def get_recalc_preview(project_id: int, session: SessionDep):
+    """Read-only preview of what 'Neu berechnen' would set per open milestone (inline hint)."""
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+    return preview_recalculation(project_id, session)
 
 
 @router.get(

@@ -1,21 +1,17 @@
-"""Rebalancing service — drift detection, budget-oriented suggestions, recommendations.
+"""Recalculation preview + utilization recommendations.
 
-Drift: the difference between what was planned (MilestonePersonBudget.initial_hours)
-and what was actually booked (TimeBooking.net_hours) for a given person/project.
+preview_recalculation() is a READ-ONLY preview of what the single non-destructive
+recompute ("Neu berechnen" = resync / _align_open_milestones) would set: it distributes
+the remaining budget R = total − invoiced(closed) − manual-override commitments over the
+open milestones and members via the shared net-capacity distribution (§6.6). Locked
+(closed) and planning-locked months and manual-override rows are kept fixed. It does NOT
+subtract booked hours of open months (those are execution progress within the plan, not a
+separate charge) — so a project already in sync previews unchanged. It only feeds the
+inline "Rebalanciert" hint on the milestone page; applying is done by resync_milestones.
 
-Rebalancing suggestions (V7, §6.6): distribute the *remaining* budget
-(total − invoiced/locked − already-booked in open months − manual overrides) over the
-open milestones and members using the same net-capacity distribution as initialization
-(distribute_budget). The goal is to maximally use the budget without exceeding it and
-without overbooking any person beyond their available capacity. Unlike the old engine,
-the per-milestone total may change (budget filling) and drift (booked hours) is taken
-into account. Manual-override rows are kept fixed.
-
-apply_rebalancing() writes the suggestions to the open milestones.
-
-compute_recommendations() (V8, B4) is the inverse of the overbooking check: where a
-person still has untapped general weekly capacity AND the project has budget headroom,
-it suggests raising that project's weekly hours (informational only).
+compute_recommendations() (V8, B4) is the inverse of the overbooking check: where a person
+still has untapped general weekly capacity AND the project has budget headroom, it suggests
+raising that project's weekly hours (informational only).
 """
 
 from __future__ import annotations
@@ -28,7 +24,6 @@ from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person
 from app.models.project import Project
-from app.models.timebooking import TimeBooking
 from app.services.milestones import (
     SlotKey,
     _month_bounds,
@@ -41,14 +36,6 @@ from app.services.milestones import (
 # ---------------------------------------------------------------------------
 # Data transfer objects
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class PersonDrift:
-    person_id: int
-    planned_hours: float   # SUM(MilestonePersonBudget.initial_hours) across all milestones
-    actual_hours: float    # SUM(TimeBooking.net_hours)
-    drift_hours: float     # actual - planned  (positive = over plan, negative = under)
 
 
 @dataclass
@@ -79,71 +66,20 @@ class UtilizationRecommendation:
 
 
 # ---------------------------------------------------------------------------
-# Drift computation
+# Recalculation preview (read-only)
 # ---------------------------------------------------------------------------
 
 
-def compute_drift(project_id: int, session: Session) -> list[PersonDrift]:
-    """Return per-person drift across all milestones for the project.
+def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSuggestion]:
+    """Read-only preview of what "Neu berechnen" (resync) would set, per open milestone.
 
-    Drift = actual booked hours − initially planned hours.
-    Persons with no bookings and no milestones are excluded.
-    """
-    # Planned hours per person from milestone budgets
-    milestones = session.exec(
-        select(Milestone).where(Milestone.project_id == project_id)
-    ).all()
-    milestone_ids = [m.id for m in milestones]
-
-    planned: dict[int, float] = {}
-    if milestone_ids:
-        budgets = session.exec(
-            select(MilestonePersonBudget).where(
-                MilestonePersonBudget.milestone_id.in_(milestone_ids)  # type: ignore[attr-defined]
-            )
-        ).all()
-        for b in budgets:
-            planned[b.person_id] = planned.get(b.person_id, 0.0) + b.initial_hours
-
-    # Actual booked hours per person from time bookings (excluded bookings are ignored)
-    bookings = session.exec(
-        select(TimeBooking).where(
-            TimeBooking.project_id == project_id,
-            TimeBooking.is_excluded == False,  # noqa: E712
-        )
-    ).all()
-    actual: dict[int, float] = {}
-    for tb in bookings:
-        actual[tb.person_id] = actual.get(tb.person_id, 0.0) + tb.net_hours
-
-    # Merge keys
-    all_persons = set(planned) | set(actual)
-    return [
-        PersonDrift(
-            person_id=pid,
-            planned_hours=planned.get(pid, 0.0),
-            actual_hours=actual.get(pid, 0.0),
-            drift_hours=actual.get(pid, 0.0) - planned.get(pid, 0.0),
-        )
-        for pid in sorted(all_persons)
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Suggestion engine
-# ---------------------------------------------------------------------------
-
-
-def suggest_rebalancing(project_id: int, session: Session) -> list[MilestoneSuggestion]:
-    """Budget-oriented, drift-aware rebalancing suggestions (V7, BUG-8/9/10).
-
-    Distributes the remaining budget R = total − invoiced(locked) − already-booked(open)
-    − manual-override commitments over the open milestones and members, using the same
-    net-capacity distribution as initialization (§6.6). Uses ``_person_available_hours``
-    (holiday/absence/pattern-aware) so suggestions match the initial plan (fixes BUG-8);
-    the per-milestone total may change to maximally use the budget (fixes BUG-9); booked
-    hours reduce R (fixes BUG-10). Manual-override rows are kept fixed and never exceed
-    available capacity or the budget.
+    Distributes the remaining budget R = total − invoiced(closed) − manual-override
+    commitments over the open milestones and members via the shared net-capacity
+    distribution (§6.6, same as _align_open_milestones). Manual-override rows and
+    planning-locked / closed months are kept fixed. Booked hours of OPEN months are NOT
+    subtracted — they are execution progress within the plan, not a separate charge (only
+    closed/invoiced months reduce R). This makes the preview consistent with the applied
+    recompute: for a project already in sync the suggestion equals the current state.
     """
     project = session.get(Project, project_id)
     if not project:
@@ -153,6 +89,7 @@ def suggest_rebalancing(project_id: int, session: Session) -> list[MilestoneSugg
         select(Milestone).where(
             Milestone.project_id == project_id,
             Milestone.is_locked == False,  # noqa: E712
+            Milestone.is_planning_locked == False,  # noqa: E712
         ).order_by(Milestone.year, Milestone.month)
     ).all()
     if not open_milestones:
@@ -198,22 +135,10 @@ def suggest_rebalancing(project_id: int, session: Session) -> list[MilestoneSugg
             if avail > 0:
                 avail_map[(m.person_id, (ms.year, ms.month))] = avail
 
-    # Already-booked cost in open months reduces the distributable budget (drift, BUG-10).
-    booked_open_cost = 0.0
-    bookings = session.exec(
-        select(TimeBooking).where(
-            TimeBooking.project_id == project_id,
-            TimeBooking.is_excluded == False,  # noqa: E712
-        )
-    ).all()
-    for tb in bookings:
-        if (tb.booking_date.year, tb.booking_date.month) in open_month_set:
-            booked_open_cost += tb.net_hours * rate_map.get(tb.person_id, 0.0)
-
     budget_euros = project.total_budget_euros if project.total_budget_euros and project.total_budget_euros > 0 else 0.0
     if budget_euros > 0:
         base = _remaining_euro_budget(project_id, budget_euros, open_month_set, rate_map, session)
-        remaining = max(0.0, base - override_cost - booked_open_cost)
+        remaining = max(0.0, base - override_cost)
         plan = distribute_budget(avail_map, rate_map, priorities, remaining)
     else:
         plan = distribute_budget(avail_map, rate_map, priorities, None)
@@ -243,47 +168,6 @@ def suggest_rebalancing(project_id: int, session: Session) -> list[MilestoneSugg
         ))
 
     return suggestions
-
-
-# ---------------------------------------------------------------------------
-# Apply
-# ---------------------------------------------------------------------------
-
-
-def apply_rebalancing(project_id: int, session: Session) -> list[MilestonePersonBudget]:
-    """Write the suggested rebalancing to all open milestones.
-
-    For each open milestone, updates every MilestonePersonBudget.current_hours
-    and re-syncs Milestone.current_hours to the new sum.
-    Locked milestones are silently skipped.
-
-    Returns the list of updated MilestonePersonBudget rows.
-    """
-    suggestions = suggest_rebalancing(project_id, session)
-    updated: list[MilestonePersonBudget] = []
-
-    for ms_suggestion in suggestions:
-        milestone = session.get(Milestone, ms_suggestion.milestone_id)
-        if not milestone or milestone.is_locked:
-            continue
-
-        new_total = 0.0
-        for bs in ms_suggestion.budgets:
-            budget = session.get(MilestonePersonBudget, bs.budget_id)
-            if not budget:
-                continue
-            budget.current_hours = bs.suggested_hours
-            new_total += bs.suggested_hours
-            session.add(budget)
-            updated.append(budget)
-
-        milestone.current_hours = new_total  # no rounding — full precision (§9.4)
-        session.add(milestone)
-
-    session.commit()
-    for b in updated:
-        session.refresh(b)
-    return updated
 
 
 # ---------------------------------------------------------------------------
