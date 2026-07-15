@@ -31,6 +31,10 @@ class Milestone(ValidatedSQLModel, table=True):
     current_hours: float = Field(ge=0)
     status: MilestoneStatus = MilestoneStatus.open
     is_locked: bool = False
+    # Explicit monthly € target (synced with the external billing system). When set, the
+    # month's hours are (re)distributed to hit it (B1: € leads, hours follow). None = the
+    # target is derived from the global budget distribution.
+    target_budget_euros: float | None = Field(default=None, ge=0)
 
 
 class MilestonePersonBudget(ValidatedSQLModel, table=True):
@@ -49,3 +53,5 @@ class MilestonePersonBudget(ValidatedSQLModel, table=True):
     person_id: int = Field(foreign_key="person.id", index=True)
     initial_hours: float = Field(ge=0)
     current_hours: float = Field(ge=0)
+    # V5/B6: when True, this row was manually edited and must be preserved by resync.
+    is_manual_override: bool = False

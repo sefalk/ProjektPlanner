@@ -13,17 +13,23 @@ from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
+from app.services.rebalancing import UtilizationRecommendation, compute_recommendations
 from app.services.milestones import (
+    BudgetConfirmationRequired,
     BudgetNotFound,
     MilestoneLocked,
     MilestoneNotFound,
+    NoActiveMembership,
     PersonMonthStats,
+    _months_in_range,
     _parse_work_week_pattern,
     _person_available_hours,
     get_milestone_budgets,
     initialize_milestones,
-    update_person_budget,
-    update_person_budget_by_person,
+    manual_budget_update,
+    manual_budget_update_by_person,
+    resync_milestones,
+    set_milestone_target_budget,
 )
 
 router = APIRouter(prefix="/projects", tags=["milestones"])
@@ -48,11 +54,41 @@ class MilestonePersonDetailOut(SQLModel):
     holiday_days: int
     billing_rate_per_hour: float
     booked_hours: float = 0.0
+    is_manual_override: bool = False
 
 
 class MilestoneDetailOut(SQLModel):
     milestone: Milestone
     persons: list[MilestonePersonDetailOut]
+    warnings: list[str] = []
+
+
+class ResyncResultOut(SQLModel):
+    added: int
+    removed: int
+    recomputed: int
+    changed_milestone_ids: list[int]
+
+
+class BudgetUpdateOut(SQLModel):
+    """A budget row plus any informational warnings from a manual edit (V6)."""
+    id: int
+    milestone_id: int
+    person_id: int
+    initial_hours: float
+    current_hours: float
+    is_manual_override: bool
+    warnings: list[str] = []
+
+
+class TargetBudgetUpdate(SQLModel):
+    target_euros: float = Field(ge=0)
+
+
+class TargetBudgetOut(SQLModel):
+    milestone: Milestone
+    achieved_euros: float
+    warnings: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +110,51 @@ def init_milestones(project_id: int, session: SessionDep, force: bool = False):
         return initialize_milestones(project_id, session, force=force)
     except MilestoneNotFound as exc:
         raise HTTPException(404, str(exc)) from exc
+    except NoActiveMembership as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/{project_id}/milestones/resync", response_model=ResyncResultOut)
+def resync(project_id: int, session: SessionDep):
+    """Non-destructively align open milestones to the current membership state (V5).
+
+    Adds budget rows for newly active members (correctly scaled), removes rows for
+    members no longer active, recomputes auto rows against the budget — while preserving
+    manually overridden rows and locked months. Unlike initialize?force=true, manual
+    edits are kept.
+    """
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+    try:
+        summary = resync_milestones(project_id, session)
+    except MilestoneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return ResyncResultOut(
+        added=summary.added,
+        removed=summary.removed,
+        recomputed=summary.recomputed,
+        changed_milestone_ids=summary.changed_milestone_ids,
+    )
+
+
+@router.put(
+    "/{project_id}/milestones/{milestone_id}/target-budget",
+    response_model=TargetBudgetOut,
+)
+def set_target_budget(project_id: int, milestone_id: int, body: TargetBudgetUpdate, session: SessionDep):
+    """Set a month's € target (sync with the external billing system) and redistribute the
+    members' hours to hit it — € leads, hours follow (B1). Only for open (unlocked) months."""
+    try:
+        milestone, achieved, warnings = set_milestone_target_budget(
+            project_id, milestone_id, body.target_euros, session
+        )
+    except MilestoneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except MilestoneLocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return TargetBudgetOut(milestone=milestone, achieved_euros=achieved, warnings=warnings)
 
 
 @router.get("/{project_id}/milestones/detail", response_model=list[MilestoneDetailOut])
@@ -99,6 +180,8 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         p = session.get(Person, m.person_id)
         if p:
             persons_map[p.id] = p
+
+    valid_months = set(_months_in_range(project.start_date, project.end_date))
 
     result: list[MilestoneDetailOut] = []
     for ms in milestones:
@@ -138,10 +221,40 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=membership.billing_rate_per_hour,
                 booked_hours=booked_map.get(person.id, 0.0),
+                is_manual_override=budget.is_manual_override,
             ))
-        result.append(MilestoneDetailOut(milestone=ms, persons=persons_out))
+
+        # Milestone-level warnings (§8.1 / V11)
+        warnings: list[str] = []
+        has_active_member = any(
+            m.from_date <= month_end and m.to_date >= month_start for m in memberships
+        )
+        if not ms.is_locked and has_active_member and ms.current_hours == 0:
+            warnings.append(
+                "Keine planbaren Stunden in diesem Monat trotz zugeordnetem Personal "
+                "(volle Abwesenheit oder Budget erschöpft)."
+            )
+        if ms.is_locked and (ms.year, ms.month) not in valid_months:
+            warnings.append(
+                "Gesperrter Meilenstein liegt außerhalb des aktuellen Projektzeitraums."
+            )
+
+        result.append(MilestoneDetailOut(milestone=ms, persons=persons_out, warnings=warnings))
 
     return result
+
+
+@router.get(
+    "/{project_id}/milestones/recommendations",
+    response_model=list[UtilizationRecommendation],
+)
+def get_recommendations(project_id: int, session: SessionDep):
+    """Utilization recommendations (V8, B4): where a member still has untapped general
+    weekly capacity and the project has budget headroom, suggest raising the project
+    weekly hours. Informational only."""
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+    return compute_recommendations(project_id, session)
 
 
 @router.get("/{project_id}/milestones", response_model=list[Milestone])
@@ -179,9 +292,21 @@ def list_budgets(project_id: int, milestone_id: int, session: SessionDep):
     return get_milestone_budgets(milestone_id, session)
 
 
+def _budget_out(budget: MilestonePersonBudget, warnings: list[str]) -> "BudgetUpdateOut":
+    return BudgetUpdateOut(
+        id=budget.id,
+        milestone_id=budget.milestone_id,
+        person_id=budget.person_id,
+        initial_hours=budget.initial_hours,
+        current_hours=budget.current_hours,
+        is_manual_override=budget.is_manual_override,
+        warnings=warnings,
+    )
+
+
 @router.put(
     "/{project_id}/milestones/{milestone_id}/budgets/{budget_id}",
-    response_model=MilestonePersonBudget,
+    response_model=BudgetUpdateOut,
 )
 def put_budget(
     project_id: int,
@@ -189,24 +314,35 @@ def put_budget(
     budget_id: int,
     body: BudgetUpdate,
     session: SessionDep,
+    confirm: bool = False,
 ):
+    """Manually set a person's current_hours (V6, §8.2).
+
+    Without `confirm`, a change that would exceed the project euro budget returns HTTP 409
+    with a `warnings` body and is NOT saved. With `confirm=true` it is saved anyway and the
+    row is flagged as a manual override. Exceeding available capacity only warns (soft).
+    """
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        budget, _ = update_person_budget(milestone_id, budget_id, body.current_hours, session)
+        budget, _, warnings = manual_budget_update(
+            milestone_id, budget_id, body.current_hours, session, confirm=confirm
+        )
+    except BudgetConfirmationRequired as exc:
+        raise HTTPException(409, {"message": "Confirmation required.", "warnings": exc.warnings}) from exc
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return budget
+    return _budget_out(budget, warnings)
 
 
 @router.put(
     "/{project_id}/milestones/{milestone_id}/persons/{person_id}",
-    response_model=MilestonePersonBudget,
+    response_model=BudgetUpdateOut,
 )
 def put_person_budget(
     project_id: int,
@@ -214,17 +350,25 @@ def put_person_budget(
     person_id: int,
     body: BudgetUpdate,
     session: SessionDep,
+    confirm: bool = False,
 ):
-    """Update a person's current_hours within a milestone (by person_id)."""
+    """Update a person's current_hours within a milestone by person_id (V6, §8.2).
+
+    Same confirmation semantics as the budget-id variant.
+    """
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        budget, _ = update_person_budget_by_person(milestone_id, person_id, body.current_hours, session)
+        budget, _, warnings = manual_budget_update_by_person(
+            milestone_id, person_id, body.current_hours, session, confirm=confirm
+        )
+    except BudgetConfirmationRequired as exc:
+        raise HTTPException(409, {"message": "Confirmation required.", "warnings": exc.warnings}) from exc
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return budget
+    return _budget_out(budget, warnings)

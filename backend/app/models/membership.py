@@ -17,4 +17,8 @@ class ProjectMembership(ValidatedSQLModel, table=True):
     to_date: date
     weekly_capacity_hours: float = Field(gt=0, le=60)
     billing_rate_per_hour: float = Field(ge=0)
+    # Project-specific priority for budget distribution (B6):
+    #   smaller value = higher priority, equal value = same tier, 0 = neutral (default).
+    # When the budget cannot fund full capacity, higher-priority members are funded first.
+    priority: int = Field(default=0)
     # planned_hours is derived: SUM(MilestonePersonBudget.initial_hours) — not stored here

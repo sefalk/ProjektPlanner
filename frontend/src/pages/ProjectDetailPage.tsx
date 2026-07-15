@@ -3,11 +3,14 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, TrendingUp, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
 import {
-  projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi,
+  projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason,
 } from '../api'
 import Modal from '../components/Modal'
 import Table from '../components/Table'
+import PageIntro from '../components/PageIntro'
+import HelpPopover from '../components/HelpPopover'
+import { MILESTONE_INTRO, MilestoneHelpContent } from '../content/milestoneHelp'
 
 const MONTH_NAMES = [
   '', 'Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
@@ -341,14 +344,19 @@ export default function ProjectDetailPage() {
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
   const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
-  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
+  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
   const [editBudget, setEditBudget] = useState<{ milestoneId: number; personId: number; personName: string; currentHours: number } | null>(null)
   const [editHours, setEditHours] = useState(0)
+  const [budgetWarnings, setBudgetWarnings] = useState<string[]>([])   // manual-edit warnings (V6)
+  const [budgetNeedsConfirm, setBudgetNeedsConfirm] = useState(false)  // budget overrun awaiting confirm
+  const [editTarget, setEditTarget] = useState<{ milestoneId: number; year: number; month: number } | null>(null)  // edit monthly € target
+  const [editTargetAmount, setEditTargetAmount] = useState(0)
+  const [targetWarnings, setTargetWarnings] = useState<string[]>([])
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
-  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90 })
+  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0 })
   const [error, setError] = useState<string | null>(null)
   const [memberWarnings, setMemberWarnings] = useState<string[]>([])
   const [closeWarnings, setCloseWarnings] = useState<string[]>([])
@@ -368,6 +376,7 @@ export default function ProjectDetailPage() {
   const { data: milestonesDetail = [] } = useQuery({ queryKey: ['milestones-detail', projectId], queryFn: () => projects.milestonesDetail(projectId) })
   const { data: drift = [] } = useQuery({ queryKey: ['drift', projectId], queryFn: () => projects.drift(projectId) })
   const { data: suggestions = [] } = useQuery({ queryKey: ['suggestions', projectId], queryFn: () => projects.suggestions(projectId) })
+  const { data: recommendations = [] } = useQuery({ queryKey: ['recommendations', projectId], queryFn: () => projects.recommendations(projectId) })
   const { data: invoiceList = [] } = useQuery({ queryKey: ['invoices', projectId], queryFn: () => projects.invoices(projectId) })
   const { data: memberships = [] } = useQuery({ queryKey: ['memberships', projectId], queryFn: () => projects.memberships(projectId) })
   const { data: billingPositions = [] } = useQuery({ queryKey: ['billingPositions', projectId], queryFn: () => projects.billingPositions(projectId) })
@@ -379,17 +388,55 @@ export default function ProjectDetailPage() {
   const invalidateMilestones = () => {
     qc.invalidateQueries({ queryKey: ['milestones', projectId] })
     qc.invalidateQueries({ queryKey: ['milestones-detail', projectId] })
+    qc.invalidateQueries({ queryKey: ['suggestions', projectId] })
+    qc.invalidateQueries({ queryKey: ['recommendations', projectId] })
   }
 
   const initMilestones = useMutation({
     mutationFn: (force?: boolean) => projects.initMilestones(projectId, force),
     onSuccess: invalidateMilestones,
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const resyncMilestones = useMutation({
+    mutationFn: () => projects.resyncMilestones(projectId),
+    onSuccess: invalidateMilestones,
+    onError: (e: Error) => setError(e.message),
   })
 
   const updatePersonBudget = useMutation({
-    mutationFn: ({ milestoneId, personId, hours }: { milestoneId: number; personId: number; hours: number }) =>
-      projects.updatePersonBudget(projectId, milestoneId, personId, hours),
-    onSuccess: () => { invalidateMilestones(); setEditBudget(null) },
+    mutationFn: ({ milestoneId, personId, hours, confirm }: { milestoneId: number; personId: number; hours: number; confirm?: boolean }) =>
+      projects.updatePersonBudget(projectId, milestoneId, personId, hours, confirm),
+    onSuccess: () => {
+      invalidateMilestones()
+      setEditBudget(null)
+      setBudgetWarnings([])
+      setBudgetNeedsConfirm(false)
+    },
+    onError: (e: unknown) => {
+      // Budget overrun without confirm → 409 with a warnings payload (V6, §8.2).
+      if (e instanceof ApiError && e.status === 409) {
+        const body = e.body as { detail?: { warnings?: string[] } }
+        setBudgetWarnings(body?.detail?.warnings ?? ['Budget würde überschritten.'])
+        setBudgetNeedsConfirm(true)
+      } else {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    },
+  })
+  const setTargetBudget = useMutation({
+    mutationFn: ({ milestoneId, amount }: { milestoneId: number; amount: number }) =>
+      projects.setMilestoneTargetBudget(projectId, milestoneId, amount),
+    onSuccess: (result) => {
+      invalidateMilestones()
+      setError(null)
+      if (result.warnings && result.warnings.length > 0) {
+        setTargetWarnings(result.warnings)  // keep dialog open to show the capacity warning
+      } else {
+        setEditTarget(null)
+        setTargetWarnings([])
+      }
+    },
     onError: (e: Error) => setError(e.message),
   })
   const applyRebalancing = useMutation({
@@ -535,112 +582,217 @@ export default function ProjectDetailPage() {
               return next
             })
           }
+          const fmtEur = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          const fmtH = (n: number) => `${n.toFixed(2)} h`
+          // Invoice (Ist) per closed month — what a locked month actually consumed of the
+          // budget (§9.3), not its frozen plan.
+          const invoiceByMonth = new Map(invoiceList.map((i) => [`${i.year}-${i.month}`, i]))
+          const plannedCost = (d: MilestoneDetail) => d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+          // Budget-relevant € of a month: locked → invoiced Ist, open → planned current cost.
+          // Summed this is the forecast (Prognose), which never exceeds the budget.
+          const monthEuros = (d: MilestoneDetail) => {
+            const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
+            return d.milestone.is_locked && inv != null ? inv.total_amount_euros : plannedCost(d)
+          }
           const totals = milestonesDetail.reduce(
             (acc, d: MilestoneDetail) => ({
-              initial: acc.initial + d.milestone.initial_hours,
               current: acc.current + d.milestone.current_hours,
-              planEuros: acc.planEuros + d.persons.reduce((s, p) => s + p.initial_hours * p.billing_rate_per_hour, 0),
-              currentEuros: acc.currentEuros + d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0),
+              booked: acc.booked + d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0),
+              forecastEuros: acc.forecastEuros + monthEuros(d),
             }),
-            { initial: 0, current: 0, planEuros: 0, currentEuros: 0 },
+            { current: 0, booked: 0, forecastEuros: 0 },
           )
+          const istEuros = invoiceList.reduce((s, i) => s + i.total_amount_euros, 0)  // abgerechnet
+          const budget = project.total_budget_euros
+          const deltaEuros = totals.forecastEuros - budget  // >0 = Überschreitung, <0 = Rest
+          const overBudget = deltaEuros > 0.01
+          // Per-member breakdown of current (Ziel) vs booked (Ist) hours across all months (F2).
+          const perMember = new Map<number, { name: string; ziel: number; ist: number }>()
+          for (const d of milestonesDetail) {
+            for (const p of d.persons) {
+              const e = perMember.get(p.person_id) ?? { name: p.person_name, ziel: 0, ist: 0 }
+              e.ziel += p.current_hours
+              e.ist += p.booked_hours ?? 0
+              perMember.set(p.person_id, e)
+            }
+          }
+          const memberBreakdown = [...perMember.values()].filter((e) => e.ziel > 0 || e.ist > 0)
+          const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
+          const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
+            const ms = new Date(y, mo - 1, 1)
+            const me = new Date(y, mo, 0)
+            return new Date(m.from_date) <= me && new Date(m.to_date) >= ms
+          }
+          // "veraltet": an open milestone is missing a budget row for a member active that
+          // month (member added/changed after the last (re)initialization) → resync needed.
+          const isStale = milestonesDetail.some((d) =>
+            !d.milestone.is_locked &&
+            memberships.some((m) => overlapsMonth(m, d.milestone.year, d.milestone.month)
+              && !d.persons.some((p) => p.person_id === m.person_id)))
           return (
             <div>
+              <PageIntro
+                text={MILESTONE_INTRO}
+                helpTitle="Meilenstein-Planung — Hilfe"
+                helpContent={<MilestoneHelpContent />}
+              />
               <div className="flex justify-between items-center mb-4">
-                <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
-                <button onClick={() => {
-                  if (memberships.length === 0) {
-                    setError('Bitte zuerst Mitglieder anlegen, bevor Meilensteine initialisiert werden.')
-                  } else if (milestonesDetail.length > 0) {
-                    setShowReinitConfirm(true)
-                  } else {
-                    initMilestones.mutate(false)
-                  }
-                }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
-                  <RefreshCw size={14} /> Initialisieren
-                </button>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-medium text-gray-700">Monatliche Meilensteine</h3>
+                  {isStale && (
+                    <span title="Mitglieder wurden nach der letzten Initialisierung geändert. Resync gleicht die offenen Meilensteine an (manuelle Anpassungen bleiben erhalten)."
+                      className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                      veraltet
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {milestonesDetail.length > 0 && (
+                    <button onClick={() => resyncMilestones.mutate()}
+                      title="Offene Meilensteine an den aktuellen Mitglieder-Stand angleichen (nicht-destruktiv, manuelle Anpassungen bleiben erhalten)."
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                      <RotateCcw size={14} /> Resync
+                    </button>
+                  )}
+                  <button onClick={() => {
+                    if (memberships.length === 0) {
+                      setError('Bitte zuerst Mitglieder anlegen, bevor Meilensteine initialisiert werden.')
+                    } else if (milestonesDetail.length > 0) {
+                      setShowReinitConfirm(true)
+                    } else {
+                      initMilestones.mutate(false)
+                    }
+                  }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                    <RefreshCw size={14} /> Initialisieren
+                  </button>
+                </div>
               </div>
+              {recommendations.length > 0 && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+                  <p className="font-medium mb-1">Auslastungs-Empfehlungen</p>
+                  <ul className="list-disc list-inside space-y-0.5 text-xs">
+                    {recommendations.map((r) => (
+                      <li key={r.person_id}>
+                        <strong>{r.person_name}</strong> hat noch {r.free_weekly_hours.toFixed(1)} h/Woche freie Kapazität —
+                        Projekt-Wochenstunden könnten um bis zu {r.recommended_additional_hours.toFixed(1)} h erhöht werden
+                        (Budget-Spielraum: {r.budget_headroom_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })}).
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-6"></th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Monat</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Geplante Stunden bei Initialisierung (verfügbare Kapazität × Budget-Skalierung)">Plan (Std.)</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Stunden inkl. manueller Anpassungen. Fortschrittsbalken = gebuchte / geplante Stunden.">Aktuell (Std.)</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Budgetanteil dieses Monats in €: Summe(Plan-Std. × Stundensatz)">Plan (€)</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aktuell geplante Kosten: Summe(Aktuell-Std. × Stundensatz)">Aktuell (€)</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        <span className="inline-flex items-center gap-1">
+                          Aufwand (Std.)
+                          <HelpPopover label="Aufwand erklären">
+                            Abgeleiteter Zeitaufwand: Balken = gebuchte Ist- über geplanten Soll-Stunden. Stunden folgen aus dem €-Budget, sind selbst keine harte Grenze.
+                          </HelpPopover>
+                        </span>
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        <span className="inline-flex items-center gap-1">
+                          Budget (€)
+                          <HelpPopover label="Budget-€ erklären">
+                            Führendes €-Budget: Balken = gebuchte Ist- über geplanten Soll-Kosten. Offene Monate: Soll = Ziel (editierbar); abgeschlossene: abgerechneter Ist-Betrag. Summe = Prognose (≤ Budget).
+                          </HelpPopover>
+                        </span>
+                      </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {milestonesDetail.length === 0 && (
-                      <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
+                      <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Meilensteine. Bitte initialisieren.</td></tr>
                     )}
                     {milestonesDetail.map((d: MilestoneDetail) => {
                       const ms = d.milestone
                       const expanded = expandedMilestones.has(ms.id)
-                      const planEuros = d.persons.reduce((s, p) => s + p.initial_hours * p.billing_rate_per_hour, 0)
-                      const currentEuros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+                      const plannedEuros = d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
+                      // Soll €: open month → the target (editable) or the planned cost; closed → invoiced Ist.
+                      const sollEuros = ms.is_locked ? monthEuros(d) : (ms.target_budget_euros ?? plannedEuros)
                       const bookedEuros = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0) * p.billing_rate_per_hour, 0)
                       const totalBooked = d.persons.reduce((s, p) => s + (p.booked_hours ?? 0), 0)
                       const pct = ms.current_hours > 0 ? Math.min(150, (totalBooked / ms.current_hours) * 100) : 0
                       const barColor = pct > 100 ? 'bg-red-500' : pct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
-                      const eurPct = currentEuros > 0 ? Math.min(150, (bookedEuros / currentEuros) * 100) : 0
+                      const eurPct = sollEuros > 0 ? Math.min(150, (bookedEuros / sollEuros) * 100) : 0
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
-                      const fmtEur = (n: number) => n > 0 ? n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : null
+                      const sug = suggestionByMs.get(ms.id)
+                      const rebalDelta = sug ? sug.suggested_total_hours - ms.current_hours : 0
                       return [
                         <tr key={ms.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(ms.id)}>
                           <td className="px-4 py-3 text-gray-400">
                             {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                           </td>
-                          <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[ms.month]} {ms.year}</td>
-                          <td className="px-4 py-3 text-sm text-gray-600">{ms.initial_hours.toFixed(1)} h</td>
+                          <td className="px-4 py-3 text-sm font-medium text-gray-700">
+                            <div className="flex items-center gap-1.5">
+                              <span>{MONTH_NAMES[ms.month]} {ms.year}</span>
+                              {d.warnings.length > 0 && (
+                                <span title={d.warnings.join('\n')} className="text-amber-500" aria-label="Warnung">
+                                  <Flag size={12} />
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
-                              <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                <span>{totalBooked.toFixed(1)} h</span>
-                                <span>{ms.current_hours.toFixed(1)} h</span>
+                              <div className="flex justify-end text-xs text-gray-500 mb-1">
+                                <span>{fmtH(ms.current_hours)} <span className="text-[10px] text-gray-400">(Soll)</span></span>
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${barColor}`} style={{ width: `${Math.min(100, pct)}%` }} />
                                 {pct > 0 && (
                                   <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
-                                    {Math.round(pct)} %
+                                    {fmtH(totalBooked)} · {Math.round(pct)} %
                                   </span>
                                 )}
                               </div>
+                              {sug && !ms.is_locked && Math.abs(rebalDelta) > 0.1 && (
+                                <div className="mt-1 text-[11px] text-amber-600" title="Vorschlag aus dem Rebalancing (Budget-Ausschöpfung). Im Tab Rebalancing anwenden.">
+                                  Rebalanciert: {fmtH(sug.suggested_total_hours)} ({rebalDelta > 0 ? '+' : ''}{rebalDelta.toFixed(2)})
+                                </div>
+                              )}
                             </div>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">
-                            {fmtEur(planEuros) ?? <span className="text-gray-300">–</span>}
                           </td>
                           <td className="px-4 py-3">
                             <div className="min-w-[9rem]">
-                              <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                <span>{fmtEur(bookedEuros) ?? '0 €'}</span>
-                                <span>{fmtEur(currentEuros) ?? '–'}</span>
+                              <div className="flex justify-end items-center gap-1 text-xs text-gray-500 mb-1">
+                                <span>{sollEuros > 0 ? fmtEur(sollEuros) : '–'}</span>
+                                <span className="text-[10px] text-gray-400">({ms.is_locked ? 'Ist' : 'Soll'})</span>
+                                {!ms.is_locked && (
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setEditTarget({ milestoneId: ms.id, year: ms.year, month: ms.month }); setEditTargetAmount(Math.round(sollEuros * 100) / 100); setTargetWarnings([]) }}
+                                    title="Budget-Ziel dieses Monats setzen (verteilt die Stunden automatisch)"
+                                    className="p-0.5 text-gray-400 hover:text-blue-600">
+                                    <Pencil size={11} />
+                                  </button>
+                                )}
                               </div>
                               <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${eurBarColor}`} style={{ width: `${Math.min(100, eurPct)}%` }} />
                                 {eurPct > 0 && (
                                   <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
-                                    {Math.round(eurPct)} %
+                                    {fmtEur(bookedEuros)} · {Math.round(eurPct)} %
                                   </span>
                                 )}
                               </div>
+                              {ms.target_budget_euros != null && !ms.is_locked && (
+                                <div className="mt-1 text-[10px] text-blue-500" title="Manuell gesetztes Budget-Ziel (Sync mit externem System)">Ziel gesetzt</div>
+                              )}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-sm">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
-                              {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
-                            </span>
-                          </td>
                           <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center gap-2">
-                              {ms.is_locked ? <Lock size={13} className="text-gray-400" /> : <Unlock size={13} className="text-gray-300" />}
+                            <div className="flex flex-col items-start gap-1">
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${ms.status === 'closed' ? 'bg-gray-100 text-gray-500' : 'bg-green-50 text-green-700'}`}>
+                                {ms.is_locked ? <Lock size={11} /> : <Unlock size={11} className="text-green-600" />}
+                                {ms.status === 'closed' ? 'Abgeschlossen' : 'Offen'}
+                              </span>
                               {ms.status === 'open' && !ms.is_locked && (
                                 <button
                                   onClick={() => {
@@ -676,21 +828,15 @@ export default function ProjectDetailPage() {
                         </tr>,
                         expanded && d.persons.length > 0 && (
                           <tr key={`${ms.id}-persons`}>
-                            <td colSpan={9} className="p-0">
+                            <td colSpan={5} className="p-0">
                               <table className="w-full bg-slate-50 border-t border-slate-100">
                                 <thead>
                                   <tr className="text-xs text-gray-400 border-b border-slate-100">
                                     <th className="pl-12 pr-4 py-1.5 text-left font-normal">Person</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Verfügbare Kapazität: Arbeitstage × h/Woche minus Abwesenheits- und Urlaubsschätzung">Verfügbarkeit</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Geplante Stunden (Budget-proportional verteilt)">Plan</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Aktuell geplante Stunden (manuell anpassbar)">Aktuell</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Aus Sage importierte Buchungen">Gebucht</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Effektive Personenwochenstunden: Aktuell ÷ (Arbeitstage / Tage-je-Woche). Zeigt den impliziten wöchentlichen Aufwand aus den geplanten Stunden.">Eff. PWS</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Abweichung der effektiven PWS zur Ziel-PWS aus der Projektmitgliedschaft.">Δ PWS</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage im Monat (Mo–Fr, exkl. Feiertage)">Arbeitstage</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Abwesenheit</th>
-                                    <th className="px-4 py-1.5 text-left font-normal">Feiertage</th>
-                                    <th className="px-4 py-1.5"></th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Netto planbare Kapazität auf Basis der im Projekt festgelegten Projekt-Wochenstunden dieses MA (nicht der allgemeinen Arbeitszeit): Arbeitstage × Projekt-h/Woche minus Feiertage, Abwesenheiten und Rest-Urlaubsschätzung. Ungenutzte allgemeine Kapazität erscheint separat als Empfehlung.">Verfügbar</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Balken = gebuchte Ist- über geplanten Soll-Stunden. Stift = Soll-Stunden dieser Person anpassen.">Aufwand (Std.)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Personenwochenstunden: Ziel aus der Projektmitgliedschaft vs. effektiver Ist-Wert (Soll-Std. ÷ Arbeitstage × Tage/Woche).">PWS (Ziel / Ist)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · Abwesenheit (Abw) · Feiertage (FT)">Tage (AT · Abw · FT)</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -700,39 +846,80 @@ export default function ProjectDetailPage() {
                                     const effPws = p.work_days > 0 ? p.current_hours * dpw / p.work_days : null
                                     const deltaPws = effPws !== null && targetPws !== null ? effPws - targetPws : null
                                     const avail = p.available_hours ?? null
-                                    const planOverbooked = avail !== null && p.initial_hours > avail + 0.1
-                                    const planUnderbooked = avail !== null && p.initial_hours < avail - 0.1
+                                    const booked = p.booked_hours ?? 0
+                                    const cur = p.current_hours
+                                    // Planning bar: booked (Ist) fill over the current-plan (Soll) track.
+                                    const bookedPct = cur > 0 ? Math.min(100, booked / cur * 100) : 0
+                                    const barColor = booked > cur + 0.01 ? 'bg-red-500' : booked >= cur * 0.8 ? 'bg-orange-400' : 'bg-blue-500'
+                                    const editable = ms.status === 'open' && !ms.is_locked
+                                    // Suppress the per-person "M" badge when the whole month is target-driven
+                                    // (all rows are override there — the milestone-level "Ziel gesetzt" says it instead).
+                                    const showOverrideBadge = p.is_manual_override && ms.target_budget_euros == null
+                                    // PWS gauge: target vs effective (Ist) as vertical markers, delta as a segment.
+                                    const pwsMax = Math.max(targetPws ?? 0, effPws ?? 0, 1) * 1.15
+                                    const tPos = targetPws !== null ? Math.min(100, targetPws / pwsMax * 100) : null
+                                    const iPos = effPws !== null ? Math.min(100, effPws / pwsMax * 100) : null
+                                    const deltaColor = deltaPws === null ? '' : deltaPws > 0.05 ? 'text-orange-600' : deltaPws < -0.05 ? 'text-blue-600' : 'text-green-600'
                                     return (
                                     <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
-                                      <td className="pl-12 pr-4 py-2 text-gray-700">{p.person_name}</td>
-                                      <td className="px-4 py-2 text-gray-400">{avail !== null ? `${avail.toFixed(1)} h` : <span className="text-gray-300">–</span>}</td>
-                                      <td className={`px-4 py-2 font-medium ${planOverbooked ? 'text-red-600' : planUnderbooked ? 'text-blue-600' : 'text-gray-500'}`}
-                                          title={planOverbooked ? 'Überbucht: Plan übersteigt verfügbare Kapazität' : planUnderbooked ? 'Unterbucht: Plan liegt unter verfügbarer Kapazität' : undefined}>
-                                        {p.initial_hours.toFixed(1)} h
-                                      </td>
-                                      <td className="px-4 py-2 text-gray-700 font-medium">{p.current_hours.toFixed(1)} h</td>
-                                      <td className="px-4 py-2 text-gray-500">{(p.booked_hours ?? 0).toFixed(1)} h</td>
-                                      <td className="px-4 py-2 text-gray-600 font-medium">
-                                        {effPws !== null ? `${effPws.toFixed(1)} h/W` : <span className="text-gray-300">–</span>}
-                                      </td>
-                                      <td className="px-4 py-2 font-medium">
-                                        {deltaPws !== null
-                                          ? <span className={deltaPws > 0.05 ? 'text-orange-600' : deltaPws < -0.05 ? 'text-blue-600' : 'text-green-600'}>
-                                              {deltaPws > 0 ? '+' : ''}{deltaPws.toFixed(1)} h/W
-                                            </span>
-                                          : <span className="text-gray-300">–</span>}
-                                      </td>
-                                      <td className="px-4 py-2 text-gray-500">{p.work_days} T</td>
-                                      <td className="px-4 py-2 text-gray-500">{p.absence_days} T</td>
-                                      <td className="px-4 py-2 text-gray-500">{p.holiday_days} T</td>
-                                      <td className="px-4 py-2">
-                                        {ms.status === 'open' && !ms.is_locked && (
-                                          <button
-                                            onClick={() => { setEditBudget({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
-                                            className="p-1 text-gray-400 hover:text-blue-600">
-                                            <Pencil size={12} />
-                                          </button>
+                                      <td className="pl-12 pr-4 py-2 text-gray-700 whitespace-nowrap">
+                                        {p.person_name}
+                                        {showOverrideBadge && (
+                                          <span title="Manuell angepasst — bleibt beim Resync erhalten"
+                                            className="ml-1.5 px-1 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700 align-middle">
+                                            M
+                                          </span>
                                         )}
+                                      </td>
+                                      <td className="px-4 py-2 text-gray-400 whitespace-nowrap">{avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}</td>
+                                      <td className="px-4 py-2">
+                                        <div className="min-w-[11rem]">
+                                          <div className="flex justify-end items-center gap-1 text-[11px] text-gray-500 mb-1">
+                                            <span>{fmtH(cur)} <span className="text-[10px] text-gray-400">(Soll)</span></span>
+                                            {editable && (
+                                              <button
+                                                onClick={() => { setEditBudget({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
+                                                title="Soll-Stunden dieser Person anpassen"
+                                                className="p-0.5 text-gray-400 hover:text-blue-600">
+                                                <Pencil size={11} />
+                                              </button>
+                                            )}
+                                          </div>
+                                          <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
+                                            <div className={`h-full rounded ${barColor}`} style={{ width: `${bookedPct}%` }} />
+                                            {cur > 0 && (
+                                              <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
+                                                {fmtH(booked)} · {Math.round(bookedPct)} %
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-2">
+                                        {tPos !== null || iPos !== null ? (
+                                          <div className="min-w-[9rem]">
+                                            <div className="relative h-5 bg-gray-100 rounded">
+                                              {tPos !== null && iPos !== null && (
+                                                <div className={`absolute top-1/2 -translate-y-1/2 h-0.5 ${deltaPws! > 0 ? 'bg-orange-400' : 'bg-blue-400'}`}
+                                                  style={{ left: `${Math.min(tPos, iPos)}%`, width: `${Math.abs(iPos - tPos)}%` }} />
+                                              )}
+                                              {tPos !== null && (
+                                                <div className="absolute top-0 bottom-0 w-0.5 bg-gray-500" style={{ left: `${tPos}%` }} title={`Ziel-PWS ${targetPws?.toFixed(2)} h/W`} />
+                                              )}
+                                              {iPos !== null && (
+                                                <div className="absolute top-0 bottom-0 w-0.5 bg-emerald-500" style={{ left: `${iPos}%` }} title={`Ist eff. PWS ${effPws?.toFixed(2)} h/W`} />
+                                              )}
+                                            </div>
+                                            <div className="flex justify-between text-[10px] mt-0.5">
+                                              <span className="text-gray-500">Ziel {targetPws !== null ? targetPws.toFixed(1) : '–'}</span>
+                                              <span className="text-emerald-600">Ist {effPws !== null ? effPws.toFixed(1) : '–'}</span>
+                                              <span className={deltaColor}>{deltaPws !== null ? `${deltaPws > 0 ? '+' : ''}${deltaPws.toFixed(1)}` : ''}</span>
+                                            </div>
+                                          </div>
+                                        ) : <span className="text-gray-300">–</span>}
+                                      </td>
+                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title="Arbeitstage · Abwesenheit · Feiertage">
+                                        {p.work_days} · {p.absence_days} · {p.holiday_days}
                                       </td>
                                     </tr>
                                     )
@@ -745,22 +932,53 @@ export default function ProjectDetailPage() {
                       ]
                     })}
                     {milestonesDetail.length > 0 && (
-                      <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200">
+                      <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200 align-top">
                         <td></td>
                         <td className="px-4 py-3 text-gray-700">Gesamt</td>
-                        <td className="px-4 py-3 text-gray-700">{totals.initial.toFixed(1)} h</td>
-                        <td className="px-4 py-3 text-gray-700">{totals.current.toFixed(1)} h</td>
+                        {/* F2: total current hours + per-member Ist/Ziel breakdown */}
                         <td className="px-4 py-3 text-gray-700">
-                          {totals.planEuros > 0 ? totals.planEuros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : '–'}
+                          <div>{fmtH(totals.current)}</div>
+                          <div className="text-xs font-normal text-gray-400">
+                            gebucht {fmtH(totals.booked)}
+                          </div>
+                          {memberBreakdown.length > 0 && (
+                            <div className="mt-1.5 space-y-0.5 font-normal">
+                              {memberBreakdown.map((e) => (
+                                <div key={e.name} className="text-[11px] text-gray-500 whitespace-nowrap"
+                                  title="Ist (gebucht) / Ziel (aktuell geplant), Summe über alle Monate">
+                                  {e.name}: <span className="text-gray-600">{e.ist.toFixed(2)}</span> / {e.ziel.toFixed(2)} h
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </td>
-                        <td className="px-4 py-3 text-gray-700">
-                          {totals.currentEuros > 0 ? totals.currentEuros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }) : '–'}
+                        {/* F1: differentiated budget view */}
+                        <td className="px-4 py-3">
+                          <div className="space-y-0.5 font-normal">
+                            <div className="flex justify-between gap-4">
+                              <span className="text-gray-400 text-xs">Abgerechnet (Ist)</span>
+                              <span className="text-gray-600">{fmtEur(istEuros)}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className={`text-xs ${overBudget ? 'text-red-600' : 'text-gray-500'}`}>Prognose</span>
+                              <span className={`font-semibold ${overBudget ? 'text-red-600' : deltaEuros < -0.01 ? 'text-amber-600' : 'text-gray-700'}`}>{fmtEur(totals.forecastEuros)}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className="text-gray-400 text-xs">Vertrag (Ziel)</span>
+                              <span className="text-gray-600">{fmtEur(budget)}</span>
+                            </div>
+                            <div className="flex justify-between gap-4 border-t border-gray-200 pt-0.5">
+                              <span className={`text-xs ${overBudget ? 'text-red-600' : deltaEuros < -0.01 ? 'text-amber-600' : 'text-gray-500'}`}>
+                                {overBudget ? 'Überschreitung' : 'Restbudget'}
+                              </span>
+                              <span className={`font-medium ${overBudget ? 'text-red-600' : deltaEuros < -0.01 ? 'text-amber-600' : 'text-gray-700'}`}>
+                                {/* Restbudget = Vertrag − Prognose (positiv = übrig); Überschreitung = Prognose − Vertrag */}
+                                {overBudget ? '+' : ''}{fmtEur(Math.abs(deltaEuros))}
+                              </span>
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-4 py-3 text-gray-500 text-sm font-normal">
-                          Vertrag: {project.total_budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-                          {project.total_budget_hours != null && <><br/>{project.total_budget_hours.toLocaleString('de-DE')} h</>}
-                        </td>
-                        <td colSpan={2}></td>
+                        <td></td>
                       </tr>
                     )}
                   </tbody>
@@ -816,7 +1034,8 @@ export default function ProjectDetailPage() {
               {suggestions.map((s) => (
                 <div key={s.milestone_id} className="mb-4 bg-white rounded-lg border border-gray-200 overflow-hidden">
                   <div className="px-4 py-2 bg-gray-50 text-sm font-medium text-gray-700 border-b">
-                    {MONTH_NAMES[s.month]} {s.year} · Gesamt: {s.total_current_hours.toFixed(1)} h
+                    {MONTH_NAMES[s.month]} {s.year} · Aktuell: {s.total_current_hours.toFixed(1)} h
+                    <span className="text-blue-600"> · Vorschlag: {s.suggested_total_hours.toFixed(1)} h</span>
                   </div>
                   <table className="min-w-full divide-y divide-gray-100">
                     <thead>
@@ -1020,11 +1239,19 @@ export default function ProjectDetailPage() {
                   { key: 'weekly_capacity_hours', header: 'h/Woche', render: (m: ProjectMembership) => `${m.weekly_capacity_hours} h` },
                   { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => `${m.billing_rate_per_hour} €` },
                   {
+                    key: 'priority', header: 'Priorität',
+                    render: (m: ProjectMembership) => (
+                      <span title="Budget-Priorität: kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral">
+                        {m.priority === 0 ? <span className="text-gray-300">–</span> : m.priority}
+                      </span>
+                    ),
+                  },
+                  {
                     key: 'actions', header: '',
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour }); setError(null) }}
+                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
@@ -1285,8 +1512,10 @@ export default function ProjectDetailPage() {
       )}
 
       {/* Edit person budget modal */}
-      {editBudget && (
-        <Modal title={`Stunden anpassen — ${editBudget.personName}`} onClose={() => setEditBudget(null)}>
+      {editBudget && (() => {
+        const closeEdit = () => { setEditBudget(null); setBudgetWarnings([]); setBudgetNeedsConfirm(false) }
+        return (
+        <Modal title={`Stunden anpassen — ${editBudget.personName}`} onClose={closeEdit}>
           <form onSubmit={(e) => { e.preventDefault(); updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours }) }} className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Aktuelle Stunden</label>
@@ -1295,19 +1524,75 @@ export default function ProjectDetailPage() {
                 required type="number" min={0} step={0.01}
                 className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 value={editHours}
-                onChange={(e) => setEditHours(parseFloat(e.target.value))}
+                onChange={(e) => { setEditHours(parseFloat(e.target.value)); setBudgetNeedsConfirm(false); setBudgetWarnings([]) }}
               />
             </div>
+            {budgetWarnings.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                <p className="font-medium mb-1">{budgetNeedsConfirm ? 'Bestätigung erforderlich' : 'Hinweis'}</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  {budgetWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            )}
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => setEditBudget(null)}
+              <button type="button" onClick={closeEdit}
                 className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+              {budgetNeedsConfirm ? (
+                <button type="button"
+                  onClick={() => updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours, confirm: true })}
+                  className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700">Trotzdem speichern</button>
+              ) : (
+                <button type="submit"
+                  className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
+              )}
+            </div>
+          </form>
+        </Modal>
+        )
+      })()}
+
+      {/* Edit monthly € target budget — drives hour distribution (sync with external system) */}
+      {editTarget && (() => {
+        const closeTarget = () => { setEditTarget(null); setTargetWarnings([]) }
+        return (
+        <Modal title={`Budget-Ziel anpassen — ${MONTH_NAMES[editTarget.month]} ${editTarget.year}`} onClose={closeTarget}>
+          <form onSubmit={(e) => { e.preventDefault(); setTargetBudget.mutate({ milestoneId: editTarget.milestoneId, amount: editTargetAmount }) }} className="space-y-3">
+            <p className="text-xs text-gray-500">
+              Setze das €-Ziel dieses Monats (z. B. aus dem externen Abrechnungssystem). Die Stunden der
+              Mitarbeiter werden automatisch so verteilt, dass das Ziel erreicht wird — begrenzt durch die
+              verfügbare Kapazität.
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Budget-Ziel (€)</label>
+              <input
+                autoFocus required type="number" min={0} step={0.01}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={editTargetAmount}
+                onChange={(e) => { setEditTargetAmount(parseFloat(e.target.value)); setTargetWarnings([]) }}
+              />
+            </div>
+            {targetWarnings.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                <ul className="list-disc list-inside space-y-0.5">
+                  {targetWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            )}
+            {error && <p className="text-xs text-red-600">{error}</p>}
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={closeTarget}
+                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">
+                {targetWarnings.length > 0 ? 'Schließen' : 'Abbrechen'}
+              </button>
               <button type="submit"
                 className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
             </div>
           </form>
         </Modal>
-      )}
+        )
+      })()}
 
       {/* Reopen invoice confirmation */}
       {confirmReopenId !== null && (
@@ -1407,6 +1692,15 @@ export default function ProjectDetailPage() {
                   onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
               </div>
             </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
+              </label>
+              <input type="number" step={1}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={addMemberForm.priority}
+                onChange={(e) => setAddMemberForm({ ...addMemberForm, priority: parseInt(e.target.value) || 0 })} />
+            </div>
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={() => { setShowAddMember(false); setError(null) }}
@@ -1452,6 +1746,15 @@ export default function ProjectDetailPage() {
                   value={editMemberForm.billing_rate_per_hour}
                   onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
+              </label>
+              <input type="number" step={1}
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+                value={editMemberForm.priority}
+                onChange={(e) => setEditMemberForm({ ...editMemberForm, priority: parseInt(e.target.value) || 0 })} />
             </div>
             {error && <p className="text-xs text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 pt-2">

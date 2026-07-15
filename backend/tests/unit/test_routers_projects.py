@@ -202,6 +202,69 @@ def test_create_membership_returns_warnings_field(client):
     assert isinstance(data["warnings"], list)
 
 
+# ---------------------------------------------------------------------------
+# Referential actions (V11, WP3)
+# ---------------------------------------------------------------------------
+
+
+def _short_project(number: str) -> dict:
+    return {**_project(number), "start_date": "2026-01-01", "end_date": "2026-03-31"}
+
+
+def _setup_initialized(client, number: str):
+    """Create a 3-month project with one full-range member and initialize milestones."""
+    proj = client.post("/projects", json=_short_project(number)).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    m = client.post(f"/projects/{proj['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-03-31",
+        "weekly_capacity_hours": 40.0, "billing_rate_per_hour": 90.0,
+    }).json()
+    client.post(f"/projects/{proj['id']}/milestones/initialize")
+    return proj, person, m
+
+
+def test_delete_membership_removes_open_milestone_budgets(client):
+    proj, person, m = _setup_initialized(client, "PDEL01")
+    detail = client.get(f"/projects/{proj['id']}/milestones/detail").json()
+    assert all(len(d["persons"]) == 1 for d in detail)
+
+    assert client.delete(f"/projects/{proj['id']}/memberships/{m['id']}").status_code == 204
+
+    detail = client.get(f"/projects/{proj['id']}/milestones/detail").json()
+    assert all(d["persons"] == [] for d in detail)
+    assert all(d["milestone"]["current_hours"] == 0.0 for d in detail)
+
+
+def test_project_date_shrink_removes_out_of_range_milestones(client):
+    proj, person, m = _setup_initialized(client, "PDATE01")
+    assert len(client.get(f"/projects/{proj['id']}/milestones").json()) == 3
+
+    # Shrink to February only.
+    r = client.put(f"/projects/{proj['id']}", json={
+        **_short_project("PDATE01"), "start_date": "2026-02-01", "end_date": "2026-02-28",
+    })
+    assert r.status_code == 200
+    months = {(x["year"], x["month"]) for x in client.get(f"/projects/{proj['id']}/milestones").json()}
+    assert months == {(2026, 2)}
+
+
+def test_membership_date_shrink_prunes_budgets(client):
+    proj, person, m = _setup_initialized(client, "PMDATE01")
+
+    # Membership shrinks to February only.
+    r = client.put(f"/projects/{proj['id']}/memberships/{m['id']}", json={
+        "from_date": "2026-02-01", "to_date": "2026-02-28",
+        "weekly_capacity_hours": 40.0, "billing_rate_per_hour": 90.0,
+    })
+    assert r.status_code == 200
+
+    detail = {(d["milestone"]["year"], d["milestone"]["month"]): d
+              for d in client.get(f"/projects/{proj['id']}/milestones/detail").json()}
+    assert detail[(2026, 1)]["persons"] == []
+    assert len(detail[(2026, 2)]["persons"]) == 1
+    assert detail[(2026, 3)]["persons"] == []
+
+
 def test_create_membership_overbooking_produces_warning(client):
     proj1 = client.post("/projects", json=_project("P00001")).json()
     proj2 = client.post("/projects", json=_project("P00002")).json()

@@ -51,6 +51,113 @@ def test_initialize_milestones_project_not_found(client):
     assert client.post("/projects/9999/milestones/initialize").status_code == 404
 
 
+def test_initialize_milestones_without_members_returns_422(client):
+    """§8.1: a project without any active member cannot be initialized (backend guard)."""
+    proj = client.post("/projects", json=_project("PNOMEM")).json()
+    r = client.post(f"/projects/{proj['id']}/milestones/initialize")
+    assert r.status_code == 422
+    assert "member" in r.json()["detail"].lower()
+    # Guard runs before any mutation → no milestones created.
+    assert client.get(f"/projects/{proj['id']}/milestones").json() == []
+
+
+def test_resync_project_not_found(client):
+    assert client.post("/projects/9999/milestones/resync").status_code == 404
+
+
+def test_resync_adds_new_member_scaled(client):
+    """Adding a member and calling resync inserts a scaled budget row (BUG-4, non-destructive)."""
+    proj_id, _ = _setup(client)
+    client.post(f"/projects/{proj_id}/milestones/initialize")
+
+    # Add a second member after initialization.
+    person2 = client.post("/persons", json=_person("Second Member")).json()
+    client.post(f"/projects/{proj_id}/memberships", json=_membership(proj_id, person2["id"]))
+
+    r = client.post(f"/projects/{proj_id}/milestones/resync")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["added"] >= 1
+    assert set(body.keys()) == {"added", "removed", "recomputed", "changed_milestone_ids"}
+
+    # New member now appears in the per-person breakdown.
+    detail = client.get(f"/projects/{proj_id}/milestones/detail").json()
+    assert all(len(d["persons"]) == 2 for d in detail)
+
+
+def test_recommendations_project_not_found(client):
+    assert client.get("/projects/9999/milestones/recommendations").status_code == 404
+
+
+def test_recommendations_endpoint_returns_underbooked_member(client):
+    """A member using less than their general weekly capacity yields a recommendation (V8)."""
+    proj = client.post("/projects", json=_project("PREC01")).json()
+    person = client.post("/persons", json=_person()).json()
+    # 20 of 40 h/week used → 20 h free.
+    client.post(f"/projects/{proj['id']}/memberships", json={
+        **_membership(proj["id"], person["id"]), "weekly_capacity_hours": 20.0,
+    })
+    client.post(f"/projects/{proj['id']}/milestones/initialize")
+
+    r = client.get(f"/projects/{proj['id']}/milestones/recommendations")
+    assert r.status_code == 200
+    recs = r.json()
+    assert len(recs) == 1
+    assert recs[0]["person_id"] == person["id"]
+    assert recs[0]["free_weekly_hours"] == 20.0
+    assert recs[0]["recommended_additional_hours"] > 0
+
+
+def test_set_target_budget_redistributes_hours(client):
+    """Setting a month's € target drives the hours to hit it (A)."""
+    proj_id, _ = _setup(client)  # budget 50000, rate 90, 3 months
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/target-budget", json={"target_euros": 4500.0})
+    assert r.status_code == 200
+    body = r.json()
+    assert abs(body["achieved_euros"] - 4500.0) < 1e-6  # 50 h × 90
+    assert body["milestone"]["target_budget_euros"] == 4500.0
+
+    budgets = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()
+    total_cost = sum(b["current_hours"] * 90.0 for b in budgets)
+    assert abs(total_cost - 4500.0) < 1e-6
+
+
+def test_set_target_budget_locked_returns_409(client):
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    # close the month to lock it
+    bpos = client.post(f"/projects/{proj_id}/billing-positions",
+                       json={"position_number": "BP", "description": "", "budget_euros": 1000.0}).json()
+    client.post(f"/projects/{proj_id}/invoices/close",
+                json={"year": ms["year"], "month": ms["month"], "billing_position_id": bpos["id"]})
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/target-budget", json={"target_euros": 1000.0})
+    assert r.status_code == 409
+
+
+def test_set_target_budget_milestone_not_found(client):
+    proj_id, _ = _setup(client)
+    r = client.put(f"/projects/{proj_id}/milestones/9999/target-budget", json={"target_euros": 1000.0})
+    assert r.status_code == 404
+
+
+def test_detail_zero_hours_month_flagged(client):
+    """A month with personnel but zero planned hours is flagged with a warning (§8.1)."""
+    proj_id, person_id = _setup(client)
+    ms_list = client.post(f"/projects/{proj_id}/milestones/initialize").json()
+    ms = ms_list[0]
+    # Force this month to 0 h despite the member being assigned.
+    client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}",
+        json={"current_hours": 0.0},
+    )
+    detail = client.get(f"/projects/{proj_id}/milestones/detail").json()
+    flagged = next(d for d in detail if d["milestone"]["id"] == ms["id"])
+    assert len(flagged["warnings"]) >= 1
+    assert "planbaren Stunden" in flagged["warnings"][0]
+
+
 def test_initialize_milestones_idempotent(client):
     proj_id, _ = _setup(client)
     client.post(f"/projects/{proj_id}/milestones/initialize")
@@ -154,6 +261,58 @@ def test_update_budget(client):
     )
     assert r.status_code == 200
     assert r.json()["current_hours"] == 100.0
+
+
+def test_update_budget_sets_override_flag(client):
+    """A manual edit flags the row as an override and echoes an (empty) warnings list (V6)."""
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    budget = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{budget['id']}",
+        json={"current_hours": 10.0},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_manual_override"] is True
+    assert body["warnings"] == []
+
+
+def test_update_budget_over_budget_requires_confirm(client):
+    """Exceeding the euro budget without confirm → 409 with warnings, no save (§8.2)."""
+    proj_id, _ = _setup(client)  # budget 50000 €, rate 90 €/h
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    budget = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{budget['id']}",
+        json={"current_hours": 2000.0},  # 2000×90 = 180000 » 50000
+    )
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["warnings"]
+    assert any("Budget" in w for w in detail["warnings"])
+
+    # Not saved.
+    after = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+    assert after["current_hours"] != 2000.0
+    assert after["is_manual_override"] is False
+
+
+def test_update_budget_over_budget_with_confirm_saves(client):
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    budget = client.get(f"/projects/{proj_id}/milestones/{ms['id']}/budgets").json()[0]
+
+    r = client.put(
+        f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{budget['id']}?confirm=true",
+        json={"current_hours": 2000.0},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["current_hours"] == 2000.0
+    assert body["is_manual_override"] is True
+    assert any("Budget" in w for w in body["warnings"])
 
 
 def test_update_budget_syncs_milestone(client):

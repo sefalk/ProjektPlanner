@@ -249,6 +249,7 @@ function MembershipForm({
     to_date: '',
     weekly_capacity_hours: 40,
     billing_rate_per_hour: defaultBillingRate ?? 0,
+    priority: 0,
     project_id: 0,
   })
   return (

@@ -6,9 +6,14 @@ Workflow:
   3. resolve_project_mappings() — look up SageProjectMapping rows
   4. import_bookings()    — create ImportBatch + TimeBooking records; dedup via savepoints
 
-Supported Sage export format (current / "echtes" Sage format):
+Supported Sage export formats:
+
+  With header row (semicolon or tab separated):
     Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung
     02.03.2026;Mustermann, Max;"PRJ-001 Analytics 2026";Analytics;1:30h;
+
+  Without header row (tab separated, columns in fixed order):
+    01.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t1:30h\t
 
 Duration field "Dauer" is parsed as h:mm (e.g. "1:30h" → 1.5 h).
 Legacy column names (Buchungsdatum, Nettozeit, Sage-Projekt, …) are still accepted
@@ -120,6 +125,11 @@ _REQUIRED_COLUMNS = {
 }
 
 
+# Fixed column order used when the input has no header row.
+# Matches the Sage copy-paste format: Date, Employee, Project, Level, Duration, Comment.
+_HEADERLESS_FIELDNAMES = ["datum", "mitarbeiter", "projektname", "projektebene 1", "dauer", "bemerkung"]
+
+
 def _detect_delimiter(sample: str) -> str:
     counts: dict[str, int] = {
         ";": sample.count(";"),
@@ -127,6 +137,20 @@ def _detect_delimiter(sample: str) -> str:
         ",": sample.count(","),
     }
     return max(counts, key=lambda k: counts[k])
+
+
+def _has_header(first_line: str, delimiter: str) -> bool:
+    """Return False when the first field of the first non-empty line parses as a date.
+
+    A headerless Sage export starts directly with a date value (DD.MM.YYYY).
+    A file with a proper header row starts with a column name like "Datum".
+    """
+    first_field = first_line.split(delimiter)[0].strip()
+    try:
+        _parse_date(first_field)
+        return False  # first field is a date → no header row
+    except ParseError:
+        return True
 
 
 def _build_key_map(header_keys: list[str]) -> dict[str, str]:
@@ -182,10 +206,17 @@ def parse_rows(content: str | bytes) -> list[dict[str, Any]]:
         content = content.decode("utf-8-sig")  # strip BOM if present
 
     delimiter = _detect_delimiter(content[:2000])
-    reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+
+    first_data_line = next((l for l in content.splitlines() if l.strip()), "")
+    if _has_header(first_data_line, delimiter):
+        reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+    else:
+        reader = csv.DictReader(
+            io.StringIO(content), delimiter=delimiter, fieldnames=_HEADERLESS_FIELDNAMES
+        )
 
     raw_rows: list[dict[str, str]] = [
-        {k.strip(): (v or "").strip() for k, v in row.items()}
+        {k.strip(): (v or "").strip() for k, v in row.items() if k is not None}
         for row in reader
     ]
 

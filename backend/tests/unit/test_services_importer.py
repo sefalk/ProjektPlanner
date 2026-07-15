@@ -406,6 +406,48 @@ def test_new_format_review_sample():
     assert rows[0]["sage_project_level"] == "Analytics"
 
 
+def test_headerless_tab_format():
+    """Tab-separated without header row — Sage copy-paste format."""
+    csv_str = (
+        "01.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t6:00h\t\n"
+        "02.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t3:30h\t\n"
+    )
+    rows = parse_rows(csv_str)
+    assert len(rows) == 2
+    assert rows[0]["net_hours"] == pytest.approx(6.0)
+    assert rows[1]["net_hours"] == pytest.approx(3.5)
+    assert rows[0]["sage_employee_name"] == "Mustermann, Max"
+    assert rows[0]["sage_project_name"] == "PRJ-001 Analytics 2026"
+    assert rows[0]["sage_project_level"] == "Analytics"
+
+
+def test_headerless_tab_trailing_empty_columns():
+    """Sage copy-paste often adds trailing empty tab columns — must not crash."""
+    csv_str = (
+        "01.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t6:00h\t\t\n"
+        "02.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t3:30h\t\t\n"
+    )
+    rows = parse_rows(csv_str)
+    assert len(rows) == 2
+    assert rows[0]["net_hours"] == pytest.approx(6.0)
+    assert rows[1]["net_hours"] == pytest.approx(3.5)
+
+
+def test_headerless_tab_format_with_header_row():
+    """Same format but with optional header row — both variants must parse identically."""
+    with_header = (
+        "Datum\tMitarbeiter\tProjektname\tProjektebene 1\tDauer\tBemerkung\n"
+        "01.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t6:00h\t\n"
+    )
+    without_header = (
+        "01.06.2026\tMustermann, Max\tPRJ-001 Analytics 2026\tAnalytics\t6:00h\t\n"
+    )
+    rows_with = parse_rows(with_header)
+    rows_without = parse_rows(without_header)
+    assert rows_with[0]["net_hours"] == rows_without[0]["net_hours"]
+    assert rows_with[0]["sage_project_name"] == rows_without[0]["sage_project_name"]
+
+
 def test_new_format_parse_error_carries_details():
     csv_str = (
         "Datum;Mitarbeiter;Projektname;Projektebene 1;Dauer;Bemerkung\n"
