@@ -25,6 +25,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.models.enums import AbsenceType
+from app.models.billing import BillingPosition
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person, PersonAbsence
@@ -69,6 +70,19 @@ class BudgetConfirmationRequired(Exception):
 def _month_bounds(year: int, month: int) -> tuple[date, date]:
     last_day = monthrange(year, month)[1]
     return date(year, month, 1), date(year, month, last_day)
+
+
+def effective_rate(
+    membership: ProjectMembership, positions_by_id: dict[int, BillingPosition]
+) -> float:
+    """Effective hourly rate of a member (§21 P2): the assigned line item's rate in
+    position mode, otherwise the member's own rate (simple mode). positions_by_id maps
+    billing_position_id → BillingPosition (pass the project's positions)."""
+    if membership.billing_position_id is not None:
+        pos = positions_by_id.get(membership.billing_position_id)
+        if pos is not None:
+            return pos.billing_rate_per_hour
+    return membership.billing_rate_per_hour
 
 
 def _months_in_range(start: date, end: date) -> list[tuple[int, int]]:
