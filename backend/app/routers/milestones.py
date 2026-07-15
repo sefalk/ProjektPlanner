@@ -51,6 +51,7 @@ class MilestonePersonDetailOut(SQLModel):
     days_per_week: float
     work_days: int
     absence_days: int
+    estimated_absence_days: float = 0.0
     holiday_days: int
     billing_rate_per_hour: float
     booked_hours: float = 0.0
@@ -218,6 +219,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 days_per_week=days_per_week,
                 work_days=stats.work_days,
                 absence_days=stats.absence_days,
+                estimated_absence_days=stats.estimated_absence_days,
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=membership.billing_rate_per_hour,
                 booked_hours=booked_map.get(person.id, 0.0),

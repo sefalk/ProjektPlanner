@@ -140,6 +140,7 @@ export interface MilestonePersonDetail {
   days_per_week: number;
   work_days: number;
   absence_days: number;
+  estimated_absence_days: number;
   holiday_days: number;
   billing_rate_per_hour: number;
   booked_hours: number;

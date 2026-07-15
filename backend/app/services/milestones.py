@@ -117,8 +117,9 @@ def _get_setting_float(session: Session, key: str, default: float) -> float:
 class PersonMonthStats:
     hours: float
     work_days: int
-    absence_days: int
+    absence_days: int            # concrete/planned absences (from PersonAbsence)
     holiday_days: int
+    estimated_absence_days: float = 0.0  # estimated (remaining vacation + sick + training)
 
 
 def _person_available_hours(
@@ -205,13 +206,15 @@ def _person_available_hours(
     ).first()
     training_estimate = 0.0 if has_training else _get_setting_float(session, "training_days_per_year", 5.0) / 12.0
 
-    total_deduction = abs_days + vacation_estimate + sick_estimate + training_estimate
+    estimated_absence = vacation_estimate + sick_estimate + training_estimate
+    total_deduction = abs_days + estimated_absence
     net_hours = gross_hours - total_deduction * avg_daily_hours
     return PersonMonthStats(
         hours=max(0.0, net_hours),
         work_days=work_days_count,
         absence_days=int(abs_days),
         holiday_days=holiday_days_count,
+        estimated_absence_days=estimated_absence,
     )
 
 

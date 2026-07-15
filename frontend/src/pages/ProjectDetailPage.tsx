@@ -745,10 +745,10 @@ export default function ProjectDetailPage() {
                               <div className="flex justify-end text-xs text-gray-500 mb-1">
                                 <span>{fmtH(ms.current_hours)} <span className="text-[10px] text-gray-400">(Soll)</span></span>
                               </div>
-                              <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
+                              <div className="relative w-full h-6 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${barColor}`} style={{ width: `${Math.min(100, pct)}%` }} />
                                 {pct > 0 && (
-                                  <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
+                                  <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-white mix-blend-difference pointer-events-none">
                                     {fmtH(totalBooked)} · {Math.round(pct)} %
                                   </span>
                                 )}
@@ -774,10 +774,10 @@ export default function ProjectDetailPage() {
                                   </button>
                                 )}
                               </div>
-                              <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
+                              <div className="relative w-full h-6 bg-gray-100 rounded overflow-hidden">
                                 <div className={`h-full rounded ${eurBarColor}`} style={{ width: `${Math.min(100, eurPct)}%` }} />
                                 {eurPct > 0 && (
-                                  <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
+                                  <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-white mix-blend-difference pointer-events-none">
                                     {fmtEur(bookedEuros)} · {Math.round(eurPct)} %
                                   </span>
                                 )}
@@ -836,18 +836,21 @@ export default function ProjectDetailPage() {
                                     <th className="px-4 py-1.5 text-left font-normal" title="Netto planbare Kapazität auf Basis der im Projekt festgelegten Projekt-Wochenstunden dieses MA (nicht der allgemeinen Arbeitszeit): Arbeitstage × Projekt-h/Woche minus Feiertage, Abwesenheiten und Rest-Urlaubsschätzung. Ungenutzte allgemeine Kapazität erscheint separat als Empfehlung.">Verfügbar</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Balken = gebuchte Ist- über geplanten Soll-Stunden. Stift = Soll-Stunden dieser Person anpassen.">Aufwand (Std.)</th>
                                     <th className="px-4 py-1.5 text-left font-normal" title="Personenwochenstunden: Ziel aus der Projektmitgliedschaft vs. effektiver Ist-Wert (Soll-Std. ÷ Arbeitstage × Tage/Woche).">PWS (Ziel / Ist)</th>
-                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · Abwesenheit (Abw) · Feiertage (FT)">Tage (AT · Abw · FT)</th>
+                                    <th className="px-4 py-1.5 text-left font-normal" title="Arbeitstage (AT, Mo–Fr exkl. Feiertage) · geplante Abwesenheit (gepl., aus Abwesenheits-Einträgen) · geschätzte Abwesenheit (gesch., Resturlaub anteilig + pauschal Krank/Fortbildung) · Feiertage (FT)">Tage (AT · gepl. · gesch. · FT)</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {d.persons.map((p) => {
                                     const targetPws = memberships.find(m => m.person_id === p.person_id)?.weekly_capacity_hours ?? null
-                                    const dpw = p.days_per_week ?? 5
-                                    const effPws = p.work_days > 0 ? p.current_hours * dpw / p.work_days : null
-                                    const deltaPws = effPws !== null && targetPws !== null ? effPws - targetPws : null
                                     const avail = p.available_hours ?? null
                                     const booked = p.booked_hours ?? 0
                                     const cur = p.current_hours
+                                    // Effective PWS = utilisation of the AVAILABLE capacity (which already accounts
+                                    // for holidays + planned + estimated absences) scaled to the target → Ist = Ziel
+                                    // at full utilisation, > Ziel when overbooked. Consistent with "Verfügbar".
+                                    const effPws = avail !== null && avail > 0 && targetPws !== null ? (cur / avail) * targetPws : null
+                                    const deltaPws = effPws !== null && targetPws !== null ? effPws - targetPws : null
+                                    const estAbs = p.estimated_absence_days ?? 0
                                     // Planning bar: booked (Ist) fill over the current-plan (Soll) track.
                                     const bookedPct = cur > 0 ? Math.min(100, booked / cur * 100) : 0
                                     const barColor = booked > cur + 0.01 ? 'bg-red-500' : booked >= cur * 0.8 ? 'bg-orange-400' : 'bg-blue-500'
@@ -885,10 +888,10 @@ export default function ProjectDetailPage() {
                                               </button>
                                             )}
                                           </div>
-                                          <div className="relative w-full h-4 bg-gray-100 rounded overflow-hidden">
+                                          <div className="relative w-full h-6 bg-gray-100 rounded overflow-hidden">
                                             <div className={`h-full rounded ${barColor}`} style={{ width: `${bookedPct}%` }} />
                                             {cur > 0 && (
-                                              <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white mix-blend-difference pointer-events-none">
+                                              <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-white mix-blend-difference pointer-events-none">
                                                 {fmtH(booked)} · {Math.round(bookedPct)} %
                                               </span>
                                             )}
@@ -918,8 +921,8 @@ export default function ProjectDetailPage() {
                                           </div>
                                         ) : <span className="text-gray-300">–</span>}
                                       </td>
-                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title="Arbeitstage · Abwesenheit · Feiertage">
-                                        {p.work_days} · {p.absence_days} · {p.holiday_days}
+                                      <td className="px-4 py-2 text-gray-500 text-xs whitespace-nowrap" title={`Arbeitstage ${p.work_days} · geplante Abwesenheit ${p.absence_days} · geschätzte Abwesenheit ${estAbs.toFixed(1)} (Resturlaub anteilig + pauschal Krank/Fortbildung) · Feiertage ${p.holiday_days}`}>
+                                        {p.work_days} · {p.absence_days} · <span className="text-gray-400">~{estAbs.toFixed(1)}</span> · {p.holiday_days}
                                       </td>
                                     </tr>
                                     )
