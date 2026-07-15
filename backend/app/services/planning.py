@@ -77,16 +77,18 @@ def estimated_vacation_days(
     start: date,
     end: date,
     session: Session,
+    taken_days_flat: float = 0.0,
 ) -> float:
     """Estimate unplanned vacation for person in [start, end].
 
     For each calendar year that overlaps the period:
-        remaining_contingent = total_days − Σ concrete vacation absences in year
+        remaining_contingent = total_days − Σ concrete vacation absences in year − taken_days_flat
         fraction = period_days_in_year_segment / remaining_days_in_year_from_period_start
         estimate += max(0, remaining_contingent) × fraction
 
-    Days already covered by a concrete absence are excluded to avoid
-    double-counting (absence_days_in_range handles those).
+    Days already covered by a concrete absence are excluded to avoid double-counting
+    (absence_days_in_range handles those). taken_days_flat is a project-specific flat number
+    of already-taken vacation days (no dates) that further reduces the remaining contingent.
     """
     total_estimate = 0.0
     for year in range(start.year, end.year + 1):
@@ -117,7 +119,7 @@ def estimated_vacation_days(
                 continue
             used_days += _overlap_days(year_start, year_end, absence.start_date, a_end)
 
-        remaining_contingent = max(0.0, contingent_row.total_days - used_days)
+        remaining_contingent = max(0.0, contingent_row.total_days - used_days - taken_days_flat)
         if remaining_contingent == 0.0:
             continue
 

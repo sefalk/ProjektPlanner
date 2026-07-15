@@ -21,4 +21,9 @@ class ProjectMembership(ValidatedSQLModel, table=True):
     #   smaller value = higher priority, equal value = same tier, 0 = neutral (default).
     # When the budget cannot fund full capacity, higher-priority members are funded first.
     priority: int = Field(default=0)
+    # Project-specific already-taken vacation days (flat number, no dates). Subtracted from
+    # the person's yearly vacation contingent when estimating unplanned vacation for THIS
+    # project — mitigates over-estimation when a member is added late in the year without a
+    # known absence history. Only affects this project's availability calc.
+    vacation_days_taken: float = Field(default=0.0, ge=0)
     # planned_hours is derived: SUM(MilestonePersonBudget.initial_hours) — not stored here

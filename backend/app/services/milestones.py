@@ -261,7 +261,9 @@ def _person_available_hours(
     # estimated_vacation_days already subtracts concrete vacation already taken in the
     # year (no double counting with abs_days) and distributes the remaining contingent
     # across the remaining days of the year — see B3 / planning.estimated_vacation_days.
-    vacation_estimate = estimated_vacation_days(person.id, eff_start, eff_end, session)
+    vacation_estimate = estimated_vacation_days(
+        person.id, eff_start, eff_end, session, taken_days_flat=membership.vacation_days_taken
+    )
     # Cap: can't estimate more vacation days than actual available working days
     vacation_estimate = min(vacation_estimate, max(0, work_days_count - abs_days))
 

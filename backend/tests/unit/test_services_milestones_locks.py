@@ -237,6 +237,24 @@ def test_planning_lock_freezes_month_from_recompute(session):
     assert b.current_hours != pytest.approx(3.0)
 
 
+def test_membership_vacation_taken_reduces_estimate(session):
+    proj = _project(session, "LK08")
+    a = _person(session, "Alice")
+    m = _membership(session, proj.id, a.id)
+    session.add(VacationContingent(person_id=a.id, year=2026, total_days=30))
+    session.commit()
+    initialize_milestones(proj.id, session)
+    ms, _ = _ms_and_budget(session, proj.id, a.id)
+
+    before = _person_available_hours(a, m, proj, ms.year, ms.month, session).vacation_estimate_days
+    assert before > 0  # some remaining contingent is estimated
+
+    m.vacation_days_taken = 30.0  # whole contingent already taken (project-specific)
+    session.add(m); session.commit()
+    after = _person_available_hours(a, m, proj, ms.year, ms.month, session).vacation_estimate_days
+    assert after == pytest.approx(0.0, abs=1e-9)  # nothing left to estimate
+
+
 def test_planning_lock_rejected_on_closed(session):
     proj = _project(session, "LK07", euros=20000.0)
     a = _person(session, "Alice")
