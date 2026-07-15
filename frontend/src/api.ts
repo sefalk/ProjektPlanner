@@ -57,6 +57,8 @@ export interface Project {
   holiday_state: string;
   status: 'planned' | 'active' | 'completed' | 'archived';
   program_id: number | null;
+  sick_days_per_year_override: number | null;
+  training_days_per_year_override: number | null;
 }
 
 export interface Person {

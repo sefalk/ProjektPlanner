@@ -625,17 +625,22 @@ export default function ProjectDetailPage() {
           const budget = project.total_budget_euros
           const deltaEuros = totals.forecastEuros - budget  // >0 = Überschreitung, <0 = Rest
           const overBudget = deltaEuros > 0.01
-          // Per-member breakdown of current (Ziel) vs booked (Ist) hours across all months (F2).
-          const perMember = new Map<number, { name: string; ziel: number; ist: number }>()
+          // Per-member breakdown across all months: hours (Ziel/Ist) + day totals (AT/FT/Abw).
+          const perMember = new Map<number, { name: string; ziel: number; ist: number; at: number; ft: number; abwG: number; abwE: number }>()
           for (const d of milestonesDetail) {
             for (const p of d.persons) {
-              const e = perMember.get(p.person_id) ?? { name: p.person_name, ziel: 0, ist: 0 }
+              const e = perMember.get(p.person_id) ?? { name: p.person_name, ziel: 0, ist: 0, at: 0, ft: 0, abwG: 0, abwE: 0 }
               e.ziel += p.current_hours
               e.ist += p.booked_hours ?? 0
+              e.at += p.work_days
+              e.ft += p.holiday_days
+              e.abwG += p.absence_days
+              e.abwE += p.estimated_absence_days ?? 0
               perMember.set(p.person_id, e)
             }
           }
           const memberBreakdown = [...perMember.values()].filter((e) => e.ziel > 0 || e.ist > 0)
+          const daysBreakdown = [...perMember.values()].filter((e) => e.at || e.ft || e.abwG || e.abwE)
           const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
           const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
             const ms = new Date(y, mo - 1, 1)
@@ -1026,7 +1031,20 @@ export default function ProjectDetailPage() {
                             </div>
                           </div>
                         </td>
-                        <td></td>
+                        {/* Control view: per-member day totals aggregated over all milestones (AT · FT · Abw. gepl./gesch.) */}
+                        <td className="px-4 py-3 align-top">
+                          {daysBreakdown.length > 0 && (
+                            <div className="space-y-0.5 font-normal">
+                              <div className="text-[10px] uppercase text-gray-400 tracking-wide">Tage gesamt (AT·FT·Abw.)</div>
+                              {daysBreakdown.map((e) => (
+                                <div key={e.name} className="text-[11px] text-gray-500 whitespace-nowrap"
+                                  title={`${e.name}: Arbeitstage ${e.at} · Feiertage ${e.ft} · Abw. geplant ${e.abwG} · Abw. geschätzt ${e.abwE.toFixed(1)} — Summe über alle Meilensteine`}>
+                                  {e.name}: {e.at} · {e.ft} · {e.abwG} · <span className="text-gray-400">~{e.abwE.toFixed(1)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     )}
                   </tbody>
@@ -1334,6 +1352,8 @@ export default function ProjectDetailPage() {
             holiday_state: project.holiday_state,
             status: project.status,
             program_id: project.program_id,
+            sick_days_per_year_override: project.sick_days_per_year_override,
+            training_days_per_year_override: project.training_days_per_year_override,
           }
           const setSf = (v: typeof sf) => setSettingsForm(v)
           return (
@@ -1376,6 +1396,37 @@ export default function ProjectDetailPage() {
                   <label className="block text-xs font-medium text-gray-600 mb-1">Budget (Std.) <span className="font-normal text-gray-400">optional</span></label>
                   <input type="number" min={0} step={0.01} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     value={sf.total_budget_hours ?? ''} onChange={(e) => setSf({ ...sf, total_budget_hours: e.target.value ? parseFloat(e.target.value) : null })} />
+                </div>
+                <div className="pt-1">
+                  <p className="text-xs font-medium text-gray-600 mb-1">Abwesenheits-Richtwerte (Tage/Jahr)</p>
+                  <p className="text-[11px] text-gray-400 mb-2">
+                    Pauschale für die geschätzte Abwesenheit. Standard = globaler Wert aus den App-Einstellungen;
+                    Häkchen entfernen zum Überschreiben (0 = deaktiviert).
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {([
+                      ['sick_days_per_year_override', 'Krankheit'],
+                      ['training_days_per_year_override', 'Fortbildung'],
+                    ] as const).map(([key, label]) => {
+                      const val = sf[key]
+                      return (
+                        <div key={key}>
+                          <label className="block text-xs text-gray-600 mb-1">{label}</label>
+                          <input type="number" min={0} step={0.5}
+                            disabled={val == null}
+                            placeholder="global"
+                            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            value={val ?? ''}
+                            onChange={(e) => setSf({ ...sf, [key]: e.target.value === '' ? 0 : parseFloat(e.target.value) })} />
+                          <label className="flex items-center gap-1.5 mt-1 text-[11px] text-gray-500">
+                            <input type="checkbox" checked={val == null}
+                              onChange={(e) => setSf({ ...sf, [key]: e.target.checked ? null : 0 })} />
+                            globalen Wert verwenden
+                          </label>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
