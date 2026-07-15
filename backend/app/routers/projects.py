@@ -43,6 +43,7 @@ class MembershipCreate(SQLModel):
     weekly_capacity_hours: float = Field(gt=0, le=60)
     billing_rate_per_hour: float = Field(ge=0)
     priority: int = 0  # B6: smaller = higher priority for budget distribution
+    vacation_days_taken: float = Field(default=0.0, ge=0)
 
 
 class MembershipUpdate(SQLModel):
@@ -51,6 +52,7 @@ class MembershipUpdate(SQLModel):
     weekly_capacity_hours: float = Field(gt=0, le=60)
     billing_rate_per_hour: float = Field(ge=0)
     priority: int = 0
+    vacation_days_taken: float = Field(default=0.0, ge=0)
 
 
 class MembershipWithWarnings(SQLModel):
@@ -62,6 +64,7 @@ class MembershipWithWarnings(SQLModel):
     weekly_capacity_hours: float
     billing_rate_per_hour: float
     priority: int = 0
+    vacation_days_taken: float = 0.0
     warnings: list[str] = []
 
 
@@ -266,6 +269,7 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         weekly_capacity_hours=body.weekly_capacity_hours,
         billing_rate_per_hour=body.billing_rate_per_hour,
         priority=body.priority,
+        vacation_days_taken=body.vacation_days_taken,
     )
     try:
         session.add(membership)
@@ -284,6 +288,7 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         weekly_capacity_hours=membership.weekly_capacity_hours,
         billing_rate_per_hour=membership.billing_rate_per_hour,
         priority=membership.priority,
+        vacation_days_taken=membership.vacation_days_taken,
         warnings=warnings,
     )
 
@@ -298,6 +303,7 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
     m.weekly_capacity_hours = body.weekly_capacity_hours
     m.billing_rate_per_hour = body.billing_rate_per_hour
     m.priority = body.priority
+    m.vacation_days_taken = body.vacation_days_taken
     session.add(m)
     session.commit()
     session.refresh(m)
@@ -316,6 +322,7 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
         weekly_capacity_hours=m.weekly_capacity_hours,
         billing_rate_per_hour=m.billing_rate_per_hour,
         priority=m.priority,
+        vacation_days_taken=m.vacation_days_taken,
         warnings=warnings,
     )
 

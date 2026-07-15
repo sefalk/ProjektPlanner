@@ -39,6 +39,8 @@ function ProjectForm({ initial, onSave, onCancel }: {
     holiday_state: initial?.holiday_state ?? 'BY',
     status: initial?.status ?? 'active' as Project['status'],
     program_id: initial?.program_id ?? null,
+    sick_days_per_year_override: initial?.sick_days_per_year_override ?? null,
+    training_days_per_year_override: initial?.training_days_per_year_override ?? null,
   })
 
   const handleSave = (e: React.FormEvent) => {

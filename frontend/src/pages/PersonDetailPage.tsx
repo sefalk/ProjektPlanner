@@ -250,6 +250,7 @@ function MembershipForm({
     weekly_capacity_hours: 40,
     billing_rate_per_hour: defaultBillingRate ?? 0,
     priority: 0,
+    vacation_days_taken: 0,
     project_id: 0,
   })
   return (

@@ -24,6 +24,10 @@ class Project(ValidatedSQLModel, table=True):
     holiday_country: str = "DE"
     holiday_state: str = "BY"
     status: ProjectStatus = ProjectStatus.active
+    # Per-project overrides for the annual sick/training richtwerte (days per calendar year).
+    # None = use the global setting; a value (incl. 0 = disabled) overrides it for this project.
+    sick_days_per_year_override: float | None = Field(default=None, ge=0)
+    training_days_per_year_override: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def end_date_after_start(self) -> "Project":

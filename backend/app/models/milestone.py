@@ -30,7 +30,10 @@ class Milestone(ValidatedSQLModel, table=True):
     initial_hours: float = Field(ge=0)
     current_hours: float = Field(ge=0)
     status: MilestoneStatus = MilestoneStatus.open
-    is_locked: bool = False
+    is_locked: bool = False  # closed/invoiced — protected from all changes
+    # Planning lock (distinct from closed): when True the whole month is frozen and the
+    # "Neu berechnen" recompute leaves it untouched — without being invoiced/closed.
+    is_planning_locked: bool = False
     # Explicit monthly € target (synced with the external billing system). When set, the
     # month's hours are (re)distributed to hit it (B1: € leads, hours follow). None = the
     # target is derived from the global budget distribution.
@@ -53,5 +56,10 @@ class MilestonePersonBudget(ValidatedSQLModel, table=True):
     person_id: int = Field(foreign_key="person.id", index=True)
     initial_hours: float = Field(ge=0)
     current_hours: float = Field(ge=0)
-    # V5/B6: when True, this row was manually edited and must be preserved by resync.
+    # V5/B6: when True, this row's hours are locked — manually set and preserved by
+    # resync/rebalancing/init-repair (until explicitly unlocked, then recompute may change them).
     is_manual_override: bool = False
+    # Manual override for the estimated (unplanned) absence days of this person/month.
+    # None = auto-estimate (remaining vacation pro-rata + flat sick/training). When set it
+    # is used for the availability calc and is preserved (locked) across recomputations.
+    estimated_absence_days_override: float | None = Field(default=None, ge=0)

@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db import create_db_and_tables, seed_default_settings
-from app.routers import calendar, imports, invoices, milestones, persons, programs, projects, rebalancing, settings as settings_router
+from app.routers import calendar, imports, invoices, milestones, persons, programs, projects, settings as settings_router
 
 
 @asynccontextmanager
@@ -42,7 +42,6 @@ app.include_router(projects.router)
 app.include_router(persons.router)
 app.include_router(imports.router)
 app.include_router(milestones.router)
-app.include_router(rebalancing.router)
 app.include_router(invoices.router)
 app.include_router(calendar.router)
 app.include_router(settings_router.router)

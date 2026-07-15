@@ -57,6 +57,8 @@ export interface Project {
   holiday_state: string;
   status: 'planned' | 'active' | 'completed' | 'archived';
   program_id: number | null;
+  sick_days_per_year_override: number | null;
+  training_days_per_year_override: number | null;
 }
 
 export interface Person {
@@ -81,6 +83,7 @@ export interface ProjectMembership {
   weekly_capacity_hours: number;
   billing_rate_per_hour: number;
   priority: number;
+  vacation_days_taken: number;
   warnings?: string[];
 }
 
@@ -101,6 +104,7 @@ export interface Milestone {
   current_hours: number;
   status: 'open' | 'closed';
   is_locked: boolean;
+  is_planning_locked: boolean;
   target_budget_euros: number | null;
 }
 
@@ -117,6 +121,7 @@ export interface MilestonePersonBudget {
   initial_hours: number;
   current_hours: number;
   is_manual_override: boolean;
+  estimated_absence_days_override: number | null;
 }
 
 /** Response of a manual budget update (PUT persons/budgets): the row plus warnings. */
@@ -140,23 +145,21 @@ export interface MilestonePersonDetail {
   days_per_week: number;
   work_days: number;
   absence_days: number;
+  estimated_absence_days: number;
+  vacation_estimate_days: number;
+  sick_estimate_days: number;
+  training_estimate_days: number;
   holiday_days: number;
   billing_rate_per_hour: number;
   booked_hours: number;
   is_manual_override: boolean;
+  estimated_absence_days_override: number | null;
 }
 
 export interface MilestoneDetail {
   milestone: Milestone;
   persons: MilestonePersonDetail[];
   warnings: string[];
-}
-
-export interface PersonDrift {
-  person_id: number;
-  planned_hours: number;
-  actual_hours: number;
-  drift_hours: number;
 }
 
 export interface BudgetSuggestion {
@@ -265,7 +268,7 @@ export const projects = {
   memberships: (id: number) => req<ProjectMembership[]>('GET', `/projects/${id}/memberships`),
   addMembership: (id: number, d: Omit<ProjectMembership, 'id' | 'project_id' | 'warnings'>) =>
     req<ProjectMembership>('POST', `/projects/${id}/memberships`, d),
-  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority'>) =>
+  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority' | 'vacation_days_taken'>) =>
     req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
   deleteMembership: (projectId: number, membershipId: number) =>
     req<void>('DELETE', `/projects/${projectId}/memberships/${membershipId}`),
@@ -280,12 +283,18 @@ export const projects = {
   resyncMilestones: (id: number) => req<ResyncResult>('POST', `/projects/${id}/milestones/resync`),
   setMilestoneTargetBudget: (projectId: number, milestoneId: number, targetEuros: number) =>
     req<MilestoneTargetResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/target-budget`, { target_euros: targetEuros }),
+  clearMilestoneTargetBudget: (projectId: number, milestoneId: number) =>
+    req<Milestone>('DELETE', `/projects/${projectId}/milestones/${milestoneId}/target-budget`),
+  setHoursLock: (projectId: number, milestoneId: number, personId: number, locked: boolean) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/lock`, { locked }),
+  setEstimatedAbsence: (projectId: number, milestoneId: number, personId: number, days: number | null) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/estimated-absence`, { days }),
   updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number, confirm?: boolean) =>
     req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
   recommendations: (id: number) => req<UtilizationRecommendation[]>('GET', `/projects/${id}/milestones/recommendations`),
-  drift: (id: number) => req<PersonDrift[]>('GET', `/projects/${id}/rebalancing/drift`),
-  suggestions: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/rebalancing/suggestions`),
-  applyRebalancing: (id: number) => req<unknown[]>('POST', `/projects/${id}/rebalancing/apply`),
+  recalcPreview: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/milestones/recalc-preview`),
+  setPlanningLock: (projectId: number, milestoneId: number, locked: boolean) =>
+    req<Milestone>('PUT', `/projects/${projectId}/milestones/${milestoneId}/planning-lock`, { locked }),
   invoices: (id: number) => req<MonthlyInvoice[]>('GET', `/projects/${id}/invoices`),
   closeMonth: (id: number, d: { year: number; month: number; billing_position_id: number }) =>
     req<MonthlyInvoice>('POST', `/projects/${id}/invoices/close`, d),

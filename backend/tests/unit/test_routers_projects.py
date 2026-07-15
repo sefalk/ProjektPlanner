@@ -265,6 +265,22 @@ def test_membership_date_shrink_prunes_budgets(client):
     assert detail[(2026, 3)]["persons"] == []
 
 
+def test_membership_vacation_days_taken_roundtrip(client):
+    proj = client.post("/projects", json=_project()).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    m = client.post(f"/projects/{proj['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 40.0, "billing_rate_per_hour": 90.0, "vacation_days_taken": 12.0,
+    }).json()
+    assert m["vacation_days_taken"] == 12.0
+    upd = client.put(f"/projects/{proj['id']}/memberships/{m['id']}", json={
+        "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 40.0, "billing_rate_per_hour": 90.0, "vacation_days_taken": 5.0,
+    }).json()
+    assert upd["vacation_days_taken"] == 5.0
+    assert client.get(f"/projects/{proj['id']}/memberships").json()[0]["vacation_days_taken"] == 5.0
+
+
 def test_create_membership_overbooking_produces_warning(client):
     proj1 = client.post("/projects", json=_project("P00001")).json()
     proj2 = client.post("/projects", json=_project("P00002")).json()
