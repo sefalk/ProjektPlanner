@@ -53,5 +53,10 @@ class MilestonePersonBudget(ValidatedSQLModel, table=True):
     person_id: int = Field(foreign_key="person.id", index=True)
     initial_hours: float = Field(ge=0)
     current_hours: float = Field(ge=0)
-    # V5/B6: when True, this row was manually edited and must be preserved by resync.
+    # V5/B6: when True, this row's hours are locked — manually set and preserved by
+    # resync/rebalancing/init-repair (until explicitly unlocked, then recompute may change them).
     is_manual_override: bool = False
+    # Manual override for the estimated (unplanned) absence days of this person/month.
+    # None = auto-estimate (remaining vacation pro-rata + flat sick/training). When set it
+    # is used for the availability calc and is preserved (locked) across recomputations.
+    estimated_absence_days_override: float | None = Field(default=None, ge=0)

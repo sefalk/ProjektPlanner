@@ -142,6 +142,39 @@ def test_set_target_budget_milestone_not_found(client):
     assert r.status_code == 404
 
 
+def test_clear_target_budget_unlocks(client):
+    proj_id, _ = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    client.put(f"/projects/{proj_id}/milestones/{ms['id']}/target-budget", json={"target_euros": 4500.0})
+    r = client.delete(f"/projects/{proj_id}/milestones/{ms['id']}/target-budget")
+    assert r.status_code == 200
+    assert r.json()["target_budget_euros"] is None
+
+
+def test_hours_lock_toggle(client):
+    proj_id, person_id = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/lock", json={"locked": True})
+    assert r.status_code == 200
+    assert r.json()["is_manual_override"] is True
+    r2 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/lock", json={"locked": False})
+    assert r2.json()["is_manual_override"] is False
+
+
+def test_estimated_absence_override_endpoint(client):
+    proj_id, person_id = _setup(client)
+    ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/estimated-absence", json={"days": 4.0})
+    assert r.status_code == 200
+    assert r.json()["estimated_absence_days_override"] == 4.0
+    # clear
+    r2 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/estimated-absence", json={"days": None})
+    assert r2.json()["estimated_absence_days_override"] is None
+    # negative → 422
+    r3 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/estimated-absence", json={"days": -2.0})
+    assert r3.status_code == 422
+
+
 def test_detail_zero_hours_month_flagged(client):
     """A month with personnel but zero planned hours is flagged with a warning (§8.1)."""
     proj_id, person_id = _setup(client)

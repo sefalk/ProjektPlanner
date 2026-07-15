@@ -24,11 +24,14 @@ from app.services.milestones import (
     _months_in_range,
     _parse_work_week_pattern,
     _person_available_hours,
+    clear_milestone_target_budget,
     get_milestone_budgets,
     initialize_milestones,
     manual_budget_update,
     manual_budget_update_by_person,
     resync_milestones,
+    set_budget_hours_lock,
+    set_estimated_absence,
     set_milestone_target_budget,
 )
 
@@ -90,6 +93,14 @@ class TargetBudgetOut(SQLModel):
     milestone: Milestone
     achieved_euros: float
     warnings: list[str] = []
+
+
+class LockUpdate(SQLModel):
+    locked: bool
+
+
+class EstimatedAbsenceUpdate(SQLModel):
+    days: float | None = Field(default=None, ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +167,53 @@ def set_target_budget(project_id: int, milestone_id: int, body: TargetBudgetUpda
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return TargetBudgetOut(milestone=milestone, achieved_euros=achieved, warnings=warnings)
+
+
+@router.delete("/{project_id}/milestones/{milestone_id}/target-budget", response_model=Milestone)
+def clear_target_budget(project_id: int, milestone_id: int, session: SessionDep):
+    """Unlock a month's € target — drop it and unlock the month's rows for recomputation."""
+    try:
+        return clear_milestone_target_budget(project_id, milestone_id, session)
+    except MilestoneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except MilestoneLocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.put(
+    "/{project_id}/milestones/{milestone_id}/persons/{person_id}/lock",
+    response_model=MilestonePersonBudget,
+)
+def put_hours_lock(project_id: int, milestone_id: int, person_id: int, body: LockUpdate, session: SessionDep):
+    """Lock/unlock a person's Soll-hours for the month (locked = preserved by resync/rebalancing)."""
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone or milestone.project_id != project_id:
+        raise HTTPException(404, "Milestone not found.")
+    try:
+        return set_budget_hours_lock(milestone_id, person_id, body.locked, session)
+    except MilestoneLocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (MilestoneNotFound, BudgetNotFound) as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.put(
+    "/{project_id}/milestones/{milestone_id}/persons/{person_id}/estimated-absence",
+    response_model=MilestonePersonBudget,
+)
+def put_estimated_absence(project_id: int, milestone_id: int, person_id: int, body: EstimatedAbsenceUpdate, session: SessionDep):
+    """Set (or clear, days=null) the manual estimated-absence override for a person/month."""
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone or milestone.project_id != project_id:
+        raise HTTPException(404, "Milestone not found.")
+    try:
+        return set_estimated_absence(milestone_id, person_id, body.days, session)
+    except MilestoneLocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (MilestoneNotFound, BudgetNotFound) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/{project_id}/milestones/detail", response_model=list[MilestoneDetailOut])

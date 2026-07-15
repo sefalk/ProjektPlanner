@@ -92,6 +92,26 @@ def _overlap_days(range_start: date, range_end: date, a_start: date, a_end: date
     return (overlap_end - overlap_start).days + 1
 
 
+def _concrete_absence_days_of_type(
+    person_id: int, absence_type: AbsenceType, start: date, end: date, session: Session
+) -> float:
+    """Concrete absence-day overlap of one type in [start, end] (from PersonAbsence)."""
+    rows = session.exec(
+        select(PersonAbsence).where(
+            PersonAbsence.person_id == person_id,
+            PersonAbsence.absence_type == absence_type,
+            PersonAbsence.start_date <= end,
+        )
+    ).all()
+    total = 0.0
+    for a in rows:
+        a_end = a.end_date if a.end_date is not None else date.today()
+        if a_end < start:
+            continue
+        total += _overlap_days(start, end, a.start_date, a_end)
+    return total
+
+
 def _parse_work_week_pattern(pattern: str) -> list[float] | None:
     parts = [p.strip() for p in pattern.split(",")]
     if len(parts) != 5:
@@ -101,6 +121,28 @@ def _parse_work_week_pattern(pattern: str) -> list[float] | None:
     except ValueError:
         return None
     return values if sum(values) > 0 else None
+
+
+def _estimated_absence_override(
+    person_id: int, project_id: int, year: int, month: int, session: Session
+) -> float | None:
+    """Return the manual estimated-absence override for this person/month, or None."""
+    ms = session.exec(
+        select(Milestone).where(
+            Milestone.project_id == project_id,
+            Milestone.year == year,
+            Milestone.month == month,
+        )
+    ).first()
+    if ms is None:
+        return None
+    row = session.exec(
+        select(MilestonePersonBudget).where(
+            MilestonePersonBudget.milestone_id == ms.id,
+            MilestonePersonBudget.person_id == person_id,
+        )
+    ).first()
+    return row.estimated_absence_days_override if row else None
 
 
 def _get_setting_float(session: Session, key: str, default: float) -> float:
@@ -185,28 +227,20 @@ def _person_available_hours(
     # Cap: can't estimate more vacation days than actual available working days
     vacation_estimate = min(vacation_estimate, max(0, work_days_count - abs_days))
 
-    # Global sick / training day estimates — only if no specific absence of that type exists
-    has_sick = session.exec(
-        select(PersonAbsence).where(
-            PersonAbsence.person_id == person.id,
-            PersonAbsence.absence_type == AbsenceType.sick,
-            PersonAbsence.start_date <= eff_end,
-            PersonAbsence.end_date >= eff_start,
-        )
-    ).first()
-    sick_estimate = 0.0 if has_sick else _get_setting_float(session, "sick_days_per_year", 10.0) / 12.0
+    # Global sick / training day estimates (monthly flat from settings), reduced by any
+    # concrete sick/training absences already entered this month (clamped at >= 0 so the
+    # deduction never turns negative). Concrete days are already in abs_days above.
+    flat_sick = _get_setting_float(session, "sick_days_per_year", 10.0) / 12.0
+    actual_sick = _concrete_absence_days_of_type(person.id, AbsenceType.sick, eff_start, eff_end, session)
+    sick_estimate = max(0.0, flat_sick - actual_sick)
 
-    has_training = session.exec(
-        select(PersonAbsence).where(
-            PersonAbsence.person_id == person.id,
-            PersonAbsence.absence_type == AbsenceType.training,
-            PersonAbsence.start_date <= eff_end,
-            PersonAbsence.end_date >= eff_start,
-        )
-    ).first()
-    training_estimate = 0.0 if has_training else _get_setting_float(session, "training_days_per_year", 5.0) / 12.0
+    flat_training = _get_setting_float(session, "training_days_per_year", 5.0) / 12.0
+    actual_training = _concrete_absence_days_of_type(person.id, AbsenceType.training, eff_start, eff_end, session)
+    training_estimate = max(0.0, flat_training - actual_training)
 
-    estimated_absence = vacation_estimate + sick_estimate + training_estimate
+    # A manual (locked) override, if set for this person/month, replaces the whole estimate.
+    override = _estimated_absence_override(person.id, project.id, year, month, session)
+    estimated_absence = override if override is not None else (vacation_estimate + sick_estimate + training_estimate)
     total_deduction = abs_days + estimated_absence
     net_hours = gross_hours - total_deduction * avg_daily_hours
     return PersonMonthStats(
@@ -795,6 +829,80 @@ def set_milestone_target_budget(
             f"nur {achieved:.2f} € von {target_euros:.2f} € planbar."
         )
     return milestone, achieved, warnings
+
+
+def clear_milestone_target_budget(project_id: int, milestone_id: int, session: Session) -> Milestone:
+    """Unlock a month's € target: drop the explicit target and unlock its budget rows so
+    a later resync/rebalance may recompute them. Current hours are left in place until
+    such a recompute runs (§ lock semantics). Locked (closed) months are rejected."""
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone or milestone.project_id != project_id:
+        raise MilestoneNotFound(f"Milestone {milestone_id} not found in project {project_id}.")
+    if milestone.is_locked:
+        raise MilestoneLocked(f"Milestone {milestone_id} is locked.")
+    milestone.target_budget_euros = None
+    for row in session.exec(
+        select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == milestone_id)
+    ).all():
+        row.is_manual_override = False
+        session.add(row)
+    session.add(milestone)
+    session.commit()
+    session.refresh(milestone)
+    return milestone
+
+
+def set_budget_hours_lock(
+    milestone_id: int, person_id: int, locked: bool, session: Session
+) -> MilestonePersonBudget:
+    """Lock/unlock a person's hours for a month. Locked rows are preserved by
+    resync/rebalance; unlocking keeps the current value until the next recompute."""
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone:
+        raise MilestoneNotFound(f"Milestone {milestone_id} not found.")
+    if milestone.is_locked:
+        raise MilestoneLocked(f"Milestone {milestone_id} is locked.")
+    budget = session.exec(
+        select(MilestonePersonBudget).where(
+            MilestonePersonBudget.milestone_id == milestone_id,
+            MilestonePersonBudget.person_id == person_id,
+        )
+    ).first()
+    if not budget:
+        raise BudgetNotFound(f"No budget for person {person_id} in milestone {milestone_id}.")
+    budget.is_manual_override = locked
+    session.add(budget)
+    session.commit()
+    session.refresh(budget)
+    return budget
+
+
+def set_estimated_absence(
+    milestone_id: int, person_id: int, days: float | None, session: Session
+) -> MilestonePersonBudget:
+    """Set (or clear, days=None) the manual estimated-absence override for a person/month.
+    Affects the availability calc. Rejected on locked (closed) months.
+    Raises ValueError on negative days."""
+    milestone = session.get(Milestone, milestone_id)
+    if not milestone:
+        raise MilestoneNotFound(f"Milestone {milestone_id} not found.")
+    if milestone.is_locked:
+        raise MilestoneLocked(f"Milestone {milestone_id} is locked.")
+    if days is not None and days < 0:
+        raise ValueError("Estimated absence days cannot be negative.")
+    budget = session.exec(
+        select(MilestonePersonBudget).where(
+            MilestonePersonBudget.milestone_id == milestone_id,
+            MilestonePersonBudget.person_id == person_id,
+        )
+    ).first()
+    if not budget:
+        raise BudgetNotFound(f"No budget for person {person_id} in milestone {milestone_id}.")
+    budget.estimated_absence_days_override = days
+    session.add(budget)
+    session.commit()
+    session.refresh(budget)
+    return budget
 
 
 # ---------------------------------------------------------------------------
