@@ -76,6 +76,93 @@ def test_delete_billing_position_wrong_project(client):
     assert client.delete(f"/projects/{p2['id']}/billing-positions/{bp['id']}").status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Billing positions — Projektposten CRUD & budget consistency (doc 21 WP2)
+# ---------------------------------------------------------------------------
+
+def test_create_position_defaults_to_open_difference(client):
+    p = client.post("/projects", json=_project()).json()  # 50000 budget
+    bp = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "billing_rate_per_hour": 100.0,
+    }).json()
+    # No budget given → defaults to the full open difference (50000).
+    assert bp["budget_euros"] == 50000.0
+    assert bp["billing_rate_per_hour"] == 100.0
+
+
+def test_create_position_overshoot_blocked(client):
+    p = client.post("/projects", json=_project()).json()  # 50000
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 40000.0,
+    })
+    r = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P2", "budget_euros": 20000.0,
+    })
+    assert r.status_code == 409
+
+
+def test_update_position(client):
+    p = client.post("/projects", json=_project()).json()
+    bp = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 10000.0,
+    }).json()
+    r = client.put(f"/projects/{p['id']}/billing-positions/{bp['id']}", json={
+        "position_number": "P1b", "budget_euros": 25000.0, "billing_rate_per_hour": 120.0,
+    })
+    assert r.status_code == 200
+    assert r.json()["budget_euros"] == 25000.0
+    assert r.json()["billing_rate_per_hour"] == 120.0
+
+
+def test_update_position_overshoot_blocked(client):
+    p = client.post("/projects", json=_project()).json()  # 50000
+    bp1 = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 30000.0,
+    }).json()
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P2", "budget_euros": 15000.0,
+    })
+    # Raising P1 to 40000 → Σ = 55000 > 50000 → blocked.
+    r = client.put(f"/projects/{p['id']}/billing-positions/{bp1['id']}", json={
+        "position_number": "P1", "budget_euros": 40000.0,
+    })
+    assert r.status_code == 409
+
+
+def test_budget_state_reports_open_and_complete(client):
+    p = client.post("/projects", json=_project()).json()  # 50000
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 30000.0,
+    })
+    s = client.get(f"/projects/{p['id']}/billing-positions/budget-state").json()
+    assert s["allocated_euros"] == 30000.0
+    assert s["open_euros"] == 20000.0
+    assert s["is_complete"] is False
+    assert s["is_over"] is False
+
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P2", "budget_euros": 20000.0,
+    })
+    s2 = client.get(f"/projects/{p['id']}/billing-positions/budget-state").json()
+    assert s2["is_complete"] is True
+    assert s2["open_euros"] == 0.0
+
+
+def test_delete_position_blocked_when_member_assigned(client):
+    p = client.post("/projects", json=_project()).json()
+    bp = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 10000.0,
+    }).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+        "billing_position_id": bp["id"],
+    })
+    r = client.delete(f"/projects/{p['id']}/billing-positions/{bp['id']}")
+    assert r.status_code == 409
+
+
 def test_list_memberships_project_not_found(client):
     assert client.get("/projects/9999/memberships").status_code == 404
 

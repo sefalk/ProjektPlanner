@@ -84,6 +84,7 @@ export interface ProjectMembership {
   billing_rate_per_hour: number;
   priority: number;
   vacation_days_taken: number;
+  billing_position_id: number | null;
   warnings?: string[];
 }
 
@@ -93,6 +94,17 @@ export interface BillingPosition {
   position_number: string;
   description: string;
   budget_euros: number;
+  /** Hourly rate of the line item (Projektposten). 0 = no rate (simple invoicing position). */
+  billing_rate_per_hour: number;
+}
+
+/** Aggregate €-budget state across a project's line items (doc 21 §P3). */
+export interface BillingPositionBudgetState {
+  total_budget_euros: number;
+  allocated_euros: number;
+  open_euros: number;
+  is_over: boolean;
+  is_complete: boolean;
 }
 
 export interface Milestone {
@@ -266,15 +278,29 @@ export const projects = {
   update: (id: number, d: Omit<Project, 'id'>) => req<Project>('PUT', `/projects/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/projects/${id}`),
   memberships: (id: number) => req<ProjectMembership[]>('GET', `/projects/${id}/memberships`),
-  addMembership: (id: number, d: Omit<ProjectMembership, 'id' | 'project_id' | 'warnings'>) =>
-    req<ProjectMembership>('POST', `/projects/${id}/memberships`, d),
-  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority' | 'vacation_days_taken'>) =>
-    req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
+  addMembership: (
+    id: number,
+    d: Omit<ProjectMembership, 'id' | 'project_id' | 'warnings' | 'billing_position_id'> & { billing_position_id?: number | null },
+  ) => req<ProjectMembership>('POST', `/projects/${id}/memberships`, d),
+  updateMembership: (
+    projectId: number,
+    membershipId: number,
+    d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority' | 'vacation_days_taken'> & { billing_position_id?: number | null },
+  ) => req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
   deleteMembership: (projectId: number, membershipId: number) =>
     req<void>('DELETE', `/projects/${projectId}/memberships/${membershipId}`),
   billingPositions: (id: number) => req<BillingPosition[]>('GET', `/projects/${id}/billing-positions`),
-  addBillingPosition: (id: number, d: Omit<BillingPosition, 'id' | 'project_id'>) =>
-    req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
+  billingPositionsBudgetState: (id: number) =>
+    req<BillingPositionBudgetState>('GET', `/projects/${id}/billing-positions/budget-state`),
+  addBillingPosition: (
+    id: number,
+    d: { position_number: string; description?: string; budget_euros?: number | null; billing_rate_per_hour?: number },
+  ) => req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
+  updateBillingPosition: (
+    projectId: number,
+    bpId: number,
+    d: { position_number: string; description?: string; budget_euros: number; billing_rate_per_hour?: number },
+  ) => req<BillingPosition>('PUT', `/projects/${projectId}/billing-positions/${bpId}`, d),
   deleteBillingPosition: (projectId: number, bpId: number) =>
     req<void>('DELETE', `/projects/${projectId}/billing-positions/${bpId}`),
   milestones: (id: number) => req<Milestone[]>('GET', `/projects/${id}/milestones`),

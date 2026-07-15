@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
-  type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason,
+  type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason, type BillingPosition,
 } from '../api'
 import Modal from '../components/Modal'
 import Table from '../components/Table'
@@ -256,67 +256,191 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
   )
 }
 
-function BillingPositionForm({
-  onSave,
-  isPending,
-}: {
-  onSave: (d: { position_number: string; description: string; budget_euros: number }) => void
-  isPending: boolean
-}) {
-  const [form, setForm] = useState({ position_number: '', description: '', budget_euros: '' })
+const EUR0 = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
+const EUR2 = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    onSave({
-      position_number: form.position_number.trim(),
-      description: form.description.trim(),
-      budget_euros: form.budget_euros ? parseFloat(form.budget_euros) : 0,
-    })
-    setForm({ position_number: '', description: '', budget_euros: '' })
-  }
+/** Fields shared by the add/edit position forms. */
+interface PositionFormValue {
+  position_number: string
+  description: string
+  billing_rate_per_hour: number
+  budget_euros: number
+}
 
+/** Inline form used both for adding and editing a line item. Shows the derived
+ *  hours budget (€ ÷ Satz) so the user sees the €/Std equivalence (P5). */
+function PositionFields({
+  value, onChange,
+}: { value: PositionFormValue; onChange: (v: PositionFormValue) => void }) {
+  const hours = value.billing_rate_per_hour > 0 ? value.budget_euros / value.billing_rate_per_hour : null
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2 items-end flex-wrap">
+    <div className="flex gap-2 items-end flex-wrap">
       <div>
         <label className="block text-xs text-gray-500 mb-1">Positionsnr.</label>
-        <input
-          required
-          placeholder="z.B. AP1"
+        <input required placeholder="z.B. AP1"
           className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.position_number}
-          onChange={(e) => setForm({ ...form, position_number: e.target.value })}
-        />
+          value={value.position_number}
+          onChange={(e) => onChange({ ...value, position_number: e.target.value })} />
       </div>
-      <div className="flex-1 min-w-[10rem]">
+      <div className="flex-1 min-w-[9rem]">
         <label className="block text-xs text-gray-500 mb-1">Bezeichnung</label>
-        <input
-          required
-          placeholder="z.B. Softwareentwicklung"
+        <input placeholder="z.B. Softwareentwicklung"
           className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.description}
-          onChange={(e) => setForm({ ...form, description: e.target.value })}
-        />
+          value={value.description}
+          onChange={(e) => onChange({ ...value, description: e.target.value })} />
       </div>
       <div>
-        <label className="block text-xs text-gray-500 mb-1">Budget (€) <span className="text-gray-400">optional</span></label>
-        <input
-          type="number"
-          min={0}
-          step={0.01}
-          placeholder="0"
-          className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.budget_euros}
-          onChange={(e) => setForm({ ...form, budget_euros: e.target.value })}
-        />
+        <label className="block text-xs text-gray-500 mb-1">Satz (€/Std.)</label>
+        <input type="number" min={0} step={0.01} placeholder="0"
+          className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={value.billing_rate_per_hour || ''}
+          onChange={(e) => onChange({ ...value, billing_rate_per_hour: parseFloat(e.target.value) || 0 })} />
       </div>
-      <button
-        type="submit"
-        disabled={isPending}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 whitespace-nowrap"
-      >
-        <Plus size={13} /> Hinzufügen
-      </button>
-    </form>
+      <div>
+        <label className="block text-xs text-gray-500 mb-1">
+          Budget (€){hours != null && <span className="ml-1 text-gray-400">= {hours.toFixed(1)} Std.</span>}
+        </label>
+        <input type="number" min={0} step={0.01} placeholder="0"
+          className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={value.budget_euros || ''}
+          onChange={(e) => onChange({ ...value, budget_euros: parseFloat(e.target.value) || 0 })} />
+      </div>
+    </div>
+  )
+}
+
+/** Line-item (Projektposten) management: budget-consistency banner (§P3), editable
+ *  list, and add form defaulting to the open difference. */
+function BillingPositionsSection({
+  projectId, totalBudget, positions, invoiceList,
+}: {
+  projectId: number
+  totalBudget: number
+  positions: BillingPosition[]
+  invoiceList: MonthlyInvoice[]
+}) {
+  const qc = useQueryClient()
+  const [adding, setAdding] = useState<PositionFormValue | null>(null)
+  const [editing, setEditing] = useState<{ id: number; value: PositionFormValue } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['billingPositions', projectId] })
+  const onErr = (e: unknown) => setErr(e instanceof ApiError && e.status === 409
+    ? (typeof e.body === 'object' && e.body && 'detail' in e.body ? String((e.body as { detail: unknown }).detail) : 'Vorgang nicht möglich.')
+    : 'Fehler beim Speichern.')
+
+  const addMut = useMutation({
+    mutationFn: (d: PositionFormValue) => projects.addBillingPosition(projectId, d),
+    onSuccess: () => { setAdding(null); setErr(null); invalidate() },
+    onError: onErr,
+  })
+  const updateMut = useMutation({
+    mutationFn: (v: { id: number; value: PositionFormValue }) => projects.updateBillingPosition(projectId, v.id, v.value),
+    onSuccess: () => { setEditing(null); setErr(null); invalidate() },
+    onError: onErr,
+  })
+  const deleteMut = useMutation({
+    mutationFn: (bpId: number) => projects.deleteBillingPosition(projectId, bpId),
+    onSuccess: () => { setErr(null); invalidate() },
+    onError: onErr,
+  })
+
+  const allocated = positions.reduce((s, p) => s + p.budget_euros, 0)
+  const open = totalBudget - allocated
+  const EPS = 1e-6
+  const isOver = allocated > totalBudget + EPS
+  const isComplete = Math.abs(open) <= EPS
+  const startAdd = () => setAdding({ position_number: '', description: '', billing_rate_per_hour: 0, budget_euros: Math.max(0, open) })
+
+  return (
+    <div className="mt-8 pt-6 border-t border-gray-200">
+      <h4 className="text-sm font-medium text-gray-700 mb-1">Projektposten (Vertragspositionen)</h4>
+      <p className="text-xs text-gray-400 mb-3">
+        Vertragspositionen mit eigenem Satz und Budget. Für einfache Projekte genügt eine Position;
+        die Summe der Posten-Budgets muss dem Projektbudget entsprechen.
+      </p>
+
+      {/* Budget-consistency banner (§P3) */}
+      <div className={`mb-3 text-xs rounded px-3 py-2 border ${
+        isOver ? 'bg-red-50 border-red-200 text-red-700'
+        : isComplete ? 'bg-green-50 border-green-200 text-green-700'
+        : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+        {positions.length === 0
+          ? <>Noch keine Posten. Gesamtbudget {EUR0(totalBudget)} ist unverteilt.</>
+          : isOver
+          ? <>Σ Posten-Budget {EUR2(allocated)} überschreitet das Gesamtbudget {EUR2(totalBudget)} um {EUR2(-open)}.</>
+          : isComplete
+          ? <>Vollständig verteilt: Σ {EUR2(allocated)} = Gesamtbudget.</>
+          : <>Verteilt {EUR2(allocated)} von {EUR2(totalBudget)} — offen: <strong>{EUR2(open)}</strong>. Abschließend muss alles verteilt sein.</>}
+      </div>
+
+      {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
+
+      {/* Existing positions */}
+      {positions.length > 0 && (
+        <div className="mb-3 bg-white rounded border border-gray-200 divide-y divide-gray-100">
+          {positions.map((bp) => {
+            const inUse = invoiceList.some((inv) => inv.billing_position_id === bp.id)
+            if (editing?.id === bp.id) {
+              return (
+                <div key={bp.id} className="px-3 py-2.5 bg-blue-50/40">
+                  <PositionFields value={editing.value} onChange={(v) => setEditing({ id: bp.id, value: v })} />
+                  <div className="flex gap-2 mt-2">
+                    <button onClick={() => updateMut.mutate(editing)} disabled={updateMut.isPending}
+                      className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Speichern</button>
+                    <button onClick={() => { setEditing(null); setErr(null) }}
+                      className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+                  </div>
+                </div>
+              )
+            }
+            const hours = bp.billing_rate_per_hour > 0 ? bp.budget_euros / bp.billing_rate_per_hour : null
+            return (
+              <div key={bp.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <span className="font-medium text-gray-700">{bp.position_number}</span>
+                  {bp.description && <><span className="mx-1.5 text-gray-300">·</span><span className="text-gray-600">{bp.description}</span></>}
+                  <span className="ml-2 text-xs text-gray-400">
+                    {EUR2(bp.budget_euros)}
+                    {bp.billing_rate_per_hour > 0 && <> · {EUR2(bp.billing_rate_per_hour)}/Std.{hours != null && <> · {hours.toFixed(1)} Std.</>}</>}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => { setAdding(null); setErr(null); setEditing({ id: bp.id, value: { position_number: bp.position_number, description: bp.description, billing_rate_per_hour: bp.billing_rate_per_hour, budget_euros: bp.budget_euros } }) }}
+                    title="Bearbeiten"
+                    className="p-1 text-gray-300 hover:text-blue-500 transition-colors"><Pencil size={13} /></button>
+                  <button
+                    onClick={() => deleteMut.mutate(bp.id)}
+                    disabled={inUse || deleteMut.isPending}
+                    title={inUse ? 'Wird von einer Abrechnung verwendet — kann nicht gelöscht werden' : 'Löschen'}
+                    className="p-1 text-gray-300 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><Trash2 size={13} /></button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Add new position */}
+      {adding ? (
+        <div className="bg-blue-50/40 rounded border border-blue-100 px-3 py-2.5">
+          <PositionFields value={adding} onChange={setAdding} />
+          <div className="flex gap-2 mt-2">
+            <button onClick={() => addMut.mutate(adding)} disabled={addMut.isPending || !adding.position_number.trim()}
+              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Hinzufügen</button>
+            <button onClick={() => { setAdding(null); setErr(null) }}
+              className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={startAdd} disabled={isComplete}
+          title={isComplete ? 'Budget ist bereits vollständig verteilt' : 'Neuen Posten anlegen'}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
+          <Plus size={13} /> Posten hinzufügen
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -519,19 +643,6 @@ export default function ProjectDetailPage() {
       setSettingsSaved(true)
       setTimeout(() => setSettingsSaved(false), 2000)
     },
-    onError: (e: Error) => setError(e.message),
-  })
-
-  const addBillingPosition = useMutation({
-    mutationFn: (d: Parameters<typeof projects.addBillingPosition>[1]) =>
-      projects.addBillingPosition(projectId, d),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['billingPositions', projectId] }),
-    onError: (e: Error) => setError(e.message),
-  })
-
-  const deleteBillingPosition = useMutation({
-    mutationFn: (bpId: number) => projects.deleteBillingPosition(projectId, bpId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['billingPositions', projectId] }),
     onError: (e: Error) => setError(e.message),
   })
 
@@ -1432,51 +1543,13 @@ export default function ProjectDetailPage() {
                 </div>
               </form>
 
-              {/* Billing positions (PSP-Elemente) */}
-              <div className="mt-8 pt-6 border-t border-gray-200">
-                <h4 className="text-sm font-medium text-gray-700 mb-1">Rechnungspositionen (PSP-Elemente)</h4>
-                <p className="text-xs text-gray-400 mb-3">
-                  Vertragspositionen, denen Monatsabrechnungen zugeordnet werden.
-                  Für die meisten Projekte genügt eine Position.
-                </p>
-
-                {/* Existing positions */}
-                {billingPositions.length > 0 && (
-                  <div className="mb-3 bg-white rounded border border-gray-200 divide-y divide-gray-100">
-                    {billingPositions.map((bp) => {
-                      const inUse = invoiceList.some((inv) => inv.billing_position_id === bp.id)
-                      return (
-                        <div key={bp.id} className="flex items-center justify-between px-3 py-2 text-sm">
-                          <div>
-                            <span className="font-medium text-gray-700">{bp.position_number}</span>
-                            <span className="mx-1.5 text-gray-300">·</span>
-                            <span className="text-gray-600">{bp.description}</span>
-                            {bp.budget_euros > 0 && (
-                              <span className="ml-2 text-xs text-gray-400">
-                                {bp.budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })}
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => deleteBillingPosition.mutate(bp.id)}
-                            disabled={inUse || deleteBillingPosition.isPending}
-                            title={inUse ? 'Wird von einer Abrechnung verwendet — kann nicht gelöscht werden' : 'Löschen'}
-                            className="p-1 text-gray-300 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {/* Add new position */}
-                <BillingPositionForm
-                  onSave={(d) => addBillingPosition.mutate(d)}
-                  isPending={addBillingPosition.isPending}
-                />
-              </div>
+              {/* Line items (Projektposten) */}
+              <BillingPositionsSection
+                projectId={projectId}
+                totalBudget={project.total_budget_euros}
+                positions={billingPositions}
+                invoiceList={invoiceList}
+              />
             </div>
           )
         })()}
