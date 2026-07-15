@@ -94,24 +94,60 @@ def test_estimated_absence_negative_raises(session):
 # ---------------------------------------------------------------------------
 
 
-def test_sick_estimate_subtracts_concrete_and_clamps(session):
-    session.add(Setting(key="sick_days_per_year", value="12"))    # flat 1.0 / month
-    session.add(Setting(key="training_days_per_year", value="0"))  # isolate sick
+def test_sick_estimate_even_annual_minus_concrete(session):
+    session.add(Setting(key="sick_days_per_year", value="12"))     # annual richtwert
+    session.add(Setting(key="training_days_per_year", value="0"))   # isolate sick
     proj = _project(session, "LK03")
     a = _person(session, "Alice")
     m = _membership(session, proj.id, a.id)
     session.commit()
 
-    # No concrete sick → estimate carries the flat ~1.0 sick day (no vacation contingent).
+    # No concrete sick → January's even share of the annual value: 12 × 31/365 ≈ 1.02.
     base = _person_available_hours(a, m, proj, 2026, 1, session).estimated_absence_days
-    assert base == pytest.approx(1.0, abs=0.05)
+    assert base == pytest.approx(12 * 31 / 365, abs=0.02)
 
-    # A 3-day concrete sick absence → flat 1.0 − 3 clamped to 0.
+    # A 3-day concrete sick absence → remaining 9, effective period days 31−3=28: 9 × 28/365.
     session.add(PersonAbsence(person_id=a.id, absence_type=AbsenceType.sick, status="confirmed",
                               start_date=date(2026, 1, 12), end_date=date(2026, 1, 14), note=""))
     session.commit()
     with_sick = _person_available_hours(a, m, proj, 2026, 1, session).estimated_absence_days
-    assert with_sick == pytest.approx(0.0, abs=1e-9)  # never negative
+    assert with_sick == pytest.approx(9 * 28 / 365, abs=0.03)
+    assert with_sick < base
+
+
+def test_sick_estimate_clamps_when_concrete_exceeds_annual(session):
+    session.add(Setting(key="sick_days_per_year", value="2"))
+    session.add(Setting(key="training_days_per_year", value="0"))
+    proj = _project(session, "LK03B")
+    a = _person(session, "Alice")
+    m = _membership(session, proj.id, a.id)
+    # 5 concrete sick days > annual richtwert 2 → remaining clamps to 0, estimate 0.
+    session.add(PersonAbsence(person_id=a.id, absence_type=AbsenceType.sick, status="confirmed",
+                              start_date=date(2026, 1, 10), end_date=date(2026, 1, 14), note=""))
+    session.commit()
+    est = _person_available_hours(a, m, proj, 2026, 1, session).estimated_absence_days
+    assert est == pytest.approx(0.0, abs=1e-9)
+
+
+def test_project_pauschal_override_and_disable(session):
+    session.add(Setting(key="sick_days_per_year", value="12"))
+    session.add(Setting(key="training_days_per_year", value="0"))
+    proj = _project(session, "LK03C")
+    a = _person(session, "Alice")
+    m = _membership(session, proj.id, a.id)
+    session.commit()
+
+    globalv = _person_available_hours(a, m, proj, 2026, 1, session).estimated_absence_days
+    proj.sick_days_per_year_override = 0.0  # disable
+    session.add(proj); session.commit()
+    disabled = _person_available_hours(a, m, proj, 2026, 1, session).estimated_absence_days
+    assert disabled == pytest.approx(0.0, abs=1e-9)
+    assert globalv > disabled
+
+    proj.sick_days_per_year_override = 24.0  # override higher than global
+    session.add(proj); session.commit()
+    higher = _person_available_hours(a, m, proj, 2026, 1, session).estimated_absence_days
+    assert higher == pytest.approx(globalv * 2, rel=0.02)
 
 
 # ---------------------------------------------------------------------------

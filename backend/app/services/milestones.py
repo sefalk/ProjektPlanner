@@ -112,6 +112,39 @@ def _concrete_absence_days_of_type(
     return total
 
 
+def _estimated_pauschal_days(
+    person_id: int, absence_type: AbsenceType, annual_days: float, start: date, end: date, session: Session
+) -> float:
+    """Estimate a flat annual richtwert (sick/training) for the period [start, end].
+
+    The annual value counts for a WHOLE calendar year and is spread EVENLY across it.
+    Per year overlapping the period:
+      remaining = max(0, annual − concrete absences of this type already entered that year)
+      estimate += remaining × (effective period days in year / days in year)
+    where effective period days exclude concrete-absence days of this type in the period
+    (those are deducted separately, no double-count). This makes the estimate proportional
+    to how much of the calendar year the period covers and shrinks as concrete days accrue.
+    """
+    if annual_days <= 0:
+        return 0.0
+    total = 0.0
+    for year in range(start.year, end.year + 1):
+        year_start, year_end = date(year, 1, 1), date(year, 12, 31)
+        days_in_year = (year_end - year_start).days + 1
+        concrete_year = _concrete_absence_days_of_type(person_id, absence_type, year_start, year_end, session)
+        remaining = max(0.0, annual_days - concrete_year)
+        if remaining <= 0.0:
+            continue
+        seg_start, seg_end = max(start, year_start), min(end, year_end)
+        if seg_end < seg_start:
+            continue
+        period_days = (seg_end - seg_start).days + 1
+        concrete_in_period = _concrete_absence_days_of_type(person_id, absence_type, seg_start, seg_end, session)
+        period_effective = max(0.0, period_days - concrete_in_period)
+        total += remaining * (period_effective / days_in_year)
+    return total
+
+
 def _parse_work_week_pattern(pattern: str) -> list[float] | None:
     parts = [p.strip() for p in pattern.split(",")]
     if len(parts) != 5:
@@ -227,16 +260,22 @@ def _person_available_hours(
     # Cap: can't estimate more vacation days than actual available working days
     vacation_estimate = min(vacation_estimate, max(0, work_days_count - abs_days))
 
-    # Global sick / training day estimates (monthly flat from settings), reduced by any
-    # concrete sick/training absences already entered this month (clamped at >= 0 so the
-    # deduction never turns negative). Concrete days are already in abs_days above.
-    flat_sick = _get_setting_float(session, "sick_days_per_year", 10.0) / 12.0
-    actual_sick = _concrete_absence_days_of_type(person.id, AbsenceType.sick, eff_start, eff_end, session)
-    sick_estimate = max(0.0, flat_sick - actual_sick)
+    # Sick / training richtwerte: annual values spread evenly across the calendar year,
+    # pro-rated to the effective period and reduced by concrete absences of that type (§3).
+    # A per-project override replaces the global setting; 0 disables the estimate.
+    annual_sick = (
+        project.sick_days_per_year_override
+        if project.sick_days_per_year_override is not None
+        else _get_setting_float(session, "sick_days_per_year", 10.0)
+    )
+    sick_estimate = _estimated_pauschal_days(person.id, AbsenceType.sick, annual_sick, eff_start, eff_end, session)
 
-    flat_training = _get_setting_float(session, "training_days_per_year", 5.0) / 12.0
-    actual_training = _concrete_absence_days_of_type(person.id, AbsenceType.training, eff_start, eff_end, session)
-    training_estimate = max(0.0, flat_training - actual_training)
+    annual_training = (
+        project.training_days_per_year_override
+        if project.training_days_per_year_override is not None
+        else _get_setting_float(session, "training_days_per_year", 5.0)
+    )
+    training_estimate = _estimated_pauschal_days(person.id, AbsenceType.training, annual_training, eff_start, eff_end, session)
 
     # A manual (locked) override, if set for this person/month, replaces the whole estimate.
     override = _estimated_absence_override(person.id, project.id, year, month, session)
