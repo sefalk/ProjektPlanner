@@ -76,15 +76,18 @@ export default function YearCalendar({
 
   // Absence segments → lanes. Each person with ≥1 absence gets a fixed lane
   // (stable across months so month-spanning bars line up vertically).
+  // One lane per passed-in (i.e. selected) person, in the given order — so bar
+  // thickness scales with the selection and every selected person has a
+  // draggable lane, even in months where they have no absence.
   const { segmentsByMonth, laneOf, laneOrder, laneCount } = useMemo(() => {
     const segs = computeAbsenceSegments(persons, year)
     const order: number[] = []
-    for (const p of persons) {
-      if (order.includes(p.id)) continue
-      if (segs.some((s) => s.personId === p.id)) order.push(p.id)
-    }
     const lane: Record<number, number> = {}
-    order.forEach((id, i) => { lane[id] = i })
+    for (const p of persons) {
+      if (lane[p.id] !== undefined) continue
+      lane[p.id] = order.length
+      order.push(p.id)
+    }
     const byMonth: Record<number, typeof segs> = {}
     for (const s of segs) {
       (byMonth[s.monthIdx] ??= []).push(s)
