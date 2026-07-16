@@ -223,6 +223,13 @@ export interface SageProjectMapping {
   project_id: number;
 }
 
+export interface SagePositionMapping {
+  id: number;
+  project_id: number;
+  sage_project_level: string;
+  billing_position_id: number;
+}
+
 export interface ImportBatch {
   id: number;
   project_id: number;
@@ -241,6 +248,7 @@ export interface TimeBooking {
   import_batch_id: number;
   sage_project_name: string;
   sage_project_level: string;
+  billing_position_id: number | null;
   net_hours: number;
   duration_raw: string;
   break_duration: string;
@@ -407,6 +415,18 @@ export const mappings = {
   update: (id: number, d: { sage_project_name: string; project_id: number }) =>
     req<SageProjectMapping>('PUT', `/sage-project-mappings/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/sage-project-mappings/${id}`),
+};
+
+// ─── Sage position (level → line item) mappings ────────────────────────────────
+
+export const positionMappings = {
+  list: (projectId?: number) =>
+    req<SagePositionMapping[]>('GET', `/sage-position-mappings${projectId != null ? `?project_id=${projectId}` : ''}`),
+  create: (d: { project_id: number; sage_project_level: string; billing_position_id: number }) =>
+    req<SagePositionMapping>('POST', '/sage-position-mappings', d),
+  update: (id: number, d: { project_id: number; sage_project_level: string; billing_position_id: number }) =>
+    req<SagePositionMapping>('PUT', `/sage-position-mappings/${id}`, d),
+  delete: (id: number) => req<void>('DELETE', `/sage-position-mappings/${id}`),
 };
 
 // ─── Calendar ────────────────────────────────────────────────────────────────

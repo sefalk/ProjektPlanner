@@ -9,11 +9,17 @@ from sqlmodel import Field, Session, SQLModel, select
 
 from app.db import get_session
 from app.models.person import Person
-from app.models.timebooking import ImportBatch, SageProjectMapping, TimeBooking
+from app.models.timebooking import (
+    ImportBatch,
+    SagePositionMapping,
+    SageProjectMapping,
+    TimeBooking,
+)
 from app.services.importer import (
     ImportResult,
     ParseError,
     UnmatchedPersonsError,
+    UnresolvedPositionsError,
     UnresolvedProjectsError,
     import_bookings,
 )
@@ -39,6 +45,12 @@ class ImportResultOut(SQLModel):
 class MappingCreate(SQLModel):
     sage_project_name: str = Field(min_length=1)
     project_id: int
+
+
+class PositionMappingCreate(SQLModel):
+    project_id: int
+    sage_project_level: str = Field(min_length=1)
+    billing_position_id: int
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +84,16 @@ async def post_import(file: UploadFile, session: SessionDep):
         raise HTTPException(
             422,
             {"detail": "Unresolved Sage project names", "unresolved_projects": exc.names},
+        ) from exc
+    except UnresolvedPositionsError as exc:
+        raise HTTPException(
+            422,
+            {
+                "detail": "Unresolved Sage project levels",
+                "unresolved_positions": [
+                    {"project_id": pid, "sage_project_level": lvl} for pid, lvl in exc.pairs
+                ],
+            },
         ) from exc
     except UnmatchedPersonsError as exc:
         raise HTTPException(
@@ -265,6 +287,63 @@ def update_mapping(mapping_id: int, body: MappingCreate, session: SessionDep):
 @router.delete("/sage-project-mappings/{mapping_id}", status_code=204)
 def delete_mapping(mapping_id: int, session: SessionDep):
     mapping = session.get(SageProjectMapping, mapping_id)
+    if not mapping:
+        raise HTTPException(404, "Mapping not found.")
+    session.delete(mapping)
+    session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Sage position (level → line item) mappings (§21 P6)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/sage-position-mappings", response_model=list[SagePositionMapping])
+def list_position_mappings(session: SessionDep, project_id: int | None = None):
+    stmt = select(SagePositionMapping)
+    if project_id is not None:
+        stmt = stmt.where(SagePositionMapping.project_id == project_id)
+    return session.exec(stmt).all()
+
+
+@router.post("/sage-position-mappings", response_model=SagePositionMapping, status_code=201)
+def create_position_mapping(body: PositionMappingCreate, session: SessionDep):
+    mapping = SagePositionMapping(
+        project_id=body.project_id,
+        sage_project_level=body.sage_project_level,
+        billing_position_id=body.billing_position_id,
+    )
+    try:
+        session.add(mapping)
+        session.commit()
+        session.refresh(mapping)
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "Mapping for this project and level already exists.")
+    return mapping
+
+
+@router.put("/sage-position-mappings/{mapping_id}", response_model=SagePositionMapping)
+def update_position_mapping(mapping_id: int, body: PositionMappingCreate, session: SessionDep):
+    mapping = session.get(SagePositionMapping, mapping_id)
+    if not mapping:
+        raise HTTPException(404, "Mapping not found.")
+    mapping.project_id = body.project_id
+    mapping.sage_project_level = body.sage_project_level
+    mapping.billing_position_id = body.billing_position_id
+    try:
+        session.add(mapping)
+        session.commit()
+        session.refresh(mapping)
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, "Mapping for this project and level already exists.")
+    return mapping
+
+
+@router.delete("/sage-position-mappings/{mapping_id}", status_code=204)
+def delete_position_mapping(mapping_id: int, session: SessionDep):
+    mapping = session.get(SagePositionMapping, mapping_id)
     if not mapping:
         raise HTTPException(404, "Mapping not found.")
     session.delete(mapping)

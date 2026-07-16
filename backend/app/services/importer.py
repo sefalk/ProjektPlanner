@@ -32,8 +32,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from thefuzz import process as fuzz_process
 
+from app.models.billing import BillingPosition
 from app.models.person import Person
-from app.models.timebooking import ImportBatch, SageProjectMapping, TimeBooking
+from app.models.timebooking import (
+    ImportBatch,
+    SagePositionMapping,
+    SageProjectMapping,
+    TimeBooking,
+)
 
 FUZZY_THRESHOLD = 80
 
@@ -71,6 +77,16 @@ class UnresolvedProjectsError(Exception):
     def __init__(self, names: list[str]) -> None:
         self.names = names
         super().__init__(f"Unresolved Sage project names: {names}")
+
+
+class UnresolvedPositionsError(Exception):
+    """Raised when a position-mode project has (project, sage_project_level) combinations
+    with no SagePositionMapping entry (§21 P6). Carries the unresolved pairs so the UI can
+    prompt for a mapping, analogous to UnresolvedProjectsError."""
+
+    def __init__(self, pairs: list[tuple[int, str]]) -> None:
+        self.pairs = pairs
+        super().__init__(f"Unresolved Sage project levels: {pairs}")
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +349,54 @@ def resolve_project_mappings(
     return result
 
 
+def position_mode_project_ids(project_ids: set[int], session: Session) -> set[int]:
+    """Subset of project_ids that are in position mode = have a priced line item (rate>0).
+    Only these projects require a level→position mapping at import (§21 P6)."""
+    if not project_ids:
+        return set()
+    priced = session.exec(
+        select(BillingPosition.project_id).where(
+            BillingPosition.project_id.in_(project_ids),  # type: ignore[attr-defined]
+            BillingPosition.billing_rate_per_hour > 0,
+        )
+    ).all()
+    return set(priced)
+
+
+def resolve_position_mappings(
+    pairs: list[tuple[int, str]],
+    position_project_ids: set[int],
+    session: Session,
+) -> dict[tuple[int, str], int]:
+    """Map (project_id, sage_project_level) → billing_position_id via SagePositionMapping,
+    but only for position-mode projects. Simple-mode projects need no mapping (their pairs
+    are skipped and their bookings keep billing_position_id = None).
+
+    Raises UnresolvedPositionsError for position-mode pairs with no mapping entry.
+    """
+    result: dict[tuple[int, str], int] = {}
+    unresolved: list[tuple[int, str]] = []
+
+    for project_id, level in {(pid, lvl) for pid, lvl in pairs}:
+        if project_id not in position_project_ids:
+            continue  # simple mode → no position link
+        mapping = session.exec(
+            select(SagePositionMapping).where(
+                SagePositionMapping.project_id == project_id,
+                SagePositionMapping.sage_project_level == level,
+            )
+        ).first()
+        if mapping:
+            result[(project_id, level)] = mapping.billing_position_id
+        else:
+            unresolved.append((project_id, level))
+
+    if unresolved:
+        raise UnresolvedPositionsError(sorted(unresolved))
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Main import entry point
 # ---------------------------------------------------------------------------
@@ -360,6 +424,15 @@ def import_bookings(
     )
     project_map = resolve_project_mappings(
         [r["sage_project_name"] for r in rows], session
+    )
+
+    # §21 P6: for position-mode projects, resolve each (project, level) to a line item.
+    resolved_project_ids = set(project_map.values())
+    position_ids = position_mode_project_ids(resolved_project_ids, session)
+    position_map = resolve_position_mappings(
+        [(project_map[r["sage_project_name"]], r["sage_project_level"]) for r in rows],
+        position_ids,
+        session,
     )
 
     # Compute last booking date per project for the ImportBatch records.
@@ -393,6 +466,7 @@ def import_bookings(
             import_batch_id=batches[project_id],
             sage_project_name=row["sage_project_name"],
             sage_project_level=row["sage_project_level"],
+            billing_position_id=position_map.get((project_id, row["sage_project_level"])),
             net_hours=row["net_hours"],
             duration_raw=row["duration_raw"],
             break_duration=row["break_duration"],
