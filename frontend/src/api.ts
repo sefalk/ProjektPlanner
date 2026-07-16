@@ -502,9 +502,40 @@ export interface CalendarResponse {
   milestones: CalendarMilestone[];
 }
 
+export interface YearHoliday {
+  holiday_date: string;
+  name: string;
+  is_workday: boolean;
+  country: string;
+  state: string;
+}
+
+export interface YearCalendarPerson {
+  id: number;
+  name: string;
+  default_weekly_hours: number;
+  absences: CalendarAbsence[];
+  memberships: CalendarMembership[];
+}
+
+export interface YearCalendarResponse {
+  year: number;
+  country: string;
+  state: string;
+  holidays: YearHoliday[];
+  persons: YearCalendarPerson[];
+}
+
 export const calendar = {
   get: (year: number, month: number) =>
     req<CalendarResponse>('GET', `/calendar?year=${year}&month=${month}`),
+  year: (year: number, country?: string, state?: string) =>
+    req<YearCalendarResponse>(
+      'GET',
+      `/calendar/year?year=${year}` +
+        (country ? `&country=${encodeURIComponent(country)}` : '') +
+        (state ? `&state=${encodeURIComponent(state)}` : ''),
+    ),
 };
 
 // ─── Settings ────────────────────────────────────────────────────────────────

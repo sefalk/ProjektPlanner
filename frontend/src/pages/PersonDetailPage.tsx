@@ -4,26 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, Pencil, Plus, Trash2 } from 'lucide-react'
 import { persons, projects as projectsApi, type Person, type PersonAbsence, type VacationContingent, type PersonMembershipDetail, type ProjectMembership } from '../api'
 import Modal from '../components/Modal'
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const TYPE_LABELS: Record<PersonAbsence['absence_type'], string> = {
-  vacation: 'Urlaub',
-  sick: 'Krank',
-  training: 'Fortbildung',
-}
-
-const TYPE_COLORS: Record<PersonAbsence['absence_type'], string> = {
-  vacation: 'bg-blue-100 text-blue-700',
-  sick: 'bg-yellow-100 text-yellow-700',
-  training: 'bg-emerald-100 text-emerald-700',
-}
-
-const STATUS_LABELS: Record<PersonAbsence['status'], string> = {
-  planned: 'Geplant',
-  confirmed: 'Bestätigt',
-  ongoing: 'Laufend',
-}
+import { TYPE_LABELS, TYPE_BADGE as TYPE_COLORS, STATUS_LABELS } from '../lib/absenceColors'
 
 // ─── Edit person form ─────────────────────────────────────────────────────────
 

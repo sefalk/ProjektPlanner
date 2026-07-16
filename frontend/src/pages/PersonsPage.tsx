@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
-import { persons, type Person, type PersonWithProjects } from '../api'
+import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { persons, calendar, type Person, type PersonWithProjects } from '../api'
 import PageHeader from '../components/PageHeader'
 import Table from '../components/Table'
 import Modal from '../components/Modal'
+import YearCalendar from '../components/absence/YearCalendar'
 
 const WORK_WEEK_PRESETS = [
   { label: '40 h (5×8)', value: '8,8,8,8,8' },
@@ -123,9 +124,16 @@ export default function PersonsPage() {
   const [confirmDelete, setConfirmDelete] = useState<Person | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const [calYear, setCalYear] = useState(new Date().getFullYear())
+
   const { data = [], isLoading } = useQuery({
     queryKey: ['persons-with-projects'],
     queryFn: persons.withProjects,
+  })
+
+  const { data: yearCal, isLoading: calLoading } = useQuery({
+    queryKey: ['calendar-year', calYear],
+    queryFn: () => calendar.year(calYear),
   })
 
   const create = useMutation({
@@ -224,7 +232,41 @@ export default function PersonsPage() {
       {error && (
         <div className="mx-6 mt-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200">{error}</div>
       )}
-      <div className="p-6">
+      <div className="p-6 space-y-6">
+        {/* Year calendar for absences */}
+        <section>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold text-gray-700">Jahreskalender – Abwesenheiten</h2>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setCalYear((y) => y - 1)}
+                aria-label="Vorheriges Jahr"
+                className="p-1.5 rounded hover:bg-gray-100 text-gray-600"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <span className="text-sm font-medium text-gray-700 min-w-[3.5rem] text-center">{calYear}</span>
+              <button
+                onClick={() => setCalYear((y) => y + 1)}
+                aria-label="Nächstes Jahr"
+                className="p-1.5 rounded hover:bg-gray-100 text-gray-600"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+          {calLoading ? (
+            <p className="text-sm text-gray-400">Lade Kalender…</p>
+          ) : (
+            <YearCalendar year={calYear} holidays={yearCal?.holidays ?? []} />
+          )}
+          <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600" aria-label="Legende">
+            <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-gray-100 border border-gray-200" /> Wochenende</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-red-100 border border-red-200" /> Feiertag</span>
+          </div>
+        </section>
+
+        {/* Person list */}
         {isLoading ? (
           <p className="text-sm text-gray-400">Lade…</p>
         ) : (

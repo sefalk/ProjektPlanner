@@ -80,3 +80,62 @@ def test_calendar_no_milestones_returns_empty_list(client):
     r = client.get("/calendar?year=2026&month=1")
     assert r.status_code == 200
     assert r.json()["milestones"] == []
+
+
+# ── Year view (absence calendar) ──────────────────────────────────────────────
+
+def test_calendar_year_returns_persons_and_default_region(client):
+    """GET /calendar/year returns all persons and defaults the region to DE/BY."""
+    person = client.post("/persons", json={
+        "name": "Year Person",
+        "sage_employee_name": "Year Person",
+        "default_weekly_hours": 40.0,
+    }).json()
+    r = client.get("/calendar/year?year=2026")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["year"] == 2026
+    assert data["country"] == "DE"
+    assert data["state"] == "BY"
+    assert isinstance(data["holidays"], list)
+    assert any(p["id"] == person["id"] for p in data["persons"])
+
+
+def test_calendar_year_includes_overlapping_absence(client):
+    """An absence within the year appears on the person; one outside does not."""
+    person = client.post("/persons", json={
+        "name": "Abs Person",
+        "sage_employee_name": "Abs Person",
+        "default_weekly_hours": 40.0,
+    }).json()
+    # Absence inside 2026 (spanning a month boundary)
+    client.post(f"/persons/{person['id']}/absences", json={
+        "start_date": "2026-01-28",
+        "end_date": "2026-02-03",
+        "absence_type": "vacation",
+        "status": "confirmed",
+        "note": "",
+    })
+    # Absence entirely in 2025 — must not appear in the 2026 view
+    client.post(f"/persons/{person['id']}/absences", json={
+        "start_date": "2025-03-01",
+        "end_date": "2025-03-05",
+        "absence_type": "vacation",
+        "status": "confirmed",
+        "note": "",
+    })
+    r = client.get("/calendar/year?year=2026")
+    assert r.status_code == 200
+    p = next(p for p in r.json()["persons"] if p["id"] == person["id"])
+    starts = {a["start_date"] for a in p["absences"]}
+    assert "2026-01-28" in starts
+    assert "2025-03-01" not in starts
+
+
+def test_calendar_year_region_override_via_query(client):
+    """Region query params override the resolved default."""
+    r = client.get("/calendar/year?year=2026&country=DE&state=BW")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["country"] == "DE"
+    assert data["state"] == "BW"

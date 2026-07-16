@@ -18,6 +18,7 @@ from app.models.person import Person, PersonAbsence
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
 from app.services.holiday import HolidayFetchError, get_holidays_in_range
+from app.services.holiday_region import resolve_holiday_region
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -83,6 +84,32 @@ class CalendarResponse(BaseModel):
     holidays: list[HolidayOut]
     persons: list[PersonOut]
     milestones: list[MilestoneOut]
+
+
+# ── Year view (absence calendar) ──────────────────────────────────────────────
+
+class YearHolidayOut(BaseModel):
+    holiday_date: date
+    name: str
+    is_workday: bool
+    country: str
+    state: str
+
+
+class YearPersonOut(BaseModel):
+    id: int
+    name: str
+    default_weekly_hours: float
+    absences: list[AbsenceOut]
+    memberships: list[MembershipOut]
+
+
+class YearCalendarResponse(BaseModel):
+    year: int
+    country: str
+    state: str
+    holidays: list[YearHolidayOut]
+    persons: list[YearPersonOut]
 
 
 # ---------------------------------------------------------------------------
@@ -246,4 +273,113 @@ def get_calendar(
         holidays=holidays,
         persons=persons_out,
         milestones=milestones_out,
+    )
+
+
+@router.get("/year", response_model=YearCalendarResponse)
+def get_calendar_year(
+    session: SessionDep,
+    year: int = Query(..., ge=2000, le=2100),
+    country: str | None = Query(None),
+    state: str | None = Query(None),
+) -> YearCalendarResponse:
+    """Whole-year aggregation for the absence calendar.
+
+    Returns holidays plus every person's absences and memberships that overlap
+    the year. Region defaults to the globally-resolved one (``resolve_holiday_region``)
+    but can be overridden via query params (used by the region filter later).
+    """
+    default_country, default_state = resolve_holiday_region(session)
+    country = country or default_country
+    state = state or default_state
+
+    start = date(year, 1, 1)
+    end = date(year, 12, 31)
+
+    # Holidays (best-effort: silently return empty list on fetch failure)
+    try:
+        raw_holidays = get_holidays_in_range(start, end, country, state, session)
+    except HolidayFetchError:
+        raw_holidays = []
+
+    holidays = [
+        YearHolidayOut(
+            holiday_date=h.holiday_date,
+            name=h.name,
+            is_workday=h.is_workday,
+            country=h.country,
+            state=h.state,
+        )
+        for h in sorted(raw_holidays, key=lambda h: h.holiday_date)
+    ]
+
+    persons_raw = list(session.exec(select(Person).order_by(Person.name)).all())
+    person_ids = [p.id for p in persons_raw if p.id is not None]
+
+    # Absences overlapping [start, end]
+    absences_raw = session.exec(
+        select(PersonAbsence).where(
+            PersonAbsence.person_id.in_(person_ids),
+            PersonAbsence.start_date <= end,
+            or_(PersonAbsence.end_date.is_(None), PersonAbsence.end_date >= start),
+        )
+    ).all()
+
+    absences_by_person: dict[int, list[AbsenceOut]] = {pid: [] for pid in person_ids}
+    for a in absences_raw:
+        if a.person_id in absences_by_person and a.id is not None:
+            absences_by_person[a.person_id].append(
+                AbsenceOut(
+                    id=a.id,
+                    start_date=a.start_date,
+                    end_date=a.end_date,
+                    absence_type=a.absence_type.value,
+                    status=a.status.value,
+                )
+            )
+
+    # Memberships overlapping [start, end], joined with Project (for project filter)
+    memberships_raw = session.exec(
+        select(ProjectMembership, Project)
+        .join(Project, ProjectMembership.project_id == Project.id)
+        .where(
+            ProjectMembership.person_id.in_(person_ids),
+            ProjectMembership.from_date <= end,
+            ProjectMembership.to_date >= start,
+        )
+    ).all()
+
+    memberships_by_person: dict[int, list[MembershipOut]] = {pid: [] for pid in person_ids}
+    for m, proj in memberships_raw:
+        if m.person_id in memberships_by_person:
+            memberships_by_person[m.person_id].append(
+                MembershipOut(
+                    project_id=proj.id,  # type: ignore[arg-type]
+                    project_number=proj.project_number,
+                    project_name=proj.name,
+                    program_id=proj.program_id,
+                    from_date=m.from_date,
+                    to_date=m.to_date,
+                    weekly_capacity_hours=m.weekly_capacity_hours,
+                )
+            )
+
+    persons_out = [
+        YearPersonOut(
+            id=p.id,  # type: ignore[arg-type]
+            name=p.name,
+            default_weekly_hours=p.default_weekly_hours,
+            absences=absences_by_person.get(p.id, []),  # type: ignore[arg-type]
+            memberships=memberships_by_person.get(p.id, []),  # type: ignore[arg-type]
+        )
+        for p in persons_raw
+        if p.id is not None
+    ]
+
+    return YearCalendarResponse(
+        year=year,
+        country=country,
+        state=state,
+        holidays=holidays,
+        persons=persons_out,
     )
