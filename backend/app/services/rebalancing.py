@@ -29,7 +29,11 @@ from app.services.milestones import (
     _month_bounds,
     _person_available_hours,
     _remaining_euro_budget,
+    build_rate_map,
     distribute_budget,
+    distribute_over_positions,
+    is_position_mode,
+    project_positions,
 )
 
 
@@ -98,7 +102,9 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
     memberships = session.exec(
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
-    rate_map = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    positions_by_id = project_positions(project_id, session)
+    position_mode = is_position_mode(memberships)
+    rate_map = build_rate_map(memberships, positions_by_id)
     priorities = {m.person_id: m.priority for m in memberships}
     open_month_set = {(ms.year, ms.month) for ms in open_milestones}
 
@@ -111,6 +117,7 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
 
     rows_by_ms: dict[int, dict[int, MilestonePersonBudget]] = {}
     avail_map: dict[SlotKey, float] = {}
+    override_rows: list[MilestonePersonBudget] = []
     override_cost = 0.0
 
     for ms in open_milestones:
@@ -126,6 +133,7 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
         for m in active:
             b = rows.get(m.person_id)
             if b is not None and b.is_manual_override:
+                override_rows.append(b)
                 override_cost += b.current_hours * rate_map.get(m.person_id, 0.0)
                 continue
             person = _get_person(m.person_id)
@@ -136,7 +144,12 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
                 avail_map[(m.person_id, (ms.year, ms.month))] = avail
 
     budget_euros = project.total_budget_euros if project.total_budget_euros and project.total_budget_euros > 0 else 0.0
-    if budget_euros > 0:
+    if position_mode:
+        plan = distribute_over_positions(
+            avail_map, memberships, positions_by_id, priorities, override_rows,
+            open_month_set, project_id, session,
+        )
+    elif budget_euros > 0:
         base = _remaining_euro_budget(project_id, budget_euros, open_month_set, rate_map, session)
         remaining = max(0.0, base - override_cost)
         plan = distribute_budget(avail_map, rate_map, priorities, remaining)

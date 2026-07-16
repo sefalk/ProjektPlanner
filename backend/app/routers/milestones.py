@@ -30,8 +30,10 @@ from app.services.milestones import (
     _parse_work_week_pattern,
     _person_available_hours,
     clear_milestone_target_budget,
+    effective_rate,
     get_milestone_budgets,
     initialize_milestones,
+    project_positions,
     manual_budget_update,
     manual_budget_update_by_person,
     resync_milestones,
@@ -258,6 +260,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
     membership_map: dict[int, ProjectMembership] = {m.person_id: m for m in memberships}
+    positions_by_id = project_positions(project_id, session)
 
     persons_map: dict[int, Person] = {}
     for m in memberships:
@@ -307,7 +310,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 sick_estimate_days=stats.sick_estimate_days,
                 training_estimate_days=stats.training_estimate_days,
                 holiday_days=stats.holiday_days,
-                billing_rate_per_hour=membership.billing_rate_per_hour,
+                billing_rate_per_hour=effective_rate(membership, positions_by_id),
                 booked_hours=booked_map.get(person.id, 0.0),
                 is_manual_override=budget.is_manual_override,
                 estimated_absence_days_override=budget.estimated_absence_days_override,
