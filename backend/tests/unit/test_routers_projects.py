@@ -173,10 +173,28 @@ def _priced_position(client, project_id, number="A", budget=50000.0, rate=100.0)
     }).json()
 
 
+def _enable_position_mode(client, project_id):
+    return client.put(f"/projects/{project_id}/position-mode", json={"enabled": True})
+
+
+def test_enable_position_mode_guard_and_toggle(client):
+    p = client.post("/projects", json=_project()).json()  # budget 50000
+    # No priced position, budget unallocated → cannot enable.
+    r = client.get(f"/projects/{p['id']}/position-mode").json()
+    assert r["enabled"] is False and r["can_enable"] is False
+    assert _enable_position_mode(client, p["id"]).status_code == 409
+    # Add a priced position covering the full budget → now enable succeeds.
+    _priced_position(client, p["id"], budget=50000.0)
+    ok = _enable_position_mode(client, p["id"])
+    assert ok.status_code == 200 and ok.json()["position_mode"] is True
+
+
 def test_position_mode_requires_assignment(client):
     p = client.post("/projects", json=_project()).json()
-    _priced_position(client, p["id"])  # priced position → position mode
+    _priced_position(client, p["id"], budget=50000.0)
+    assert _enable_position_mode(client, p["id"]).status_code == 200
     person = client.post("/persons", json=_person_payload()).json()
+    # Adding a member without a position is now rejected (position mode on).
     r = client.post(f"/projects/{p['id']}/memberships", json={
         "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
         "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
@@ -184,9 +202,23 @@ def test_position_mode_requires_assignment(client):
     assert r.status_code == 400
 
 
+def test_enable_blocked_by_unassigned_member(client):
+    p = client.post("/projects", json=_project()).json()
+    _priced_position(client, p["id"], budget=50000.0)
+    person = client.post("/persons", json=_person_payload()).json()
+    client.post(f"/projects/{p['id']}/memberships", json={  # unassigned member (simple mode)
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+    })
+    status = client.get(f"/projects/{p['id']}/position-mode").json()
+    assert status["can_enable"] is False
+    assert _enable_position_mode(client, p["id"]).status_code == 409
+
+
 def test_position_mode_assignment_accepted(client):
     p = client.post("/projects", json=_project()).json()
-    bp = _priced_position(client, p["id"])
+    bp = _priced_position(client, p["id"], budget=50000.0)
+    assert _enable_position_mode(client, p["id"]).status_code == 200
     person = client.post("/persons", json=_person_payload()).json()
     r = client.post(f"/projects/{p['id']}/memberships", json={
         "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
@@ -198,10 +230,10 @@ def test_position_mode_assignment_accepted(client):
 
 
 def test_assignment_to_foreign_position_rejected(client):
+    # Foreign-position FK check applies in either mode (no toggle needed).
     p1 = client.post("/projects", json=_project("P00001")).json()
     p2 = client.post("/projects", json=_project("P00002")).json()
     bp2 = _priced_position(client, p2["id"])  # belongs to p2
-    _priced_position(client, p1["id"])         # p1 is in position mode
     person = client.post("/persons", json=_person_payload()).json()
     r = client.post(f"/projects/{p1['id']}/memberships", json={
         "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
@@ -212,7 +244,7 @@ def test_assignment_to_foreign_position_rejected(client):
 
 
 def test_simple_mode_no_assignment_needed(client):
-    # No priced position → simple mode → assignment optional (regression guard).
+    # Position mode off → assignment optional (regression guard).
     p = client.post("/projects", json=_project()).json()
     person = client.post("/persons", json=_person_payload()).json()
     r = client.post(f"/projects/{p['id']}/memberships", json={

@@ -103,7 +103,7 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
     positions_by_id = project_positions(project_id, session)
-    position_mode = is_position_mode(memberships)
+    position_mode = is_position_mode(project)
     rate_map = build_rate_map(memberships, positions_by_id)
     priorities = {m.person_id: m.priority for m in memberships}
     open_month_set = {(ms.year, ms.month) for ms in open_milestones}

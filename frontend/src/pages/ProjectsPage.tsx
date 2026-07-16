@@ -23,7 +23,7 @@ const STATUS_COLORS: Record<Project['status'], string> = {
 
 function ProjectForm({ initial, onSave, onCancel }: {
   initial?: Partial<Project>
-  onSave: (d: Omit<Project, 'id'>) => void
+  onSave: (d: Omit<Project, 'id' | 'position_mode'>) => void
   onCancel: () => void
 }) {
   const today = new Date().toISOString().slice(0, 10)
@@ -165,7 +165,7 @@ export default function ProjectsPage() {
   })
 
   const update = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Omit<Project, 'id'> }) => projects.update(id, data),
+    mutationFn: ({ id, data }: { id: number; data: Omit<Project, 'id' | 'position_mode'> }) => projects.update(id, data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['projects'] }); setEditProject(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })

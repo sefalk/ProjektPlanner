@@ -347,6 +347,7 @@ def _position_mapping(session, project_id, level, bp_id):
 def test_import_links_booking_to_position(session):
     _make_person(session)
     proj = _make_project(session)
+    proj.position_mode = True
     _make_mapping(session, "P00001 Analytics", proj.id)
     bp = _priced_position(session, proj.id)
     _position_mapping(session, proj.id, "Development", bp.id)  # _ROW level = Development
@@ -361,6 +362,7 @@ def test_import_links_booking_to_position(session):
 def test_import_position_mode_missing_mapping_raises(session):
     _make_person(session)
     proj = _make_project(session)
+    proj.position_mode = True
     _make_mapping(session, "P00001 Analytics", proj.id)
     _priced_position(session, proj.id)  # position mode, but no level mapping
     session.commit()

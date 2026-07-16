@@ -22,9 +22,13 @@ from app.services.line_items import (
     would_overshoot,
 )
 from app.services.milestones import (
+    MilestoneNotFound,
+    PositionModeNotEnableable,
     apply_project_range_change,
+    can_enable_position_mode,
     prune_member_budgets_to_range,
     remove_member_budgets,
+    set_position_mode,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -168,7 +172,8 @@ def update_project(project_id: int, data: Project, session: SessionDep):
     if not project:
         raise HTTPException(404, "Project not found.")
     old_start, old_end = project.start_date, project.end_date
-    update = data.model_dump(exclude_unset=True, exclude={"id"})
+    # position_mode is toggled only via the guarded /position-mode endpoint (§21 WP8).
+    update = data.model_dump(exclude_unset=True, exclude={"id", "position_mode"})
     for field, value in update.items():
         setattr(project, field, value)
     try:
@@ -308,6 +313,42 @@ def delete_billing_position(project_id: int, bp_id: int, session: SessionDep):
 
 
 # ---------------------------------------------------------------------------
+# Position mode (§21 WP8)
+# ---------------------------------------------------------------------------
+
+class PositionModeStatus(SQLModel):
+    enabled: bool
+    can_enable: bool
+    reasons: list[str]
+
+
+class PositionModeUpdate(SQLModel):
+    enabled: bool
+
+
+@router.get("/{project_id}/position-mode", response_model=PositionModeStatus)
+def get_position_mode(project_id: int, session: SessionDep):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    memberships = list(session.exec(
+        select(ProjectMembership).where(ProjectMembership.project_id == project_id)
+    ).all())
+    ok, reasons = can_enable_position_mode(project, memberships, _positions(project_id, session))
+    return PositionModeStatus(enabled=project.position_mode, can_enable=ok, reasons=reasons)
+
+
+@router.put("/{project_id}/position-mode", response_model=Project)
+def put_position_mode(project_id: int, body: PositionModeUpdate, session: SessionDep):
+    try:
+        return set_position_mode(project_id, body.enabled, session)
+    except MilestoneNotFound:
+        raise HTTPException(404, "Project not found.")
+    except PositionModeNotEnableable as exc:
+        raise HTTPException(409, {"detail": "Posten-Modus kann nicht aktiviert werden.", "reasons": exc.reasons})
+
+
+# ---------------------------------------------------------------------------
 # Memberships
 # ---------------------------------------------------------------------------
 
@@ -357,13 +398,12 @@ def _membership_overbooking_warnings(membership: ProjectMembership, session: Ses
 
 
 def _validate_membership_position(project_id: int, billing_position_id: int | None, session: Session) -> None:
-    """Enforce §21 P2: in position mode every member must be assigned to a line item of
-    THIS project. Position mode is offered once the project has a priced position (rate>0).
-    A provided assignment must always reference a position of the project."""
-    positions = _positions(project_id, session)
-    pos_ids = {p.id for p in positions}
-    priced = any(p.billing_rate_per_hour > 0 for p in positions)
-    if priced and billing_position_id is None:
+    """Enforce §21 P2: while the project is in position mode every member must be assigned
+    to a line item of THIS project. A provided assignment must always reference a position
+    of the project (checked in either mode)."""
+    project = session.get(Project, project_id)
+    pos_ids = {p.id for p in _positions(project_id, session)}
+    if project is not None and project.position_mode and billing_position_id is None:
         raise HTTPException(400, "Im Posten-Modus muss dem Mitglied ein Posten zugewiesen werden.")
     if billing_position_id is not None and billing_position_id not in pos_ids:
         raise HTTPException(400, "Zugewiesener Posten gehört nicht zu diesem Projekt.")

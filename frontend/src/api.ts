@@ -59,6 +59,13 @@ export interface Project {
   program_id: number | null;
   sick_days_per_year_override: number | null;
   training_days_per_year_override: number | null;
+  position_mode: boolean;
+}
+
+export interface PositionModeStatus {
+  enabled: boolean;
+  can_enable: boolean;
+  reasons: string[];
 }
 
 export interface Person {
@@ -282,9 +289,9 @@ export interface ProjectStats {
 export const projects = {
   list: () => req<Project[]>('GET', '/projects'),
   stats: () => req<ProjectStats[]>('GET', '/projects/stats'),
-  create: (d: Omit<Project, 'id'>) => req<Project>('POST', '/projects', d),
+  create: (d: Omit<Project, 'id' | 'position_mode'>) => req<Project>('POST', '/projects', d),
   get: (id: number) => req<Project>('GET', `/projects/${id}`),
-  update: (id: number, d: Omit<Project, 'id'>) => req<Project>('PUT', `/projects/${id}`, d),
+  update: (id: number, d: Omit<Project, 'id' | 'position_mode'>) => req<Project>('PUT', `/projects/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/projects/${id}`),
   memberships: (id: number) => req<ProjectMembership[]>('GET', `/projects/${id}/memberships`),
   addMembership: (
@@ -312,6 +319,10 @@ export const projects = {
   ) => req<BillingPosition>('PUT', `/projects/${projectId}/billing-positions/${bpId}`, d),
   deleteBillingPosition: (projectId: number, bpId: number) =>
     req<void>('DELETE', `/projects/${projectId}/billing-positions/${bpId}`),
+  positionModeStatus: (id: number) =>
+    req<PositionModeStatus>('GET', `/projects/${id}/position-mode`),
+  setPositionMode: (id: number, enabled: boolean) =>
+    req<Project>('PUT', `/projects/${id}/position-mode`, { enabled }),
   milestones: (id: number) => req<Milestone[]>('GET', `/projects/${id}/milestones`),
   milestonesDetail: (id: number) => req<MilestoneDetail[]>('GET', `/projects/${id}/milestones/detail`),
   initMilestones: (id: number, force?: boolean) => req<Milestone[]>('POST', `/projects/${id}/milestones/initialize${force ? '?force=true' : ''}`),

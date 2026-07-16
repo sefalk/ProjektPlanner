@@ -28,6 +28,10 @@ class Project(ValidatedSQLModel, table=True):
     # None = use the global setting; a value (incl. 0 = disabled) overrides it for this project.
     sick_days_per_year_override: float | None = Field(default=None, ge=0)
     training_days_per_year_override: float | None = Field(default=None, ge=0)
+    # Projektposten-Modus (§21 WP8): explicit opt-in. When True, budget distribution,
+    # member-assignment validation, import level-mapping and invoicing all run per line
+    # item. Guarded on enable: every active member assigned + Σ Posten-Budget == total.
+    position_mode: bool = Field(default=False)
 
     @model_validator(mode="after")
     def end_date_after_start(self) -> "Project":

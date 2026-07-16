@@ -32,7 +32,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from thefuzz import process as fuzz_process
 
-from app.models.billing import BillingPosition
 from app.models.person import Person
 from app.models.timebooking import (
     ImportBatch,
@@ -350,17 +349,19 @@ def resolve_project_mappings(
 
 
 def position_mode_project_ids(project_ids: set[int], session: Session) -> set[int]:
-    """Subset of project_ids that are in position mode = have a priced line item (rate>0).
-    Only these projects require a level→position mapping at import (§21 P6)."""
+    """Subset of project_ids whose explicit position_mode flag is on (§21 WP8). Only these
+    projects require a level→position mapping at import (§21 P6)."""
     if not project_ids:
         return set()
-    priced = session.exec(
-        select(BillingPosition.project_id).where(
-            BillingPosition.project_id.in_(project_ids),  # type: ignore[attr-defined]
-            BillingPosition.billing_rate_per_hour > 0,
+    from app.models.project import Project
+
+    rows = session.exec(
+        select(Project.id).where(
+            Project.id.in_(project_ids),  # type: ignore[attr-defined]
+            Project.position_mode == True,  # noqa: E712
         )
     ).all()
-    return set(priced)
+    return set(rows)
 
 
 def resolve_position_mappings(

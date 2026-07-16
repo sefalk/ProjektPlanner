@@ -19,7 +19,11 @@ from app.services.line_items import (
     position_budget_state,
     would_overshoot,
 )
-from app.services.milestones import effective_rate, initialize_milestones
+from app.services.milestones import (
+    can_enable_position_mode,
+    effective_rate,
+    initialize_milestones,
+)
 
 
 def _membership(rate=100.0, position_id=None):
@@ -113,7 +117,7 @@ def _setup_two_positions(session):
     project = Project(
         project_number="PP001", name="Posten Projekt",
         start_date=date(2026, 1, 1), end_date=date(2026, 3, 31),
-        total_budget_euros=30_000.0,
+        total_budget_euros=30_000.0, position_mode=True,  # §21 WP8 explicit toggle
     )
     session.add(project)
     session.flush()
@@ -185,6 +189,36 @@ def test_position_mode_buckets_are_independent(session):
     # A capped at its own 20k even though the project total (30k) and B's slack exist.
     assert cost_a <= pos_a.budget_euros + 1e-6
     assert cost_b <= 500.0 + 1e-6
+
+
+def test_can_enable_position_mode_guard(session):
+    project = Project(project_number="G1", name="Guard", start_date=date(2026, 1, 1),
+                      end_date=date(2026, 3, 31), total_budget_euros=30_000.0)
+    session.add(project)
+    session.flush()
+    # No priced position + unallocated budget → blocked with reasons.
+    ok, reasons = can_enable_position_mode(project, [], [])
+    assert ok is False and len(reasons) >= 1
+
+    pos_a = BillingPosition(project_id=project.id, position_number="A",
+                            budget_euros=20_000.0, billing_rate_per_hour=100.0)
+    pos_b = BillingPosition(project_id=project.id, position_number="B",
+                            budget_euros=10_000.0, billing_rate_per_hour=50.0)
+    session.add(pos_a); session.add(pos_b); session.flush()
+    person = Person(name="Uwe", sage_employee_name="Uwe", default_weekly_hours=40.0)
+    session.add(person); session.flush()
+    m = ProjectMembership(project_id=project.id, person_id=person.id,
+                          from_date=date(2026, 1, 1), to_date=date(2026, 3, 31),
+                          weekly_capacity_hours=40.0, billing_rate_per_hour=0.0)
+    session.add(m); session.flush()
+    # Σ budgets == total (30k) but member unassigned → still blocked.
+    ok, reasons = can_enable_position_mode(project, [m], [pos_a, pos_b])
+    assert ok is False
+    # Assign the member → now enableable.
+    m.billing_position_id = pos_a.id
+    session.add(m); session.flush()
+    ok, reasons = can_enable_position_mode(project, [m], [pos_a, pos_b])
+    assert ok is True and reasons == []
 
 
 def test_simple_mode_unaffected_when_no_member_assigned(session):

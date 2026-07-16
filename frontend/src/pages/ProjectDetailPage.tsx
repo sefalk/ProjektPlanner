@@ -320,22 +320,41 @@ function PositionFields({
 /** Line-item (Projektposten) management: budget-consistency banner (§P3), editable
  *  list, and add form defaulting to the open difference. */
 function BillingPositionsSection({
-  projectId, totalBudget, positions, invoiceList,
+  projectId, totalBudget, positions, invoiceList, positionMode,
 }: {
   projectId: number
   totalBudget: number
   positions: BillingPosition[]
   invoiceList: MonthlyInvoice[]
+  positionMode: boolean
 }) {
   const qc = useQueryClient()
   const [adding, setAdding] = useState<PositionFormValue | null>(null)
   const [editing, setEditing] = useState<{ id: number; value: PositionFormValue } | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ['billingPositions', projectId] })
   const onErr = (e: unknown) => setErr(e instanceof ApiError && e.status === 409
     ? (typeof e.body === 'object' && e.body && 'detail' in e.body ? String((e.body as { detail: unknown }).detail) : 'Vorgang nicht möglich.')
     : 'Fehler beim Speichern.')
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['billingPositions', projectId] })
+    qc.invalidateQueries({ queryKey: ['positionMode', projectId] })
+  }
+
+  const { data: modeStatus } = useQuery({
+    queryKey: ['positionMode', projectId],
+    queryFn: () => projects.positionModeStatus(projectId),
+  })
+  const toggleMode = useMutation({
+    mutationFn: (enabled: boolean) => projects.setPositionMode(projectId, enabled),
+    onSuccess: () => {
+      setErr(null)
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['positionMode', projectId] })
+      qc.invalidateQueries({ queryKey: ['milestones-detail', projectId] })
+    },
+    onError: onErr,
+  })
 
   const addMut = useMutation({
     mutationFn: (d: PositionFormValue) => projects.addBillingPosition(projectId, d),
@@ -448,6 +467,32 @@ function BillingPositionsSection({
           <Plus size={13} /> Posten hinzufügen
         </button>
       )}
+
+      {/* Position-mode toggle (§21 WP8) */}
+      <div className="mt-6 pt-4 border-t border-gray-100">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-gray-700">Posten-Modus</p>
+            <p className="text-xs text-gray-400 max-w-md">
+              Aktiviert die Verteilung, Zuweisung, Import-Zuordnung und Abrechnung je Posten.
+              Voraussetzung: alle aktiven Mitglieder einem Posten zugewiesen und Budget vollständig verteilt.
+            </p>
+          </div>
+          <button
+            onClick={() => toggleMode.mutate(!positionMode)}
+            disabled={toggleMode.isPending || (!positionMode && modeStatus != null && !modeStatus.can_enable)}
+            title={!positionMode && modeStatus?.reasons.length ? modeStatus.reasons.join('\n') : undefined}
+            className={`shrink-0 px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              positionMode ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+            {positionMode ? 'Posten-Modus aktiv — deaktivieren' : 'Posten-Modus aktivieren'}
+          </button>
+        </div>
+        {!positionMode && modeStatus != null && !modeStatus.can_enable && modeStatus.reasons.length > 0 && (
+          <ul className="mt-2 list-disc list-inside text-[11px] text-amber-600 space-y-0.5">
+            {modeStatus.reasons.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }
@@ -526,7 +571,7 @@ export default function ProjectDetailPage() {
   const [closeWarnings, setCloseWarnings] = useState<string[]>([])
   const [pendingCloseForm, setPendingCloseForm] = useState<typeof closeForm | null>(null)
   const [showReinitConfirm, setShowReinitConfirm] = useState(false)
-  const [settingsForm, setSettingsForm] = useState<Omit<Project, 'id'> | null>(null)
+  const [settingsForm, setSettingsForm] = useState<Omit<Project, 'id' | 'position_mode'> | null>(null)
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [showEmailTemplate, setShowEmailTemplate] = useState(false)
 
@@ -675,7 +720,7 @@ export default function ProjectDetailPage() {
   })
 
   const updateProject = useMutation({
-    mutationFn: (data: Omit<Project, 'id'>) => projects.update(projectId, data),
+    mutationFn: (data: Omit<Project, 'id' | 'position_mode'>) => projects.update(projectId, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       setSettingsSaved(true)
@@ -686,9 +731,9 @@ export default function ProjectDetailPage() {
 
   if (!project) return <div className="p-6 text-sm text-gray-400">Lade…</div>
 
-  // Position mode (§21): offered once the project has a priced line item (rate > 0).
+  // Position mode (§21 WP8): the project's explicit opt-in flag is the single trigger.
   const posById = new Map(billingPositions.map((p) => [p.id, p]))
-  const positionMode = billingPositions.some((p) => p.billing_rate_per_hour > 0)
+  const positionMode = project.position_mode
   const memberRate = (m: ProjectMembership) =>
     m.billing_position_id != null ? (posById.get(m.billing_position_id)?.billing_rate_per_hour ?? m.billing_rate_per_hour) : m.billing_rate_per_hour
 
@@ -1674,6 +1719,7 @@ export default function ProjectDetailPage() {
                 totalBudget={project.total_budget_euros}
                 positions={billingPositions}
                 invoiceList={invoiceList}
+                positionMode={positionMode}
               />
             </div>
           )

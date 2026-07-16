@@ -62,6 +62,15 @@ class BudgetConfirmationRequired(Exception):
         super().__init__("; ".join(warnings))
 
 
+class PositionModeNotEnableable(Exception):
+    """Raised when enabling position mode is blocked by unmet preconditions (§21 WP8).
+    Carries the human-readable reasons for the UI."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        self.reasons = reasons
+        super().__init__("; ".join(reasons))
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -427,11 +436,62 @@ def project_positions(project_id: int, session: Session) -> dict[int, BillingPos
     }
 
 
-def is_position_mode(memberships: list[ProjectMembership]) -> bool:
-    """Position mode (§21 P1/P2) is active as soon as any member is assigned to a line item.
-    Otherwise the project is in simple mode (per-member rate, one global budget). This makes
-    the feature opt-in per project — existing invoicing-only positions do not flip the mode."""
-    return any(m.billing_position_id is not None for m in memberships)
+def is_position_mode(project: Project) -> bool:
+    """Position mode (§21 WP8) is the project's explicit opt-in flag. It is the single
+    source of truth for distribution, member-assignment validation, import level-mapping
+    and invoicing. Enabling is guarded (see can_enable_position_mode)."""
+    return bool(project.position_mode)
+
+
+def can_enable_position_mode(
+    project: Project,
+    memberships: list[ProjectMembership],
+    positions: list[BillingPosition],
+) -> tuple[bool, list[str]]:
+    """Whether position mode may be turned on for a project, plus human-readable reasons
+    for any blockers (§21 WP8). Requires: at least one priced line item; Σ Posten-Budget ==
+    total (P3 fully allocated); every ACTIVE member assigned to a line item (P2)."""
+    reasons: list[str] = []
+    priced = [p for p in positions if p.billing_rate_per_hour > 0]
+    if not priced:
+        reasons.append("Es gibt keinen bepreisten Posten (Satz > 0).")
+    allocated = sum(p.budget_euros for p in positions)
+    if abs(allocated - project.total_budget_euros) > 1e-6:
+        reasons.append(
+            f"Σ Posten-Budget ({allocated:.2f} €) entspricht nicht dem Gesamtbudget "
+            f"({project.total_budget_euros:.2f} €)."
+        )
+    active = [
+        m for m in memberships
+        if m.from_date <= project.end_date and m.to_date >= project.start_date
+    ]
+    unassigned = [m for m in active if m.billing_position_id is None]
+    if unassigned:
+        reasons.append(f"{len(unassigned)} aktive(s) Mitglied(er) ohne Posten-Zuweisung.")
+    return (not reasons, reasons)
+
+
+def set_position_mode(project_id: int, enabled: bool, session: Session) -> Project:
+    """Toggle a project's Projektposten-Modus (§21 WP8). Enabling is guarded by
+    can_enable_position_mode; disabling is always allowed. Commits."""
+    project = session.get(Project, project_id)
+    if not project:
+        raise MilestoneNotFound(f"Project {project_id} not found.")
+    if enabled and not project.position_mode:
+        memberships = list(session.exec(
+            select(ProjectMembership).where(ProjectMembership.project_id == project_id)
+        ).all())
+        positions = list(session.exec(
+            select(BillingPosition).where(BillingPosition.project_id == project_id)
+        ).all())
+        ok, reasons = can_enable_position_mode(project, memberships, positions)
+        if not ok:
+            raise PositionModeNotEnableable(reasons)
+    project.position_mode = enabled
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
 
 
 def build_rate_map(
@@ -561,7 +621,7 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
     positions_by_id = project_positions(project_id, session)
-    position_mode = is_position_mode(memberships)
+    position_mode = is_position_mode(project)
     membership_rate_map: dict[int, float] = build_rate_map(memberships, positions_by_id)
 
     person_cache: dict[int, Person] = {}
@@ -1261,7 +1321,7 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
     positions_by_id = project_positions(project_id, session)
-    position_mode = is_position_mode(memberships)
+    position_mode = is_position_mode(project)
     rate_map = build_rate_map(memberships, positions_by_id)
     priorities = {m.person_id: m.priority for m in memberships}
 
