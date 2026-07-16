@@ -163,6 +163,65 @@ def test_delete_position_blocked_when_member_assigned(client):
     assert r.status_code == 409
 
 
+# ---------------------------------------------------------------------------
+# Member → position assignment (doc 21 WP4, §P2)
+# ---------------------------------------------------------------------------
+
+def _priced_position(client, project_id, number="A", budget=50000.0, rate=100.0):
+    return client.post(f"/projects/{project_id}/billing-positions", json={
+        "position_number": number, "budget_euros": budget, "billing_rate_per_hour": rate,
+    }).json()
+
+
+def test_position_mode_requires_assignment(client):
+    p = client.post("/projects", json=_project()).json()
+    _priced_position(client, p["id"])  # priced position → position mode
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+    })
+    assert r.status_code == 400
+
+
+def test_position_mode_assignment_accepted(client):
+    p = client.post("/projects", json=_project()).json()
+    bp = _priced_position(client, p["id"])
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 0.0,
+        "billing_position_id": bp["id"],
+    })
+    assert r.status_code == 201
+    assert r.json()["billing_position_id"] == bp["id"]
+
+
+def test_assignment_to_foreign_position_rejected(client):
+    p1 = client.post("/projects", json=_project("P00001")).json()
+    p2 = client.post("/projects", json=_project("P00002")).json()
+    bp2 = _priced_position(client, p2["id"])  # belongs to p2
+    _priced_position(client, p1["id"])         # p1 is in position mode
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{p1['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 0.0,
+        "billing_position_id": bp2["id"],  # foreign position
+    })
+    assert r.status_code == 400
+
+
+def test_simple_mode_no_assignment_needed(client):
+    # No priced position → simple mode → assignment optional (regression guard).
+    p = client.post("/projects", json=_project()).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+    })
+    assert r.status_code == 201
+
+
 def test_list_memberships_project_not_found(client):
     assert client.get("/projects/9999/memberships").status_code == 404
 

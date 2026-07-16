@@ -256,6 +256,14 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
   )
 }
 
+/** Extract the FastAPI `detail` string from an ApiError, falling back to the raw message. */
+function errText(e: Error): string {
+  if (e instanceof ApiError && e.body && typeof e.body === 'object' && 'detail' in e.body) {
+    return String((e.body as { detail: unknown }).detail)
+  }
+  return e.message
+}
+
 const EUR0 = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
 const EUR2 = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -444,6 +452,36 @@ function BillingPositionsSection({
   )
 }
 
+/** Line-item picker for the member forms (§21 P2). Rendered only when the project has
+ *  positions; selecting a priced position makes the member's rate come from that position. */
+function PositionSelect({
+  positions, value, onChange, required,
+}: {
+  positions: BillingPosition[]
+  value: number | null
+  onChange: (v: number | null) => void
+  required?: boolean
+}) {
+  if (positions.length === 0) return null
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">
+        Posten <span className="text-gray-400 font-normal">(Satz kommt vom Posten)</span>
+      </label>
+      <select required={required} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value ? parseInt(e.target.value) : null)}>
+        <option value="">— kein Posten —</option>
+        {positions.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.position_number}{p.description ? ` – ${p.description}` : ''}{p.billing_rate_per_hour > 0 ? ` (${p.billing_rate_per_hour} €/Std.)` : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 const STATUS_COLORS: Record<MonthlyInvoice['status'], string> = {
   planned: 'bg-yellow-100 text-yellow-700',
   invoiced: 'bg-blue-100 text-blue-700',
@@ -468,7 +506,7 @@ export default function ProjectDetailPage() {
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
   const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
-  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0 })
+  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
@@ -482,7 +520,7 @@ export default function ProjectDetailPage() {
   const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; personId: number; personName: string } | null>(null)  // edit estimated absence
   const [editAbsenceDays, setEditAbsenceDays] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
-  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0 })
+  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
   const [error, setError] = useState<string | null>(null)
   const [memberWarnings, setMemberWarnings] = useState<string[]>([])
   const [closeWarnings, setCloseWarnings] = useState<string[]>([])
@@ -619,7 +657,7 @@ export default function ProjectDetailPage() {
         setMemberWarnings(result.warnings)
       }
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => setError(errText(e)),
   })
   const updateMember = useMutation({
     mutationFn: () => projects.updateMembership(projectId, editMember!.id, editMemberForm),
@@ -629,7 +667,7 @@ export default function ProjectDetailPage() {
       setError(null)
       if (result.warnings && result.warnings.length > 0) setMemberWarnings(result.warnings)
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => setError(errText(e)),
   })
   const removeMember = useMutation({
     mutationFn: (mid: number) => projects.deleteMembership(projectId, mid),
@@ -647,6 +685,12 @@ export default function ProjectDetailPage() {
   })
 
   if (!project) return <div className="p-6 text-sm text-gray-400">Lade…</div>
+
+  // Position mode (§21): offered once the project has a priced line item (rate > 0).
+  const posById = new Map(billingPositions.map((p) => [p.id, p]))
+  const positionMode = billingPositions.some((p) => p.billing_rate_per_hour > 0)
+  const memberRate = (m: ProjectMembership) =>
+    m.billing_position_id != null ? (posById.get(m.billing_position_id)?.billing_rate_per_hour ?? m.billing_rate_per_hour) : m.billing_rate_per_hour
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'milestones', label: 'Meilensteine' },
@@ -1381,7 +1425,20 @@ export default function ProjectDetailPage() {
                   { key: 'from_date', header: 'Von' },
                   { key: 'to_date', header: 'Bis' },
                   { key: 'weekly_capacity_hours', header: 'h/Woche', render: (m: ProjectMembership) => `${m.weekly_capacity_hours} h` },
-                  { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => `${m.billing_rate_per_hour} €` },
+                  { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => (
+                    <span title={m.billing_position_id != null ? 'Satz vom zugewiesenen Posten' : undefined}>
+                      {memberRate(m)} €{m.billing_position_id != null && <span className="ml-1 text-gray-300">(Posten)</span>}
+                    </span>
+                  ) },
+                  ...(billingPositions.length > 0 ? [{
+                    key: 'billing_position_id', header: 'Posten',
+                    render: (m: ProjectMembership) => {
+                      const p = m.billing_position_id != null ? posById.get(m.billing_position_id) : undefined
+                      return p
+                        ? <span title={p.description}>{p.position_number}</span>
+                        : <span className={positionMode ? 'text-red-500' : 'text-gray-300'} title={positionMode ? 'Kein Posten zugewiesen — im Posten-Modus erforderlich' : undefined}>{positionMode ? '⚠ keiner' : '–'}</span>
+                    },
+                  }] : []),
                   {
                     key: 'priority', header: 'Priorität',
                     render: (m: ProjectMembership) => (
@@ -1403,7 +1460,7 @@ export default function ProjectDetailPage() {
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority, vacation_days_taken: m.vacation_days_taken }); setError(null) }}
+                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority, vacation_days_taken: m.vacation_days_taken, billing_position_id: m.billing_position_id }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
@@ -1859,14 +1916,24 @@ export default function ProjectDetailPage() {
                   value={addMemberForm.weekly_capacity_hours}
                   onChange={(e) => setAddMemberForm({ ...addMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                <input required type="number" min={0} step={0.01}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={addMemberForm.billing_rate_per_hour}
-                  onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
-              </div>
+              {(() => {
+                const pos = addMemberForm.billing_position_id != null ? posById.get(addMemberForm.billing_position_id) : undefined
+                const fromPosition = pos != null && pos.billing_rate_per_hour > 0
+                return (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
+                    <input required={!fromPosition} type="number" min={0} step={0.01} disabled={fromPosition}
+                      className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+                      title={fromPosition ? 'Satz kommt vom zugewiesenen Posten' : undefined}
+                      value={fromPosition ? pos!.billing_rate_per_hour : addMemberForm.billing_rate_per_hour}
+                      onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
+                  </div>
+                )
+              })()}
             </div>
+            <PositionSelect positions={billingPositions} required={positionMode}
+              value={addMemberForm.billing_position_id}
+              onChange={(v) => setAddMemberForm({ ...addMemberForm, billing_position_id: v })} />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
@@ -1923,14 +1990,24 @@ export default function ProjectDetailPage() {
                   value={editMemberForm.weekly_capacity_hours}
                   onChange={(e) => setEditMemberForm({ ...editMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                <input required type="number" min={0} step={0.01}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.billing_rate_per_hour}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
-              </div>
+              {(() => {
+                const pos = editMemberForm.billing_position_id != null ? posById.get(editMemberForm.billing_position_id) : undefined
+                const fromPosition = pos != null && pos.billing_rate_per_hour > 0
+                return (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
+                    <input required={!fromPosition} type="number" min={0} step={0.01} disabled={fromPosition}
+                      className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+                      title={fromPosition ? 'Satz kommt vom zugewiesenen Posten' : undefined}
+                      value={fromPosition ? pos!.billing_rate_per_hour : editMemberForm.billing_rate_per_hour}
+                      onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
+                  </div>
+                )
+              })()}
             </div>
+            <PositionSelect positions={billingPositions} required={positionMode}
+              value={editMemberForm.billing_position_id}
+              onChange={(v) => setEditMemberForm({ ...editMemberForm, billing_position_id: v })} />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>

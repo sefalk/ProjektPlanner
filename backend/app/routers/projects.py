@@ -356,10 +356,24 @@ def _membership_overbooking_warnings(membership: ProjectMembership, session: Ses
     return warnings
 
 
+def _validate_membership_position(project_id: int, billing_position_id: int | None, session: Session) -> None:
+    """Enforce §21 P2: in position mode every member must be assigned to a line item of
+    THIS project. Position mode is offered once the project has a priced position (rate>0).
+    A provided assignment must always reference a position of the project."""
+    positions = _positions(project_id, session)
+    pos_ids = {p.id for p in positions}
+    priced = any(p.billing_rate_per_hour > 0 for p in positions)
+    if priced and billing_position_id is None:
+        raise HTTPException(400, "Im Posten-Modus muss dem Mitglied ein Posten zugewiesen werden.")
+    if billing_position_id is not None and billing_position_id not in pos_ids:
+        raise HTTPException(400, "Zugewiesener Posten gehört nicht zu diesem Projekt.")
+
+
 @router.post("/{project_id}/memberships", response_model=MembershipWithWarnings, status_code=201)
 def create_membership(project_id: int, body: MembershipCreate, session: SessionDep):
     if not session.get(Project, project_id):
         raise HTTPException(404, "Project not found.")
+    _validate_membership_position(project_id, body.billing_position_id, session)
     membership = ProjectMembership(
         project_id=project_id,
         person_id=body.person_id,
@@ -399,6 +413,7 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
     m = session.get(ProjectMembership, membership_id)
     if not m or m.project_id != project_id:
         raise HTTPException(404, "Membership not found.")
+    _validate_membership_position(project_id, body.billing_position_id, session)
     m.from_date = date.fromisoformat(body.from_date)
     m.to_date = date.fromisoformat(body.to_date)
     m.weekly_capacity_hours = body.weekly_capacity_hours
