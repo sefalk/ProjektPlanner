@@ -71,16 +71,24 @@ Invariante (Service-seitig, Posten-Modus): `Σ BillingPosition.budget_euros == P
 
 ## 9. Arbeitspakete
 
-1. **WP1 — Datenmodell & Migrationen** (BillingPosition.rate, Membership.billing_position_id, TimeBooking.billing_position_id, SagePositionMapping) + `effective_rate`-Helper. Tests.
-2. **WP2 — Posten-CRUD & Budget-Konsistenz** (Router PUT/DELETE, Σ-Invariante, Default-Restdifferenz) + Settings-UI.
-3. **WP3 — Verteilung je Posten** (Bucket-Gruppierung in initialize/resync/preview/target) + effektiver Satz überall. Property-Tests: `Σ(Std×Satz) ≤ Posten-Budget` je Posten.
-4. **WP4 — MA→Posten-Zuweisung** (Membership-Feld, Validierung „im Posten-Modus Pflicht") + Mitglieder-UI.
-5. **WP5 — Import Level→Posten** (Mapping-Modell, Resolver, Fehlerpfad, TimeBooking-Verknüpfung) + Sage-Mapping-UI.
-6. **WP6 — Abrechnung je Posten** (close_month/reopen/Rechnungen per Posten; Prognose/Ist).
-7. **WP7 — Meilenstein-Aufschlüsselung nach Posten** (Gesamt-Zeile, aufklappbar MA; €/Std).
-8. **WP8 — Modus-Umstieg & Doku** (Simple↔Posten für Bestandsprojekte; Anwenderdoku/Hilfe).
+1. ✅ **WP1 — Datenmodell & Migrationen** (BillingPosition.rate, Membership.billing_position_id, TimeBooking.billing_position_id, SagePositionMapping) + `effective_rate`-Helper. Migration `d4a8c1f60e29`. Tests.
+2. ✅ **WP2 — Posten-CRUD & Budget-Konsistenz** (`services/line_items.py`; Router PUT/DELETE/budget-state, Σ-Invariante, Default-Restdifferenz, Lösch-Guard) + Settings-UI (`BillingPositionsSection`, Konsistenz-Banner).
+3. ✅ **WP3 — Verteilung je Posten** (`distribute_over_positions` in initialize/resync/preview; effektiver Satz überall inkl. Ziel-Budget/Meilenstein-Detail). Property-Tests: `Σ(Std×Satz) ≤ Posten-Budget` je Posten.
+4. ✅ **WP4 — MA→Posten-Zuweisung** (`_validate_membership_position`: Pflicht im Posten-Modus = Projekt hat bepreisten Posten) + Mitglieder-UI (Posten-Spalte, PositionSelect, Satz read-only vom Posten).
+5. ✅ **WP5 — Import Level→Posten** (`resolve_position_mappings`, `UnresolvedPositionsError`, TimeBooking-Verknüpfung; CRUD `/sage-position-mappings`) + Sage-Mapping-UI.
+6. ⬜ **WP6 — Abrechnung je Posten** (close_month/reopen/Rechnungen per Posten; Prognose/Ist).
+7. ⬜ **WP7 — Meilenstein-Aufschlüsselung nach Posten** (Gesamt-Zeile, aufklappbar MA; €/Std).
+8. ⬜ **WP8 — Modus-Umstieg & Doku** (Simple↔Posten für Bestandsprojekte; Anwenderdoku/Hilfe).
 
 Jeder WP schließt mit Unit-/Property-Tests ab; harte Invarianten (B1, P3, P4) dürfen nie brechen.
+
+### Modus-Trigger (Stand WP1–5, für WP8 zu vereinheitlichen)
+
+Aktuell gibt es **zwei** Auslöser für den „Posten-Modus", bewusst getrennt:
+- **Verteilung** (`is_position_mode`): aktiv, sobald **mindestens ein MA einem Posten zugewiesen** ist. So bleibt ein Projekt im Simple-Modus, bis die Zuweisung tatsächlich erfolgt — sauberer Cutover.
+- **Validierung / Import / UI** (`priced position vorhanden`, Satz > 0): aktiv, sobald das Projekt einen **bepreisten Posten** hat.
+
+**Migrations-Kante (WP8):** Hat ein Projekt bepreiste Posten, aber sind nur *manche* MA zugewiesen, erhalten nicht zugewiesene MA bei „Neu berechnen" 0 Std. (kein Bucket). Die UI markiert nicht zugewiesene MA (⚠). WP8 soll den Umstieg absichern (z. B. Verteilung erst umschalten, wenn **alle** aktiven MA zugewiesen sind, oder expliziter Modus-Schalter am Projekt).
 
 ## 10. Offene Punkte / Risiken
 
