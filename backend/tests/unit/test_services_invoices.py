@@ -120,7 +120,7 @@ def test_close_creates_invoice(session):
     _booking(session, proj.id, person.id, date(2026, 1, 15), 8.0)
     session.commit()
 
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
 
     assert inv.id is not None
     assert inv.total_hours == 8.0
@@ -149,7 +149,7 @@ def test_close_creates_person_entries(session):
     _booking(session, proj.id, person.id, date(2026, 1, 20), 4.0)
     session.commit()
 
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     entries = get_invoice_entries(inv.id, session)
 
     assert len(entries) == 1
@@ -160,7 +160,7 @@ def test_close_creates_person_entries(session):
 
 def test_close_zero_bookings(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     assert inv.total_hours == 0.0
     assert inv.total_amount_euros == 0.0
 
@@ -176,7 +176,7 @@ def test_close_multiple_persons(session):
     _booking(session, proj.id, bob.id, date(2026, 1, 5), 4.0)
     session.commit()
 
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
 
     assert inv.total_hours == 12.0
     assert inv.total_amount_euros == pytest.approx(8.0 * 90 + 4.0 * 100)
@@ -219,7 +219,7 @@ def test_close_billing_position_wrong_project(session):
 
 def test_reopen_deletes_invoice(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     reopen_month(inv.id, session)
     assert session.get(MonthlyInvoice, inv.id) is None
 
@@ -227,7 +227,7 @@ def test_reopen_deletes_invoice(session):
 def test_reopen_unlocks_milestone(session):
     proj, person, bp = _setup(session)
     initialize_milestones(proj.id, session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     reopen_month(inv.id, session)
 
     ms = session.exec(
@@ -243,7 +243,7 @@ def test_reopen_deletes_entries(session):
     proj, person, bp = _setup(session)
     _booking(session, proj.id, person.id, date(2026, 1, 5), 8.0)
     session.commit()
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     reopen_month(inv.id, session)
 
     entries = session.exec(
@@ -254,7 +254,7 @@ def test_reopen_deletes_entries(session):
 
 def test_reopen_invoiced_succeeds(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     update_invoice_status(inv.id, InvoiceStatus.invoiced, session)
     reopen_month(inv.id, session)  # must not raise
 
@@ -271,14 +271,14 @@ def test_reopen_not_found(session):
 
 def test_status_planned_to_invoiced(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     updated = update_invoice_status(inv.id, InvoiceStatus.invoiced, session)
     assert updated.status == InvoiceStatus.invoiced
 
 
 def test_status_invoiced_to_paid(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     update_invoice_status(inv.id, InvoiceStatus.invoiced, session)
     updated = update_invoice_status(inv.id, InvoiceStatus.paid, session)
     assert updated.status == InvoiceStatus.paid
@@ -286,14 +286,14 @@ def test_status_invoiced_to_paid(session):
 
 def test_status_cannot_skip_invoiced(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     with pytest.raises(InvalidStatusTransitionError):
         update_invoice_status(inv.id, InvoiceStatus.paid, session)
 
 
 def test_status_cannot_go_backwards(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     update_invoice_status(inv.id, InvoiceStatus.invoiced, session)
     with pytest.raises(InvalidStatusTransitionError):
         update_invoice_status(inv.id, InvoiceStatus.planned, session)
@@ -301,7 +301,7 @@ def test_status_cannot_go_backwards(session):
 
 def test_status_paid_is_terminal(session):
     proj, person, bp = _setup(session)
-    inv = close_month(proj.id, 2026, 1, bp.id, session)
+    inv = close_month(proj.id, 2026, 1, bp.id, session)[0]
     update_invoice_status(inv.id, InvoiceStatus.invoiced, session)
     update_invoice_status(inv.id, InvoiceStatus.paid, session)
     with pytest.raises(InvalidStatusTransitionError):
@@ -311,3 +311,77 @@ def test_status_paid_is_terminal(session):
 def test_status_not_found(session):
     with pytest.raises(InvoiceNotFoundError):
         update_invoice_status(9999, InvoiceStatus.invoiced, session)
+
+
+# ---------------------------------------------------------------------------
+# Position mode (§21 WP6): one invoice per line item
+# ---------------------------------------------------------------------------
+
+
+def _priced_position(session, project_id, number, rate, budget):
+    bp = BillingPosition(project_id=project_id, position_number=number,
+                         budget_euros=budget, billing_rate_per_hour=rate)
+    session.add(bp)
+    session.flush()
+    return bp
+
+
+def _booking_pos(session, project_id, person_id, booking_date, net_hours, level, position_id):
+    batch = session.exec(
+        __import__("sqlmodel").select(ImportBatch).where(ImportBatch.project_id == project_id)
+    ).first()
+    if not batch:
+        batch = ImportBatch(project_id=project_id, imported_at=datetime(2026, 1, 31),
+                            last_booking_date=booking_date)
+        session.add(batch)
+        session.flush()
+    tb = TimeBooking(
+        booking_date=booking_date, person_id=person_id, project_id=project_id,
+        import_batch_id=batch.id, sage_project_name="P00001", sage_project_level=level,
+        billing_position_id=position_id, net_hours=net_hours,
+    )
+    session.add(tb)
+    session.flush()
+    return tb
+
+
+def test_position_mode_close_creates_one_invoice_per_position(session):
+    proj = Project(project_number="PM01", name="PM", start_date=date(2026, 1, 1),
+                   end_date=date(2026, 3, 31), total_budget_euros=30000.0, position_mode=True)
+    session.add(proj); session.flush()
+    pos_a = _priced_position(session, proj.id, "A", rate=100.0, budget=20000.0)
+    pos_b = _priced_position(session, proj.id, "B", rate=50.0, budget=10000.0)
+    anna = _person(session, "Anna")
+    bert = _person(session, "Bert")
+    _membership(session, proj.id, anna.id, rate=0.0)
+    _membership(session, proj.id, bert.id, rate=0.0)
+    _booking_pos(session, proj.id, anna.id, date(2026, 1, 10), 5.0, "Senior", pos_a.id)
+    _booking_pos(session, proj.id, bert.id, date(2026, 1, 12), 4.0, "Junior", pos_b.id)
+    session.commit()
+
+    invoices = close_month(proj.id, 2026, 1, pos_a.id, session)
+    assert len(invoices) == 2
+    by_pos = {inv.billing_position_id: inv for inv in invoices}
+    assert by_pos[pos_a.id].total_amount_euros == pytest.approx(5.0 * 100.0)  # position rate
+    assert by_pos[pos_b.id].total_amount_euros == pytest.approx(4.0 * 50.0)
+
+
+def test_position_mode_reopen_removes_all_month_invoices(session):
+    proj = Project(project_number="PM02", name="PM", start_date=date(2026, 1, 1),
+                   end_date=date(2026, 3, 31), total_budget_euros=30000.0, position_mode=True)
+    session.add(proj); session.flush()
+    pos_a = _priced_position(session, proj.id, "A", rate=100.0, budget=20000.0)
+    pos_b = _priced_position(session, proj.id, "B", rate=50.0, budget=10000.0)
+    anna = _person(session, "Anna")
+    _membership(session, proj.id, anna.id, rate=0.0)
+    _booking_pos(session, proj.id, anna.id, date(2026, 1, 10), 5.0, "Senior", pos_a.id)
+    _booking_pos(session, proj.id, anna.id, date(2026, 1, 11), 4.0, "Junior", pos_b.id)
+    session.commit()
+
+    invoices = close_month(proj.id, 2026, 1, pos_a.id, session)
+    assert len(invoices) == 2
+    reopen_month(invoices[0].id, session)
+    remaining = session.exec(
+        __import__("sqlmodel").select(MonthlyInvoice).where(MonthlyInvoice.project_id == proj.id)
+    ).all()
+    assert remaining == []

@@ -343,7 +343,7 @@ export const projects = {
     req<Milestone>('PUT', `/projects/${projectId}/milestones/${milestoneId}/planning-lock`, { locked }),
   invoices: (id: number) => req<MonthlyInvoice[]>('GET', `/projects/${id}/invoices`),
   closeMonth: (id: number, d: { year: number; month: number; billing_position_id: number }) =>
-    req<MonthlyInvoice>('POST', `/projects/${id}/invoices/close`, d),
+    req<MonthlyInvoice[]>('POST', `/projects/${id}/invoices/close`, d),
   bookings: (id: number, filters?: { person_id?: number; year?: number; month?: number; week?: number }) => {
     const p = new URLSearchParams()
     if (filters?.person_id) p.set('person_id', String(filters.person_id))

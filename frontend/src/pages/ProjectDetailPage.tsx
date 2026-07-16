@@ -802,20 +802,28 @@ export default function ProjectDetailPage() {
           const fmtH = (n: number) => `${n.toFixed(2)} h`
           // Invoice (Ist) per closed month — what a locked month actually consumed of the
           // budget (§9.3), not its frozen plan.
-          const invoiceByMonth = new Map(invoiceList.map((i) => [`${i.year}-${i.month}`, i]))
+          // Invoiced Ist per closed month, summed over ALL invoices of that month (position
+          // mode has one invoice per line item, §21 WP6 — so aggregate, don't take one).
+          const invoiceByMonth = new Map<string, { hours: number; euros: number }>()
+          for (const i of invoiceList) {
+            const k = `${i.year}-${i.month}`
+            const e = invoiceByMonth.get(k) ?? { hours: 0, euros: 0 }
+            e.hours += i.total_hours; e.euros += i.total_amount_euros
+            invoiceByMonth.set(k, e)
+          }
           const plannedCost = (d: MilestoneDetail) => d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
           // Budget-relevant € of a month: locked → invoiced Ist, open → planned current cost.
           // Summed this is the forecast (Prognose), which never exceeds the budget.
           const monthEuros = (d: MilestoneDetail) => {
             const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
-            return d.milestone.is_locked && inv != null ? inv.total_amount_euros : plannedCost(d)
+            return d.milestone.is_locked && inv != null ? inv.euros : plannedCost(d)
           }
           // Budget-relevant hours (forecast): closed → invoiced Ist hours, open → planned.
           // Summed this reconciles with the € Prognose ÷ Satz (unlike Σ plan of all months,
           // whose closed part uses the frozen plan, not the Ist).
           const monthHours = (d: MilestoneDetail) => {
             const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
-            return d.milestone.is_locked && inv != null ? inv.total_hours : d.milestone.current_hours
+            return d.milestone.is_locked && inv != null ? inv.hours : d.milestone.current_hours
           }
           const totals = milestonesDetail.reduce(
             (acc, d: MilestoneDetail) => ({
@@ -1376,6 +1384,11 @@ export default function ProjectDetailPage() {
           const rest = project.total_budget_euros - totalInvoiced
           const lastInv = [...invoiceList].sort((a, b) => a.year !== b.year ? b.year - a.year : b.month - a.month)[0]
           const fmt = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          // Last month's amount across ALL its invoices (position mode has one per line item).
+          const lastMonthAmount = lastInv
+            ? invoiceList.filter((i) => i.year === lastInv.year && i.month === lastInv.month)
+                .reduce((s, i) => s + i.total_amount_euros, 0)
+            : 0
 
           const emailText = lastInv ? [
             `hier der Projektstatus zu Ende ${MONTH_FULL[lastInv.month - 1]} ${lastInv.year}:`,
@@ -1386,7 +1399,7 @@ export default function ProjectDetailPage() {
             `Abgerechnet   | ${fmt(totalInvoiced)}`,
             `Rest          | ${fmt(rest)}`,
             '',
-            `Der Rechnungsbetrag für ${MONTH_FULL[lastInv.month - 1]} lautet: ${fmt(lastInv.total_amount_euros)}`,
+            `Der Rechnungsbetrag für ${MONTH_FULL[lastInv.month - 1]} lautet: ${fmt(lastMonthAmount)}`,
           ].join('\n') : ''
 
           return (
@@ -1754,11 +1767,20 @@ export default function ProjectDetailPage() {
                 Keine Rechnungsposition vorhanden. Bitte zuerst eine PSP-Position unter den Projekteinstellungen anlegen.
               </p>
             )}
+            {positionMode ? (
+              <p className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded px-3 py-2">
+                Posten-Modus: Es wird je Posten eine eigene Rechnung erzeugt (Buchungen nach
+                Projektebene aufgeteilt, Satz vom Posten). Nicht zugeordnete Buchungen fallen
+                auf den unten gewählten Standard-Posten zurück.
+              </p>
+            ) : null}
             {billingPositions.length > 1 && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Rechnungsposition (PSP-Element)
-                  <span className="ml-1 font-normal text-gray-400">— welches Arbeitspaket wird abgerechnet?</span>
+                  {positionMode ? 'Standard-Posten (Fallback)' : 'Rechnungsposition (PSP-Element)'}
+                  <span className="ml-1 font-normal text-gray-400">
+                    {positionMode ? '— für Buchungen ohne Posten-Zuordnung' : '— welches Arbeitspaket wird abgerechnet?'}
+                  </span>
                 </label>
                 <select required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                   value={closeForm.billing_position_id}
@@ -1770,7 +1792,7 @@ export default function ProjectDetailPage() {
                 </select>
               </div>
             )}
-            {billingPositions.length === 1 && (
+            {billingPositions.length === 1 && !positionMode && (
               <p className="text-xs text-gray-400">
                 Rechnungsposition: <span className="text-gray-600 font-medium">{billingPositions[0].position_number} – {billingPositions[0].description}</span>
               </p>

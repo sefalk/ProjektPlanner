@@ -76,19 +76,17 @@ Invariante (Service-seitig, Posten-Modus): `Σ BillingPosition.budget_euros == P
 3. ✅ **WP3 — Verteilung je Posten** (`distribute_over_positions` in initialize/resync/preview; effektiver Satz überall inkl. Ziel-Budget/Meilenstein-Detail). Property-Tests: `Σ(Std×Satz) ≤ Posten-Budget` je Posten.
 4. ✅ **WP4 — MA→Posten-Zuweisung** (`_validate_membership_position`: Pflicht im Posten-Modus = Projekt hat bepreisten Posten) + Mitglieder-UI (Posten-Spalte, PositionSelect, Satz read-only vom Posten).
 5. ✅ **WP5 — Import Level→Posten** (`resolve_position_mappings`, `UnresolvedPositionsError`, TimeBooking-Verknüpfung; CRUD `/sage-position-mappings`) + Sage-Mapping-UI.
-6. ⬜ **WP6 — Abrechnung je Posten** (close_month/reopen/Rechnungen per Posten; Prognose/Ist).
-7. ⬜ **WP7 — Meilenstein-Aufschlüsselung nach Posten** (Gesamt-Zeile, aufklappbar MA; €/Std).
-8. ⬜ **WP8 — Modus-Umstieg & Doku** (Simple↔Posten für Bestandsprojekte; Anwenderdoku/Hilfe).
+6. ✅ **WP6 — Abrechnung je Posten** (forward-only): `close_month` erzeugt im Posten-Modus **eine Rechnung je Posten** (Buchungen nach `TimeBooking.billing_position_id` gesplittet, Satz vom Posten; nicht zugeordnete Buchungen → Standard-Posten). `reopen_month` löscht **alle** Rechnungen des Monats. Bestehende Rechnungen bleiben unangetastet (Entscheidung 2026-07-16). Frontend: Abschluss-Dialog erklärt den Split; Meilenstein-Totals aggregieren mehrere Rechnungen je Monat.
+7. ✅ **WP7 — Meilenstein-Aufschlüsselung nach Posten** (Panel „Aufwand nach Posten", aufklappbar MA; €/Std/Rest).
+8. ✅ **WP8 — Expliziter Modus-Schalter** (`Project.position_mode`, Migration `e5b9d2c73a41`). Einziger Trigger für Verteilung/Validierung/Import/Abrechnung. Aktivierung geführt via `can_enable_position_mode` (bepreister Posten, Σ==Gesamt, alle aktiven MA zugewiesen). Umstieg für Bestandsprojekte = Schalter aktivieren. _Offen: Anwenderdoku/Hilfetexte._
 
 Jeder WP schließt mit Unit-/Property-Tests ab; harte Invarianten (B1, P3, P4) dürfen nie brechen.
 
-### Modus-Trigger (Stand WP1–5, für WP8 zu vereinheitlichen)
+### Modus-Trigger (Stand WP8 — vereinheitlicht)
 
-Aktuell gibt es **zwei** Auslöser für den „Posten-Modus", bewusst getrennt:
-- **Verteilung** (`is_position_mode`): aktiv, sobald **mindestens ein MA einem Posten zugewiesen** ist. So bleibt ein Projekt im Simple-Modus, bis die Zuweisung tatsächlich erfolgt — sauberer Cutover.
-- **Validierung / Import / UI** (`priced position vorhanden`, Satz > 0): aktiv, sobald das Projekt einen **bepreisten Posten** hat.
+Einziger Auslöser für den Posten-Modus ist das explizite Flag **`Project.position_mode`** (§21 WP8). `is_position_mode(project)` liest es; Verteilung, MA-Validierung, Import-Ebenen-Mapping und Abrechnung richten sich danach. Aktivierung ist geführt (`can_enable_position_mode`): bepreister Posten vorhanden, Σ Posten-Budget == Gesamtbudget, jeder aktive MA einem Posten zugewiesen. Deaktivieren ist jederzeit möglich. Damit entfällt die frühere Migrations-Kante (nicht zugewiesene MA), da der Modus erst aktivierbar ist, wenn alle MA zugewiesen sind.
 
-**Migrations-Kante (WP8):** Hat ein Projekt bepreiste Posten, aber sind nur *manche* MA zugewiesen, erhalten nicht zugewiesene MA bei „Neu berechnen" 0 Std. (kein Bucket). Die UI markiert nicht zugewiesene MA (⚠). WP8 soll den Umstieg absichern (z. B. Verteilung erst umschalten, wenn **alle** aktiven MA zugewiesen sind, oder expliziter Modus-Schalter am Projekt).
+**Forward-only-Abrechnung (WP6):** Historisch im Simple-Modus abgeschlossene Monate behalten ihre Rechnung; deren Ist-Beträge sind nicht auf die neuen Posten aufgeteilt. Das Posten-Panel kann dadurch für Bestandsprojekte eine Posten-Überschreitung anzeigen (z. B. „Senior" über Teilbudget), obwohl das Projektbudget gesamt eingehalten ist — bewusst als ehrliches Signal, keine Rück-Migration alter Rechnungen.
 
 ## 10. Offene Punkte / Risiken
 
