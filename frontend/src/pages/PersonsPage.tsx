@@ -8,6 +8,7 @@ import Modal from '../components/Modal'
 import YearCalendar from '../components/absence/YearCalendar'
 import AbsenceQuickCreateModal from '../components/absence/AbsenceQuickCreateModal'
 import { personColor, TYPE_LABELS, TYPE_SHORT } from '../lib/absenceColors'
+import { GERMAN_STATES, regionKey, regionLabel, regionShade } from '../lib/holidayRegions'
 
 type AbsenceType = 'vacation' | 'sick' | 'training'
 const ALL_TYPES: AbsenceType[] = ['vacation', 'training', 'sick']
@@ -33,6 +34,8 @@ function PersonForm({ initial, onSave, onCancel }: {
     default_weekly_hours: initial?.default_weekly_hours ?? 40,
     work_week_pattern: initPattern as string | null,
     default_billing_rate: initial?.default_billing_rate ?? null as number | null,
+    holiday_country: initial?.holiday_country ?? null as string | null,
+    holiday_state: initial?.holiday_state ?? null as string | null,
   })
   const [patternPreset, setPatternPreset] = useState(initPreset)
 
@@ -106,6 +109,22 @@ function PersonForm({ initial, onSave, onCancel }: {
           />
         )}
       </div>
+      <div>
+        <label htmlFor="person-region" className="block text-xs font-medium text-gray-600 mb-1">
+          Feiertagsregion <span className="font-normal text-gray-400">optional — überschreibt global</span>
+        </label>
+        <select id="person-region"
+          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={form.holiday_state ?? ''}
+          onChange={(e) => {
+            const st = e.target.value || null
+            setForm({ ...form, holiday_state: st, holiday_country: st ? 'DE' : null })
+          }}
+        >
+          <option value="">– global (aus Einstellungen) –</option>
+          {GERMAN_STATES.map(([code, name]) => <option key={code} value={code}>{name} ({code})</option>)}
+        </select>
+      </div>
       <div className="flex justify-end gap-2 pt-2">
         <button type="button" onClick={onCancel}
           className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">
@@ -138,6 +157,7 @@ export default function PersonsPage() {
   const [tableCollapsed, setTableCollapsed] = useState(false)
   const [selProgram, setSelProgram] = useState<number | null>(null)
   const [selProject, setSelProject] = useState<number | null>(null)
+  const [regionFilter, setRegionFilter] = useState<string | null>(null) // null = auto (union of shown MA)
 
   const { data = [], isLoading } = useQuery({
     queryKey: ['persons-with-projects'],
@@ -195,6 +215,21 @@ export default function PersonsPage() {
       .filter((p) => isSelected(p.id))
       .map((p) => ({ ...p, absences: p.absences.filter((a) => typeFilter.has(a.absence_type)) }))
   }, [yearCal, deselected, typeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Holiday regions. Auto = union of the shown persons' regions; a manual pick overrides.
+  const globalRegion = yearCal ? regionKey(yearCal.country, yearCal.state) : 'DE-BY'
+  const regionOptions = useMemo(() => {
+    const set = new Set<string>()
+    if (yearCal) set.add(regionKey(yearCal.country, yearCal.state))
+    for (const p of yearCal?.persons ?? []) set.add(regionKey(p.holiday_country, p.holiday_state))
+    return [...set]
+  }, [yearCal])
+  const displayedRegions = useMemo(() => {
+    if (regionFilter) return new Set([regionFilter])
+    const s = new Set(calendarPersons.map((p) => regionKey(p.holiday_country, p.holiday_state)))
+    if (s.size === 0) s.add(globalRegion)
+    return s
+  }, [regionFilter, calendarPersons, globalRegion])
 
   // Project/program quick-select works off the project numbers shown in the
   // table (all-time membership) so selecting a project picks exactly the people
@@ -334,6 +369,22 @@ export default function PersonsPage() {
               </button>
             ))}
 
+            {regionOptions.length > 1 && (
+              <>
+                <div className="w-px h-4 bg-gray-200 mx-1" />
+                <select
+                  aria-label="Feiertagsregion anzeigen"
+                  className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  value={regionFilter ?? ''}
+                  onChange={(e) => setRegionFilter(e.target.value || null)}
+                  title="Welche Feiertagsregion angezeigt wird"
+                >
+                  <option value="">Feiertage: Auto</option>
+                  {regionOptions.map((r) => <option key={r} value={r}>Feiertage: {regionLabel(r)}</option>)}
+                </select>
+              </>
+            )}
+
             <div className="w-px h-4 bg-gray-200 mx-1" />
 
             <button onClick={selectAll} className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">Alle</button>
@@ -349,12 +400,18 @@ export default function PersonsPage() {
               year={calYear}
               holidays={yearCal?.holidays ?? []}
               persons={calendarPersons}
+              displayedRegions={displayedRegions}
               onRangeSelect={(personId, start, end) => setQuickCreate({ personId, start, end })}
             />
           )}
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600" aria-label="Legende">
             <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-gray-100 border border-gray-200" /> Wochenende</span>
-            <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-red-100 border border-red-200" /> Feiertag</span>
+            {[...displayedRegions].map((r) => (
+              <span key={r} className="flex items-center gap-1.5">
+                <span className={`inline-block w-4 h-4 rounded border border-gray-200 ${regionShade(r)}`} />
+                Feiertag {regionOptions.length > 1 ? regionLabel(r) : ''}
+              </span>
+            ))}
           </div>
         </section>
 

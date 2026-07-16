@@ -45,11 +45,16 @@ def resolve_holiday_region(
 ) -> tuple[str, str]:
     """Return the (country, state) whose holidays apply for ``person``.
 
-    ``person`` is accepted already so Phase 6 can add per-person overrides here
-    without changing the endpoint signatures that call this.
+    A per-person override (WP6) wins over the global setting; NULL fields on the
+    person inherit the corresponding global value independently.
     """
     country = _get(session, KEY_COUNTRY, config.default_holiday_country)
     state = _get(session, KEY_STATE, config.default_holiday_state)
+    if person is not None:
+        if person.holiday_country:
+            country = person.holiday_country
+        if person.holiday_state:
+            state = person.holiday_state
     return country, state
 
 

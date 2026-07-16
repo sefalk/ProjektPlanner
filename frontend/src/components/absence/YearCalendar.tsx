@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { YearHoliday, YearCalendarPerson } from '../../api'
 import { TYPE_SHORT, TYPE_LABELS, STATUS_LABELS, personColor } from '../../lib/absenceColors'
 import { computeAbsenceSegments } from '../../lib/absenceSegments'
+import { regionKey, regionShade } from '../../lib/holidayRegions'
 
 // ─── Layout constants ─────────────────────────────────────────────────────────
 
@@ -51,11 +52,14 @@ export default function YearCalendar({
   year,
   holidays,
   persons,
+  displayedRegions,
   onRangeSelect,
 }: {
   year: number
   holidays: YearHoliday[]
   persons: YearCalendarPerson[]
+  /** region keys (country-state) whose holidays to show; undefined = all */
+  displayedRegions?: Set<string>
   /** drag a day range → create absence (personId from the lane, null if empty area) */
   onRangeSelect?: (personId: number | null, startISO: string, endISO: string) => void
 }) {
@@ -68,8 +72,12 @@ export default function YearCalendar({
   const todayStr = isoDate(today.getFullYear(), today.getMonth(), today.getDate())
   const currentMonthIdx = year === today.getFullYear() ? today.getMonth() : null
 
-  const holidayByDate: Record<string, YearHoliday> = {}
-  holidays.forEach((h) => { holidayByDate[h.holiday_date] = h })
+  // Holidays grouped by date, filtered to the displayed regions.
+  const holidaysByDate: Record<string, YearHoliday[]> = {}
+  for (const h of holidays) {
+    if (displayedRegions && !displayedRegions.has(regionKey(h.country, h.state))) continue
+    (holidaysByDate[h.holiday_date] ??= []).push(h)
+  }
 
   const dayNumbers = Array.from({ length: DAY_COLS }, (_, i) => i + 1)
   const months = Array.from({ length: 12 }, (_, i) => i)
@@ -227,11 +235,16 @@ export default function YearCalendar({
                     )
                   }
                   const dateStr = isoDate(year, monthIdx, day)
-                  const holiday = holidayByDate[dateStr]
+                  const dayHolidays = holidaysByDate[dateStr]
                   const weekend = isWeekend(year, monthIdx, day)
                   const isToday = dateStr === todayStr
                   const wd = weekdayIndex(year, monthIdx, day)
-                  const bg = holiday ? 'bg-red-100' : weekend ? 'bg-gray-100' : 'bg-white'
+                  const bg = dayHolidays
+                    ? regionShade(regionKey(dayHolidays[0].country, dayHolidays[0].state))
+                    : weekend ? 'bg-gray-100' : 'bg-white'
+                  const title = dayHolidays
+                    ? dayHolidays.map((h) => `${h.name} (${h.state})`).join(', ') + ` · ${WEEKDAY_SHORT[wd]} ${day}.${monthIdx + 1}.`
+                    : `${WEEKDAY_SHORT[wd]} ${day}.${monthIdx + 1}.`
                   return (
                     <div
                       key={day}
@@ -239,11 +252,7 @@ export default function YearCalendar({
                         isToday ? 'ring-1 ring-inset ring-blue-400' : ''
                       }`}
                       style={{ width: CELL_W }}
-                      title={
-                        holiday
-                          ? `${holiday.name} · ${WEEKDAY_SHORT[wd]} ${day}.${monthIdx + 1}.`
-                          : `${WEEKDAY_SHORT[wd]} ${day}.${monthIdx + 1}.`
-                      }
+                      title={title}
                     />
                   )
                 })}

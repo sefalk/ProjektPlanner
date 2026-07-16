@@ -75,6 +75,9 @@ export interface Person {
   default_weekly_hours: number;
   work_week_pattern: string | null;
   default_billing_rate: number | null;
+  // Per-person holiday region override (null = inherit global setting).
+  holiday_country?: string | null;
+  holiday_state?: string | null;
 }
 
 export interface PersonWithProjects extends Person {
@@ -514,6 +517,8 @@ export interface YearCalendarPerson {
   id: number;
   name: string;
   default_weekly_hours: number;
+  holiday_country: string;
+  holiday_state: string;
   absences: CalendarAbsence[];
   memberships: CalendarMembership[];
 }

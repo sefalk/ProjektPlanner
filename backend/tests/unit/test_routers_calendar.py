@@ -172,3 +172,31 @@ def test_calendar_year_ignores_unknown_extra_key(client, session):
     session.commit()
     r = client.get("/calendar/year?year=2026")
     assert r.status_code == 200
+
+
+def test_calendar_year_person_region_override(client):
+    """A per-person region override wins; others inherit the global default."""
+    p_over = client.post("/persons", json={
+        "name": "Nearshore MA", "sage_employee_name": "Nearshore MA",
+        "default_weekly_hours": 40.0, "holiday_state": "BW",
+    }).json()
+    p_inherit = client.post("/persons", json={
+        "name": "Local MA", "sage_employee_name": "Local MA",
+        "default_weekly_hours": 40.0,
+    }).json()
+    r = client.get("/calendar/year?year=2026")
+    assert r.status_code == 200
+    by_id = {p["id"]: p for p in r.json()["persons"]}
+    assert by_id[p_over["id"]]["holiday_state"] == "BW"
+    assert by_id[p_inherit["id"]]["holiday_state"] == "BY"  # inherited global default
+
+
+def test_calendar_year_person_override_persists(client):
+    """holiday_state set on create round-trips through the person endpoint."""
+    p = client.post("/persons", json={
+        "name": "Region MA", "sage_employee_name": "Region MA",
+        "default_weekly_hours": 40.0, "holiday_country": "DE", "holiday_state": "NW",
+    }).json()
+    got = client.get(f"/persons/{p['id']}").json()
+    assert got["holiday_country"] == "DE"
+    assert got["holiday_state"] == "NW"

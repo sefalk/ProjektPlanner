@@ -3,7 +3,7 @@ import { computeAbsenceSegments } from '../absenceSegments'
 import type { YearCalendarPerson } from '../../api'
 
 function person(absences: YearCalendarPerson['absences']): YearCalendarPerson {
-  return { id: 1, name: 'P', default_weekly_hours: 40, absences, memberships: [] }
+  return { id: 1, name: 'P', default_weekly_hours: 40, holiday_country: 'DE', holiday_state: 'BY', absences, memberships: [] }
 }
 
 function abs(start: string, end: string | null, type: 'vacation' | 'sick' | 'training' = 'vacation') {

@@ -3,21 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Database, AlertTriangle, CheckCircle, RefreshCw, FolderOpen, CalendarDays } from 'lucide-react'
 import { settings, type DbPathInfo } from '../api'
 import PageHeader from '../components/PageHeader'
-
-// German states (feiertage-api subdivision codes)
-const GERMAN_STATES: [string, string][] = [
-  ['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'],
-  ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'],
-  ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'],
-  ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen'],
-]
-
-// Optional local holidays — keys must match EXTRA_HOLIDAY_CATALOG in the backend.
-const EXTRA_HOLIDAYS: [string, string][] = [
-  ['mariae_himmelfahrt', 'Mariä Himmelfahrt (15.8.)'],
-  ['augsburger_friedensfest', 'Augsburger Friedensfest (8.8.)'],
-  ['reformationstag', 'Reformationstag (31.10.)'],
-]
+import { GERMAN_STATES, EXTRA_HOLIDAYS } from '../lib/holidayRegions'
 
 const HOLIDAY_KEYS = ['holiday_country', 'holiday_state', 'holiday_extra']
 
