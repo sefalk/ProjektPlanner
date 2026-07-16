@@ -163,6 +163,7 @@ export interface MilestonePersonDetail {
   training_estimate_days: number;
   holiday_days: number;
   billing_rate_per_hour: number;
+  billing_position_id: number | null;
   booked_hours: number;
   is_manual_override: boolean;
   estimated_absence_days_override: number | null;

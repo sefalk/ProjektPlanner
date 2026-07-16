@@ -68,6 +68,7 @@ class MilestonePersonDetailOut(SQLModel):
     training_estimate_days: float = 0.0
     holiday_days: int
     billing_rate_per_hour: float
+    billing_position_id: int | None = None
     booked_hours: float = 0.0
     is_manual_override: bool = False
     estimated_absence_days_override: float | None = None
@@ -311,6 +312,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 training_estimate_days=stats.training_estimate_days,
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=effective_rate(membership, positions_by_id),
+                billing_position_id=membership.billing_position_id,
                 booked_hours=booked_map.get(person.id, 0.0),
                 is_manual_override=budget.is_manual_override,
                 estimated_absence_days_override=budget.estimated_absence_days_override,

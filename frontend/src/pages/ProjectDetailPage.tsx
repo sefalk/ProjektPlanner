@@ -804,6 +804,23 @@ export default function ProjectDetailPage() {
           }
           const memberBreakdown = [...perMember.values()].filter((e) => e.fc > 0 || e.ist > 0)
           const daysBreakdown = [...perMember.values()].filter((e) => e.at || e.ft || e.abwG || e.abwE)
+          // Per-position forecast breakdown (§21 WP7): group members by their line item;
+          // forecast € uses the effective (position) rate already carried per person.
+          type PosAgg = { hours: number; euros: number; members: Map<number, { name: string; hours: number; euros: number }> }
+          const perPosition = new Map<number | null, PosAgg>()
+          for (const d of milestonesDetail) {
+            for (const p of d.persons) {
+              const key = p.billing_position_id ?? null
+              const fcH = d.milestone.is_locked ? (p.booked_hours ?? 0) : p.current_hours
+              const fcE = fcH * p.billing_rate_per_hour
+              const agg = perPosition.get(key) ?? { hours: 0, euros: 0, members: new Map() }
+              agg.hours += fcH; agg.euros += fcE
+              const mem = agg.members.get(p.person_id) ?? { name: p.person_name, hours: 0, euros: 0 }
+              mem.hours += fcH; mem.euros += fcE
+              agg.members.set(p.person_id, mem)
+              perPosition.set(key, agg)
+            }
+          }
           const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
           const rateByPid = new Map(memberships.map((m) => [m.person_id, m.billing_rate_per_hour]))
           const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
@@ -1251,6 +1268,57 @@ export default function ProjectDetailPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Aufschlüsselung nach Posten (§21 WP7) — only in position mode */}
+              {positionMode && perPosition.size > 0 && (
+                <div className="mt-4 bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 text-sm font-medium text-gray-700">
+                    Aufwand nach Posten <span className="font-normal text-gray-400">(Prognose · aufklappen für Mitarbeiter)</span>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {[...perPosition.entries()]
+                      .sort((a, b) => (a[0] ?? Infinity) - (b[0] ?? Infinity))
+                      .map(([posId, agg]) => {
+                        const pos = posId != null ? posById.get(posId) : undefined
+                        const label = pos ? `${pos.position_number}${pos.description ? ` – ${pos.description}` : ''}` : '⚠ ohne Posten'
+                        const posBudget = pos?.budget_euros ?? 0
+                        const rest = posBudget - agg.euros
+                        return (
+                          <details key={posId ?? 'none'} className="group">
+                            <summary className="flex items-center justify-between px-4 py-2.5 text-sm cursor-pointer hover:bg-gray-50 list-none">
+                              <span className="flex items-center gap-1.5">
+                                <ChevronRight size={13} className="text-gray-400 group-open:rotate-90 transition-transform" />
+                                <span className={pos ? 'font-medium text-gray-700' : 'font-medium text-red-500'}>{label}</span>
+                              </span>
+                              <span className="flex items-center gap-4 text-xs">
+                                <span className="text-gray-500">{fmtH(agg.hours)}</span>
+                                <span className="text-gray-700 font-medium w-28 text-right">{fmtEur(agg.euros)}</span>
+                                {pos && (
+                                  <span className={`w-32 text-right ${rest < -0.01 ? 'text-red-600' : 'text-gray-400'}`}
+                                    title="Posten-Budget − Prognose">
+                                    Rest {fmtEur(rest)}
+                                  </span>
+                                )}
+                              </span>
+                            </summary>
+                            <div className="px-4 pb-2.5 pl-9 space-y-0.5">
+                              {[...agg.members.values()].filter((m) => m.hours > 0.001).map((m) => (
+                                <div key={m.name} className="flex items-center justify-between text-[11px] text-gray-500">
+                                  <span>{m.name}</span>
+                                  <span className="flex items-center gap-4">
+                                    <span>{fmtH(m.hours)}</span>
+                                    <span className="w-28 text-right">{fmtEur(m.euros)}</span>
+                                    {pos && <span className="w-32" />}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )
+                      })}
+                  </div>
+                </div>
+              )}
             </div>
           )
         })()}
