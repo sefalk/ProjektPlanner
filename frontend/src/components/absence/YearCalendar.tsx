@@ -40,18 +40,29 @@ function fmtDe(iso: string | null): string {
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
+interface DragState {
+  monthIdx: number
+  anchorDay: number
+  currentDay: number
+  personId: number | null
+}
+
 export default function YearCalendar({
   year,
   holidays,
   persons,
+  onRangeSelect,
 }: {
   year: number
   holidays: YearHoliday[]
   persons: YearCalendarPerson[]
+  /** drag a day range → create absence (personId from the lane, null if empty area) */
+  onRangeSelect?: (personId: number | null, startISO: string, endISO: string) => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentRowRef = useRef<HTMLDivElement>(null)
   const [hoveredPersonId, setHoveredPersonId] = useState<number | null>(null)
+  const [drag, setDrag] = useState<DragState | null>(null)
 
   const today = new Date()
   const todayStr = isoDate(today.getFullYear(), today.getMonth(), today.getDate())
@@ -65,7 +76,7 @@ export default function YearCalendar({
 
   // Absence segments → lanes. Each person with ≥1 absence gets a fixed lane
   // (stable across months so month-spanning bars line up vertically).
-  const { segmentsByMonth, laneOf, laneCount } = useMemo(() => {
+  const { segmentsByMonth, laneOf, laneOrder, laneCount } = useMemo(() => {
     const segs = computeAbsenceSegments(persons, year)
     const order: number[] = []
     for (const p of persons) {
@@ -78,7 +89,7 @@ export default function YearCalendar({
     for (const s of segs) {
       (byMonth[s.monthIdx] ??= []).push(s)
     }
-    return { segmentsByMonth: byMonth, laneOf: lane, laneCount: order.length }
+    return { segmentsByMonth: byMonth, laneOf: lane, laneOrder: order, laneCount: order.length }
   }, [persons, year])
 
   const laneHpct = laneCount > 0 ? 100 / laneCount : 100
@@ -92,6 +103,59 @@ export default function YearCalendar({
     if (!container || !row) return
     container.scrollTop = Math.max(0, row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2)
   }, [year])
+
+  // ── Drag-to-create ──────────────────────────────────────────────────────
+  function dayFromX(e: React.MouseEvent, numDays: number): number {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const idx = Math.floor((e.clientX - rect.left) / (rect.width / DAY_COLS))
+    return Math.min(numDays, Math.max(1, idx + 1))
+  }
+  function personFromY(e: React.MouseEvent): number | null {
+    if (laneCount === 0) return null
+    const rect = e.currentTarget.getBoundingClientRect()
+    let lane = Math.floor((e.clientY - rect.top) / (rect.height / laneCount))
+    lane = Math.max(0, Math.min(laneCount - 1, lane))
+    return laneOrder[lane] ?? null
+  }
+  // Refs let a single always-registered mouseup listener read the latest drag,
+  // callback and year without re-subscribing (and without timing races).
+  const dragRef = useRef<DragState | null>(null)
+  const rangeCbRef = useRef(onRangeSelect)
+  rangeCbRef.current = onRangeSelect
+  const yearRef = useRef(year)
+  yearRef.current = year
+
+  function updateDrag(d: DragState | null) {
+    dragRef.current = d
+    setDrag(d)
+  }
+  function onAreaMouseDown(e: React.MouseEvent, monthIdx: number, numDays: number) {
+    if (!onRangeSelect) return
+    const day = dayFromX(e, numDays)
+    updateDrag({ monthIdx, anchorDay: day, currentDay: day, personId: personFromY(e) })
+    e.preventDefault()
+  }
+  function onAreaMouseMove(e: React.MouseEvent, monthIdx: number, numDays: number) {
+    const d = dragRef.current
+    if (!d || d.monthIdx !== monthIdx) return
+    const day = dayFromX(e, numDays)
+    if (day !== d.currentDay) updateDrag({ ...d, currentDay: day })
+  }
+
+  useEffect(() => {
+    function finish() {
+      const d = dragRef.current
+      if (!d) return
+      const cb = rangeCbRef.current
+      updateDrag(null)
+      if (!cb) return
+      const lo = Math.min(d.anchorDay, d.currentDay)
+      const hi = Math.max(d.anchorDay, d.currentDay)
+      cb(d.personId, isoDate(yearRef.current, d.monthIdx, lo), isoDate(yearRef.current, d.monthIdx, hi))
+    }
+    window.addEventListener('mouseup', finish)
+    return () => window.removeEventListener('mouseup', finish)
+  }, [])
 
   return (
     <div
@@ -141,7 +205,12 @@ export default function YearCalendar({
               </div>
 
               {/* Day cells + absence bars */}
-              <div className="relative flex" style={{ height: ROW_H }}>
+              <div
+                className={`relative flex ${onRangeSelect ? 'cursor-crosshair select-none' : ''}`}
+                style={{ height: ROW_H }}
+                onMouseDown={(e) => onAreaMouseDown(e, monthIdx, numDays)}
+                onMouseMove={(e) => onAreaMouseMove(e, monthIdx, numDays)}
+              >
                 {dayNumbers.map((day) => {
                   const valid = day <= numDays
                   if (!valid) {
@@ -209,6 +278,18 @@ export default function YearCalendar({
                     </div>
                   )
                 })}
+
+                {/* Drag selection overlay */}
+                {drag && drag.monthIdx === monthIdx && (() => {
+                  const lo = Math.min(drag.anchorDay, drag.currentDay)
+                  const hi = Math.max(drag.anchorDay, drag.currentDay)
+                  return (
+                    <div
+                      className="absolute top-0 bottom-0 z-30 bg-blue-400/20 border border-blue-500 pointer-events-none"
+                      style={{ left: `calc(${lo - 1} * ${CELL_W})`, width: `calc(${hi - lo + 1} * ${CELL_W})` }}
+                    />
+                  )
+                })()}
               </div>
             </div>
           )

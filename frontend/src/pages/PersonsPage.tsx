@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader'
 import Table from '../components/Table'
 import Modal from '../components/Modal'
 import YearCalendar from '../components/absence/YearCalendar'
+import AbsenceQuickCreateModal from '../components/absence/AbsenceQuickCreateModal'
 
 const WORK_WEEK_PRESETS = [
   { label: '40 h (5×8)', value: '8,8,8,8,8' },
@@ -125,6 +126,7 @@ export default function PersonsPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [calYear, setCalYear] = useState(new Date().getFullYear())
+  const [quickCreate, setQuickCreate] = useState<{ personId: number | null; start: string; end: string } | null>(null)
 
   const { data = [], isLoading } = useQuery({
     queryKey: ['persons-with-projects'],
@@ -236,7 +238,10 @@ export default function PersonsPage() {
         {/* Year calendar for absences */}
         <section>
           <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-semibold text-gray-700">Jahreskalender – Abwesenheiten</h2>
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-sm font-semibold text-gray-700">Jahreskalender – Abwesenheiten</h2>
+              <span className="text-xs text-gray-400">Zeitraum ziehen für neue Abwesenheit</span>
+            </div>
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setCalYear((y) => y - 1)}
@@ -258,7 +263,12 @@ export default function PersonsPage() {
           {calLoading ? (
             <p className="text-sm text-gray-400">Lade Kalender…</p>
           ) : (
-            <YearCalendar year={calYear} holidays={yearCal?.holidays ?? []} persons={yearCal?.persons ?? []} />
+            <YearCalendar
+              year={calYear}
+              holidays={yearCal?.holidays ?? []}
+              persons={yearCal?.persons ?? []}
+              onRangeSelect={(personId, start, end) => setQuickCreate({ personId, start, end })}
+            />
           )}
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600" aria-label="Legende">
             <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-gray-100 border border-gray-200" /> Wochenende</span>
@@ -290,6 +300,17 @@ export default function PersonsPage() {
             onCancel={() => { setEditPerson(null); setError(null) }}
           />
         </Modal>
+      )}
+
+      {quickCreate && (
+        <AbsenceQuickCreateModal
+          persons={(yearCal?.persons ?? data).map((p) => ({ id: p.id, name: p.name }))}
+          initialPersonId={quickCreate.personId}
+          startDate={quickCreate.start}
+          endDate={quickCreate.end}
+          onClose={() => setQuickCreate(null)}
+          onCreated={() => setQuickCreate(null)}
+        />
       )}
 
       {confirmDelete && (
