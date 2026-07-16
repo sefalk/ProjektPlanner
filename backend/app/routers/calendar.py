@@ -18,7 +18,11 @@ from app.models.person import Person, PersonAbsence
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
 from app.services.holiday import HolidayFetchError, get_holidays_in_range
-from app.services.holiday_region import resolve_holiday_region
+from app.services.holiday_region import (
+    extra_holiday_dates,
+    get_active_extra_keys,
+    resolve_holiday_region,
+)
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -312,6 +316,23 @@ def get_calendar_year(
         )
         for h in sorted(raw_holidays, key=lambda h: h.holiday_date)
     ]
+
+    # Inject activated optional local holidays (WP5), skipping dates the API
+    # already returned for this region.
+    existing_dates = {h.holiday_date for h in holidays}
+    for name, hdate in extra_holiday_dates(year, get_active_extra_keys(session)):
+        if hdate in existing_dates:
+            continue
+        holidays.append(
+            YearHolidayOut(
+                holiday_date=hdate,
+                name=name,
+                is_workday=hdate.weekday() < 5,
+                country=country,
+                state=state,
+            )
+        )
+    holidays.sort(key=lambda h: h.holiday_date)
 
     persons_raw = list(session.exec(select(Person).order_by(Person.name)).all())
     person_ids = [p.id for p in persons_raw if p.id is not None]

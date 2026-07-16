@@ -139,3 +139,36 @@ def test_calendar_year_region_override_via_query(client):
     data = r.json()
     assert data["country"] == "DE"
     assert data["state"] == "BW"
+
+
+def test_calendar_year_region_reads_settings(client, session):
+    """Without query params, the region comes from the Setting store."""
+    from app.models.setting import Setting
+
+    session.add(Setting(key="holiday_state", value="BW"))
+    session.commit()
+    r = client.get("/calendar/year?year=2026")
+    assert r.status_code == 200
+    assert r.json()["state"] == "BW"
+
+
+def test_calendar_year_injects_active_extra_holiday(client, session):
+    """An activated optional local holiday appears in the holiday list."""
+    from app.models.setting import Setting
+
+    session.add(Setting(key="holiday_extra", value="mariae_himmelfahrt"))
+    session.commit()
+    r = client.get("/calendar/year?year=2026")
+    assert r.status_code == 200
+    dates = {h["holiday_date"] for h in r.json()["holidays"]}
+    assert "2026-08-15" in dates
+
+
+def test_calendar_year_ignores_unknown_extra_key(client, session):
+    """Unknown extra keys are ignored (no crash, no bogus holiday)."""
+    from app.models.setting import Setting
+
+    session.add(Setting(key="holiday_extra", value="not_a_real_holiday"))
+    session.commit()
+    r = client.get("/calendar/year?year=2026")
+    assert r.status_code == 200

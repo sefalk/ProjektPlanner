@@ -1,8 +1,25 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Database, AlertTriangle, CheckCircle, RefreshCw, FolderOpen } from 'lucide-react'
+import { Database, AlertTriangle, CheckCircle, RefreshCw, FolderOpen, CalendarDays } from 'lucide-react'
 import { settings, type DbPathInfo } from '../api'
 import PageHeader from '../components/PageHeader'
+
+// German states (feiertage-api subdivision codes)
+const GERMAN_STATES: [string, string][] = [
+  ['BW', 'Baden-Württemberg'], ['BY', 'Bayern'], ['BE', 'Berlin'], ['BB', 'Brandenburg'],
+  ['HB', 'Bremen'], ['HH', 'Hamburg'], ['HE', 'Hessen'], ['MV', 'Mecklenburg-Vorpommern'],
+  ['NI', 'Niedersachsen'], ['NW', 'Nordrhein-Westfalen'], ['RP', 'Rheinland-Pfalz'], ['SL', 'Saarland'],
+  ['SN', 'Sachsen'], ['ST', 'Sachsen-Anhalt'], ['SH', 'Schleswig-Holstein'], ['TH', 'Thüringen'],
+]
+
+// Optional local holidays — keys must match EXTRA_HOLIDAY_CATALOG in the backend.
+const EXTRA_HOLIDAYS: [string, string][] = [
+  ['mariae_himmelfahrt', 'Mariä Himmelfahrt (15.8.)'],
+  ['augsburger_friedensfest', 'Augsburger Friedensfest (8.8.)'],
+  ['reformationstag', 'Reformationstag (31.10.)'],
+]
+
+const HOLIDAY_KEYS = ['holiday_country', 'holiday_state', 'holiday_extra']
 
 // ─── Generic key/value setting row ───────────────────────────────────────────
 
@@ -58,6 +75,86 @@ function SettingRow({ label, description, settingKey, value, onSave }: {
         )}
       </div>
     </div>
+  )
+}
+
+// ─── Holiday region section ───────────────────────────────────────────────────
+
+function RegionSection({ country, state, extra, onSave }: {
+  country: string
+  state: string
+  extra: string
+  onSave: (key: string, value: string) => void
+}) {
+  const [draftState, setDraftState] = useState(state)
+  const [draftExtra, setDraftExtra] = useState<Set<string>>(
+    new Set(extra.split(',').map((s) => s.trim()).filter(Boolean)),
+  )
+  const dirty = draftState !== state ||
+    [...draftExtra].sort().join(',') !== extra.split(',').map((s) => s.trim()).filter(Boolean).sort().join(',')
+
+  const toggleExtra = (key: string) =>
+    setDraftExtra((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+
+  const save = () => {
+    if (draftState !== state) onSave('holiday_state', draftState)
+    onSave('holiday_extra', [...draftExtra].join(','))
+    if (!country) onSave('holiday_country', 'DE')
+  }
+
+  return (
+    <section>
+      <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <CalendarDays size={15} className="text-gray-400" />
+        Feiertage / Region
+      </h2>
+      <div className="bg-white rounded-lg border border-gray-200 px-6 py-4 space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="hr-country" className="block text-xs font-medium text-gray-600 mb-1">Land</label>
+            <select id="hr-country" disabled value={country || 'DE'}
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-gray-50 text-gray-500">
+              <option value="DE">Deutschland (DE)</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="hr-state" className="block text-xs font-medium text-gray-600 mb-1">Bundesland</label>
+            <select id="hr-state" value={draftState}
+              onChange={(e) => setDraftState(e.target.value)}
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              {GERMAN_STATES.map(([code, name]) => <option key={code} value={code}>{name} ({code})</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs font-medium text-gray-600 mb-1.5">Optionale lokale Feiertage</p>
+          <div className="space-y-1.5">
+            {EXTRA_HOLIDAYS.map(([key, label]) => (
+              <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" checked={draftExtra.has(key)} onChange={() => toggleExtra(key)} className="accent-blue-600" />
+                {label}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5">
+            Zusätzliche regionale Feiertage, die die Feiertags-API nicht flächendeckend liefert. Werden im Jahreskalender angezeigt.
+          </p>
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={save} disabled={!dirty}
+            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+            Speichern
+          </button>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -216,7 +313,7 @@ export default function SettingsPage() {
             <p className="text-sm text-gray-400">Lade…</p>
           ) : (
             <div className="bg-white rounded-lg border border-gray-200 px-6">
-              {data && Object.entries(data).map(([key, value]) => {
+              {data && Object.entries(data).filter(([key]) => !HOLIDAY_KEYS.includes(key)).map(([key, value]) => {
                 const meta = SETTING_META[key]
                 return (
                   <SettingRow
@@ -232,6 +329,16 @@ export default function SettingsPage() {
             </div>
           )}
         </section>
+
+        {/* Holiday region */}
+        {!isLoading && data && (
+          <RegionSection
+            country={data.holiday_country ?? 'DE'}
+            state={data.holiday_state ?? 'BY'}
+            extra={data.holiday_extra ?? ''}
+            onSave={(k, v) => update.mutate({ key: k, value: v })}
+          />
+        )}
 
         {/* Database path */}
         <DbPathSection />
