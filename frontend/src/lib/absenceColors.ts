@@ -61,8 +61,10 @@ export interface PersonColor {
   bar: string
   /** solid bar (e.g. hover-emphasized) */
   barSolid: string
-  /** border color — hover highlight */
+  /** border color — bar outline */
   border: string
+  /** ring color — hover highlight */
+  ring: string
   /** light row tint — table row background when selected */
   rowBg: string
   /** readable text color on light backgrounds */
@@ -70,18 +72,18 @@ export interface PersonColor {
 }
 
 export const PERSON_PALETTE: PersonColor[] = [
-  { dot: 'bg-sky-500', bar: 'bg-sky-400/30', barSolid: 'bg-sky-400', border: 'border-sky-500', rowBg: 'bg-sky-50', text: 'text-sky-700' },
-  { dot: 'bg-violet-500', bar: 'bg-violet-400/30', barSolid: 'bg-violet-400', border: 'border-violet-500', rowBg: 'bg-violet-50', text: 'text-violet-700' },
-  { dot: 'bg-amber-500', bar: 'bg-amber-400/30', barSolid: 'bg-amber-400', border: 'border-amber-500', rowBg: 'bg-amber-50', text: 'text-amber-700' },
-  { dot: 'bg-teal-500', bar: 'bg-teal-400/30', barSolid: 'bg-teal-400', border: 'border-teal-500', rowBg: 'bg-teal-50', text: 'text-teal-700' },
-  { dot: 'bg-pink-500', bar: 'bg-pink-400/30', barSolid: 'bg-pink-400', border: 'border-pink-500', rowBg: 'bg-pink-50', text: 'text-pink-700' },
-  { dot: 'bg-lime-500', bar: 'bg-lime-400/30', barSolid: 'bg-lime-400', border: 'border-lime-500', rowBg: 'bg-lime-50', text: 'text-lime-700' },
-  { dot: 'bg-indigo-500', bar: 'bg-indigo-400/30', barSolid: 'bg-indigo-400', border: 'border-indigo-500', rowBg: 'bg-indigo-50', text: 'text-indigo-700' },
-  { dot: 'bg-orange-500', bar: 'bg-orange-400/30', barSolid: 'bg-orange-400', border: 'border-orange-500', rowBg: 'bg-orange-50', text: 'text-orange-700' },
-  { dot: 'bg-cyan-500', bar: 'bg-cyan-400/30', barSolid: 'bg-cyan-400', border: 'border-cyan-500', rowBg: 'bg-cyan-50', text: 'text-cyan-700' },
-  { dot: 'bg-fuchsia-500', bar: 'bg-fuchsia-400/30', barSolid: 'bg-fuchsia-400', border: 'border-fuchsia-500', rowBg: 'bg-fuchsia-50', text: 'text-fuchsia-700' },
-  { dot: 'bg-emerald-500', bar: 'bg-emerald-400/30', barSolid: 'bg-emerald-400', border: 'border-emerald-500', rowBg: 'bg-emerald-50', text: 'text-emerald-700' },
-  { dot: 'bg-rose-500', bar: 'bg-rose-400/30', barSolid: 'bg-rose-400', border: 'border-rose-500', rowBg: 'bg-rose-50', text: 'text-rose-700' },
+  { dot: 'bg-sky-500', bar: 'bg-sky-400/30', barSolid: 'bg-sky-400', border: 'border-sky-500', ring: 'ring-sky-500', rowBg: 'bg-sky-50', text: 'text-sky-700' },
+  { dot: 'bg-violet-500', bar: 'bg-violet-400/30', barSolid: 'bg-violet-400', border: 'border-violet-500', ring: 'ring-violet-500', rowBg: 'bg-violet-50', text: 'text-violet-700' },
+  { dot: 'bg-amber-500', bar: 'bg-amber-400/30', barSolid: 'bg-amber-400', border: 'border-amber-500', ring: 'ring-amber-500', rowBg: 'bg-amber-50', text: 'text-amber-700' },
+  { dot: 'bg-teal-500', bar: 'bg-teal-400/30', barSolid: 'bg-teal-400', border: 'border-teal-500', ring: 'ring-teal-500', rowBg: 'bg-teal-50', text: 'text-teal-700' },
+  { dot: 'bg-pink-500', bar: 'bg-pink-400/30', barSolid: 'bg-pink-400', border: 'border-pink-500', ring: 'ring-pink-500', rowBg: 'bg-pink-50', text: 'text-pink-700' },
+  { dot: 'bg-lime-500', bar: 'bg-lime-400/30', barSolid: 'bg-lime-400', border: 'border-lime-500', ring: 'ring-lime-500', rowBg: 'bg-lime-50', text: 'text-lime-700' },
+  { dot: 'bg-indigo-500', bar: 'bg-indigo-400/30', barSolid: 'bg-indigo-400', border: 'border-indigo-500', ring: 'ring-indigo-500', rowBg: 'bg-indigo-50', text: 'text-indigo-700' },
+  { dot: 'bg-orange-500', bar: 'bg-orange-400/30', barSolid: 'bg-orange-400', border: 'border-orange-500', ring: 'ring-orange-500', rowBg: 'bg-orange-50', text: 'text-orange-700' },
+  { dot: 'bg-cyan-500', bar: 'bg-cyan-400/30', barSolid: 'bg-cyan-400', border: 'border-cyan-500', ring: 'ring-cyan-500', rowBg: 'bg-cyan-50', text: 'text-cyan-700' },
+  { dot: 'bg-fuchsia-500', bar: 'bg-fuchsia-400/30', barSolid: 'bg-fuchsia-400', border: 'border-fuchsia-500', ring: 'ring-fuchsia-500', rowBg: 'bg-fuchsia-50', text: 'text-fuchsia-700' },
+  { dot: 'bg-emerald-500', bar: 'bg-emerald-400/30', barSolid: 'bg-emerald-400', border: 'border-emerald-500', ring: 'ring-emerald-500', rowBg: 'bg-emerald-50', text: 'text-emerald-700' },
+  { dot: 'bg-rose-500', bar: 'bg-rose-400/30', barSolid: 'bg-rose-400', border: 'border-rose-500', ring: 'ring-rose-500', rowBg: 'bg-rose-50', text: 'text-rose-700' },
 ]
 
 /** Deterministic per-person color (stable across views). */

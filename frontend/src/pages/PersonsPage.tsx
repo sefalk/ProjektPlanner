@@ -258,7 +258,7 @@ export default function PersonsPage() {
           {calLoading ? (
             <p className="text-sm text-gray-400">Lade Kalender…</p>
           ) : (
-            <YearCalendar year={calYear} holidays={yearCal?.holidays ?? []} />
+            <YearCalendar year={calYear} holidays={yearCal?.holidays ?? []} persons={yearCal?.persons ?? []} />
           )}
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600" aria-label="Legende">
             <span className="flex items-center gap-1.5"><span className="inline-block w-4 h-4 rounded bg-gray-100 border border-gray-200" /> Wochenende</span>
