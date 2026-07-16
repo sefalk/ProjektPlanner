@@ -38,6 +38,9 @@ data/
 # Review / planning documents with real data — keep local only
 /*.txt
 
+# Claude Code project instructions — contains internal infra (ADO host, project codes); local only
+CLAUDE.md
+
 # Frontend
 node_modules/
 frontend/dist/
