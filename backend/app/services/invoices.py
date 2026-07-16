@@ -71,14 +71,20 @@ def close_month(
     month: int,
     billing_position_id: int,
     session: Session,
-) -> MonthlyInvoice:
+) -> list[MonthlyInvoice]:
     """Lock the milestone and create invoice records for a project month.
+
+    Simple mode: one MonthlyInvoice under the chosen billing_position_id (per-member rate).
+    Position mode (§21 WP6): one MonthlyInvoice per line item, splitting the month's bookings
+    by TimeBooking.billing_position_id at the position's rate; bookings with no position fall
+    back to billing_position_id (chosen default). Returns the created invoice(s).
 
     Raises:
         InvoiceNotFoundError: project or billing_position not found
         AlreadyClosedError: an invoice already exists for this project/year/month
     """
-    if not session.get(Project, project_id):
+    project = session.get(Project, project_id)
+    if not project:
         raise InvoiceNotFoundError(f"Project {project_id} not found.")
 
     bp = session.get(BillingPosition, billing_position_id)
@@ -101,7 +107,6 @@ def close_month(
 
     month_start, month_end = _month_bounds(year, month)
 
-    # Aggregate actual hours per person from TimeBookings (excluded bookings are ignored)
     bookings = session.exec(
         select(TimeBooking).where(
             TimeBooking.project_id == project_id,
@@ -110,11 +115,7 @@ def close_month(
             TimeBooking.is_excluded == False,  # noqa: E712
         )
     ).all()
-    hours_by_person: dict[int, float] = {}
-    for b in bookings:
-        hours_by_person[b.person_id] = hours_by_person.get(b.person_id, 0.0) + b.net_hours
 
-    # Resolve billing rates from memberships active in this month
     memberships = session.exec(
         select(ProjectMembership).where(
             ProjectMembership.project_id == project_id,
@@ -122,36 +123,49 @@ def close_month(
             ProjectMembership.to_date >= month_start,
         )
     ).all()
-    rate_by_person: dict[int, float] = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    member_rate: dict[int, float] = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    positions = session.exec(
+        select(BillingPosition).where(BillingPosition.project_id == project_id)
+    ).all()
+    pos_rate: dict[int, float] = {p.id: p.billing_rate_per_hour for p in positions}
 
-    total_hours = sum(hours_by_person.values())
-    total_amount = sum(
-        hours * rate_by_person.get(pid, 0.0)
-        for pid, hours in hours_by_person.items()
-    )
+    invoices: list[MonthlyInvoice] = []
 
-    invoice = MonthlyInvoice(
-        project_id=project_id,
-        billing_position_id=billing_position_id,
-        year=year,
-        month=month,
-        total_hours=total_hours,
-        total_amount_euros=total_amount,
-    )
-    session.add(invoice)
-    session.flush()
+    def _create_invoice(pos_id: int, hours_by_person: dict[int, float], rate_by_person: dict[int, float]) -> None:
+        total_hours = sum(hours_by_person.values())
+        total_amount = sum(h * rate_by_person.get(pid, 0.0) for pid, h in hours_by_person.items())
+        invoice = MonthlyInvoice(
+            project_id=project_id, billing_position_id=pos_id, year=year, month=month,
+            total_hours=total_hours, total_amount_euros=total_amount,
+        )
+        session.add(invoice)
+        session.flush()
+        for pid, hours in hours_by_person.items():
+            rate = rate_by_person.get(pid, 0.0)
+            session.add(InvoicePersonEntry(
+                invoice_id=invoice.id, person_id=pid, hours=hours,
+                billing_rate_per_hour=rate, amount_euros=hours * rate,
+            ))
+        invoices.append(invoice)
 
-    for person_id, hours in hours_by_person.items():
-        rate = rate_by_person.get(person_id, 0.0)
-        session.add(InvoicePersonEntry(
-            invoice_id=invoice.id,
-            person_id=person_id,
-            hours=hours,
-            billing_rate_per_hour=rate,
-            amount_euros=hours * rate,
-        ))
+    if project.position_mode:
+        # One invoice per line item; each booking's position (fallback to the chosen default)
+        # decides its bucket, and the rate comes from that position (§21 P2/WP6).
+        by_position: dict[int, dict[int, float]] = {}
+        for b in bookings:
+            pos_id = b.billing_position_id if b.billing_position_id in pos_rate else billing_position_id
+            by_position.setdefault(pos_id, {})
+            by_position[pos_id][b.person_id] = by_position[pos_id].get(b.person_id, 0.0) + b.net_hours
+        for pos_id, hours_by_person in by_position.items():
+            rate = pos_rate.get(pos_id, 0.0)
+            _create_invoice(pos_id, hours_by_person, {pid: rate for pid in hours_by_person})
+    else:
+        hours_by_person: dict[int, float] = {}
+        for b in bookings:
+            hours_by_person[b.person_id] = hours_by_person.get(b.person_id, 0.0) + b.net_hours
+        _create_invoice(billing_position_id, hours_by_person, member_rate)
 
-    # Lock and close the milestone if it was initialised
+    # Lock and close the milestone once for the month (if it was initialised).
     milestone = session.exec(
         select(Milestone).where(
             Milestone.project_id == project_id,
@@ -165,8 +179,9 @@ def close_month(
         session.add(milestone)
 
     session.commit()
-    session.refresh(invoice)
-    return invoice
+    for inv in invoices:
+        session.refresh(inv)
+    return invoices
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +190,11 @@ def close_month(
 
 
 def reopen_month(invoice_id: int, session: Session) -> None:
-    """Delete the invoice and unlock the milestone.
+    """Reopen the month of the given invoice: unlock the milestone and delete ALL of that
+    month's invoices (position mode has one per line item, §21 WP6) with their entries.
 
     Raises:
         InvoiceNotFoundError: invoice does not exist
-        InvalidStatusTransitionError: invoice is not in 'planned' status
     """
     invoice = session.get(MonthlyInvoice, invoice_id)
     if not invoice:
@@ -198,13 +213,20 @@ def reopen_month(invoice_id: int, session: Session) -> None:
         milestone.status = MilestoneStatus.open
         session.add(milestone)
 
-    # Delete entries then invoice
-    for entry in session.exec(
-        select(InvoicePersonEntry).where(InvoicePersonEntry.invoice_id == invoice_id)
-    ).all():
-        session.delete(entry)
-
-    session.delete(invoice)
+    # Delete every invoice (and its entries) for this project-month.
+    month_invoices = session.exec(
+        select(MonthlyInvoice).where(
+            MonthlyInvoice.project_id == invoice.project_id,
+            MonthlyInvoice.year == invoice.year,
+            MonthlyInvoice.month == invoice.month,
+        )
+    ).all()
+    for inv in month_invoices:
+        for entry in session.exec(
+            select(InvoicePersonEntry).where(InvoicePersonEntry.invoice_id == inv.id)
+        ).all():
+            session.delete(entry)
+        session.delete(inv)
     session.commit()
 
 

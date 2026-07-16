@@ -5,14 +5,16 @@ import pytest
 from hypothesis import given, settings as h_settings
 from hypothesis import strategies as st
 
+from app.models.billing import BillingPosition
 from app.models.person import Person
 from app.models.project import Project
-from app.models.timebooking import SageProjectMapping, TimeBooking
+from app.models.timebooking import SagePositionMapping, SageProjectMapping, TimeBooking
 from app.services.importer import (
     FUZZY_THRESHOLD,
     ImportResult,
     ParseError,
     UnmatchedPersonsError,
+    UnresolvedPositionsError,
     UnresolvedProjectsError,
     fuzzy_match_persons,
     import_bookings,
@@ -319,6 +321,94 @@ def test_import_bookings_unmatched_person(session):
 
     with pytest.raises(UnmatchedPersonsError):
         import_bookings(_csv([_ROW]), session)
+
+
+# ---------------------------------------------------------------------------
+# import_bookings — position mode (§21 P6): level → line item linking
+# ---------------------------------------------------------------------------
+
+
+def _priced_position(session, project_id, number="AP1", rate=100.0):
+    bp = BillingPosition(project_id=project_id, position_number=number,
+                         budget_euros=10000.0, billing_rate_per_hour=rate)
+    session.add(bp)
+    session.flush()
+    return bp
+
+
+def _position_mapping(session, project_id, level, bp_id):
+    m = SagePositionMapping(project_id=project_id, sage_project_level=level,
+                            billing_position_id=bp_id)
+    session.add(m)
+    session.flush()
+    return m
+
+
+def test_import_links_booking_to_position(session):
+    _make_person(session)
+    proj = _make_project(session)
+    proj.position_mode = True
+    _make_mapping(session, "P00001 Analytics", proj.id)
+    bp = _priced_position(session, proj.id)
+    _position_mapping(session, proj.id, "Development", bp.id)  # _ROW level = Development
+    session.commit()
+
+    result = import_bookings(_csv([_ROW]), session)
+    assert result.inserted == 1
+    booking = session.exec(__import__("sqlmodel").select(TimeBooking)).first()
+    assert booking.billing_position_id == bp.id
+
+
+def test_import_position_mode_missing_mapping_raises(session):
+    _make_person(session)
+    proj = _make_project(session)
+    proj.position_mode = True
+    _make_mapping(session, "P00001 Analytics", proj.id)
+    _priced_position(session, proj.id)  # position mode, but no level mapping
+    session.commit()
+
+    with pytest.raises(UnresolvedPositionsError) as exc:
+        import_bookings(_csv([_ROW]), session)
+    assert (proj.id, "Development") in exc.value.pairs
+
+
+def test_position_mapping_is_project_scoped(session):
+    # Two projects with an identically-named level ("Development") must resolve to their
+    # OWN position — no cross-project mixing (finding 2026-07-16).
+    from app.services.importer import resolve_position_mappings
+
+    proj_a = _make_project(session, "P00001")
+    proj_a.position_mode = True
+    proj_b = _make_project(session, "P00002")
+    proj_b.position_mode = True
+    bp_a = _priced_position(session, proj_a.id, number="A-DEV")
+    bp_b = _priced_position(session, proj_b.id, number="B-DEV")
+    _position_mapping(session, proj_a.id, "Development", bp_a.id)
+    _position_mapping(session, proj_b.id, "Development", bp_b.id)
+    session.commit()
+
+    result = resolve_position_mappings(
+        [(proj_a.id, "Development"), (proj_b.id, "Development")],
+        {proj_a.id, proj_b.id},
+        session,
+    )
+    assert result[(proj_a.id, "Development")] == bp_a.id
+    assert result[(proj_b.id, "Development")] == bp_b.id
+    assert bp_a.id != bp_b.id
+
+
+def test_import_simple_mode_leaves_position_null(session):
+    # Unpriced position → simple mode → no mapping needed, booking not linked.
+    _make_person(session)
+    proj = _make_project(session)
+    _make_mapping(session, "P00001 Analytics", proj.id)
+    session.add(BillingPosition(project_id=proj.id, position_number="X", budget_euros=5000.0))  # rate 0
+    session.commit()
+
+    result = import_bookings(_csv([_ROW]), session)
+    assert result.inserted == 1
+    booking = session.exec(__import__("sqlmodel").select(TimeBooking)).first()
+    assert booking.billing_position_id is None
 
 
 # ---------------------------------------------------------------------------

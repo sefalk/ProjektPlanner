@@ -38,6 +38,21 @@ class SageProjectMapping(ValidatedSQLModel, table=True):
     project_id: int = Field(foreign_key="project.id", index=True)
 
 
+class SagePositionMapping(ValidatedSQLModel, table=True):
+    """Maps a Sage "Projektebene 1" (sage_project_level) to a line item (BillingPosition)
+    within a project. Used at import to link a booking to its position (position mode)."""
+
+    __tablename__ = "sage_position_mapping"
+    __table_args__ = (
+        UniqueConstraint("project_id", "sage_project_level", name="uq_sage_position_project_level"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    sage_project_level: str = Field(min_length=1)
+    billing_position_id: int = Field(foreign_key="billing_position.id", index=True)
+
+
 class TimeBooking(ValidatedSQLModel, table=True):
     """Single time booking row imported from a Sage ERP export.
 
@@ -63,6 +78,8 @@ class TimeBooking(ValidatedSQLModel, table=True):
     import_batch_id: int = Field(foreign_key="import_batch.id")
     sage_project_name: str
     sage_project_level: str
+    # Resolved line item (from sage_project_level via SagePositionMapping); None = simple mode.
+    billing_position_id: int | None = Field(default=None, foreign_key="billing_position.id", index=True)
     net_hours: float = Field(ge=0)
     duration_raw: str = ""   # e.g. "4:30h" — display only, not used in calculations
     break_duration: str = "" # e.g. "0:30h" — display only

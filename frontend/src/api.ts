@@ -59,6 +59,13 @@ export interface Project {
   program_id: number | null;
   sick_days_per_year_override: number | null;
   training_days_per_year_override: number | null;
+  position_mode: boolean;
+}
+
+export interface PositionModeStatus {
+  enabled: boolean;
+  can_enable: boolean;
+  reasons: string[];
 }
 
 export interface Person {
@@ -84,6 +91,7 @@ export interface ProjectMembership {
   billing_rate_per_hour: number;
   priority: number;
   vacation_days_taken: number;
+  billing_position_id: number | null;
   warnings?: string[];
 }
 
@@ -93,6 +101,17 @@ export interface BillingPosition {
   position_number: string;
   description: string;
   budget_euros: number;
+  /** Hourly rate of the line item (Projektposten). 0 = no rate (simple invoicing position). */
+  billing_rate_per_hour: number;
+}
+
+/** Aggregate €-budget state across a project's line items (doc 21 §P3). */
+export interface BillingPositionBudgetState {
+  total_budget_euros: number;
+  allocated_euros: number;
+  open_euros: number;
+  is_over: boolean;
+  is_complete: boolean;
 }
 
 export interface Milestone {
@@ -151,6 +170,7 @@ export interface MilestonePersonDetail {
   training_estimate_days: number;
   holiday_days: number;
   billing_rate_per_hour: number;
+  billing_position_id: number | null;
   booked_hours: number;
   is_manual_override: boolean;
   estimated_absence_days_override: number | null;
@@ -211,6 +231,13 @@ export interface SageProjectMapping {
   project_id: number;
 }
 
+export interface SagePositionMapping {
+  id: number;
+  project_id: number;
+  sage_project_level: string;
+  billing_position_id: number;
+}
+
 export interface ImportBatch {
   id: number;
   project_id: number;
@@ -229,6 +256,7 @@ export interface TimeBooking {
   import_batch_id: number;
   sage_project_name: string;
   sage_project_level: string;
+  billing_position_id: number | null;
   net_hours: number;
   duration_raw: string;
   break_duration: string;
@@ -261,22 +289,41 @@ export interface ProjectStats {
 export const projects = {
   list: () => req<Project[]>('GET', '/projects'),
   stats: () => req<ProjectStats[]>('GET', '/projects/stats'),
-  create: (d: Omit<Project, 'id'>) => req<Project>('POST', '/projects', d),
+  create: (d: Omit<Project, 'id' | 'position_mode'>) => req<Project>('POST', '/projects', d),
   get: (id: number) => req<Project>('GET', `/projects/${id}`),
-  update: (id: number, d: Omit<Project, 'id'>) => req<Project>('PUT', `/projects/${id}`, d),
+  update: (id: number, d: Omit<Project, 'id' | 'position_mode'>) => req<Project>('PUT', `/projects/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/projects/${id}`),
   memberships: (id: number) => req<ProjectMembership[]>('GET', `/projects/${id}/memberships`),
-  addMembership: (id: number, d: Omit<ProjectMembership, 'id' | 'project_id' | 'warnings'>) =>
-    req<ProjectMembership>('POST', `/projects/${id}/memberships`, d),
-  updateMembership: (projectId: number, membershipId: number, d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority' | 'vacation_days_taken'>) =>
-    req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
+  addMembership: (
+    id: number,
+    d: Omit<ProjectMembership, 'id' | 'project_id' | 'warnings' | 'billing_position_id'> & { billing_position_id?: number | null },
+  ) => req<ProjectMembership>('POST', `/projects/${id}/memberships`, d),
+  updateMembership: (
+    projectId: number,
+    membershipId: number,
+    d: Pick<ProjectMembership, 'from_date' | 'to_date' | 'weekly_capacity_hours' | 'billing_rate_per_hour' | 'priority' | 'vacation_days_taken'> & { billing_position_id?: number | null },
+  ) => req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
   deleteMembership: (projectId: number, membershipId: number) =>
     req<void>('DELETE', `/projects/${projectId}/memberships/${membershipId}`),
+  sageLevels: (id: number) => req<string[]>('GET', `/projects/${id}/sage-levels`),
   billingPositions: (id: number) => req<BillingPosition[]>('GET', `/projects/${id}/billing-positions`),
-  addBillingPosition: (id: number, d: Omit<BillingPosition, 'id' | 'project_id'>) =>
-    req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
+  billingPositionsBudgetState: (id: number) =>
+    req<BillingPositionBudgetState>('GET', `/projects/${id}/billing-positions/budget-state`),
+  addBillingPosition: (
+    id: number,
+    d: { position_number: string; description?: string; budget_euros?: number | null; billing_rate_per_hour?: number },
+  ) => req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
+  updateBillingPosition: (
+    projectId: number,
+    bpId: number,
+    d: { position_number: string; description?: string; budget_euros: number; billing_rate_per_hour?: number },
+  ) => req<BillingPosition>('PUT', `/projects/${projectId}/billing-positions/${bpId}`, d),
   deleteBillingPosition: (projectId: number, bpId: number) =>
     req<void>('DELETE', `/projects/${projectId}/billing-positions/${bpId}`),
+  positionModeStatus: (id: number) =>
+    req<PositionModeStatus>('GET', `/projects/${id}/position-mode`),
+  setPositionMode: (id: number, enabled: boolean) =>
+    req<Project>('PUT', `/projects/${id}/position-mode`, { enabled }),
   milestones: (id: number) => req<Milestone[]>('GET', `/projects/${id}/milestones`),
   milestonesDetail: (id: number) => req<MilestoneDetail[]>('GET', `/projects/${id}/milestones/detail`),
   initMilestones: (id: number, force?: boolean) => req<Milestone[]>('POST', `/projects/${id}/milestones/initialize${force ? '?force=true' : ''}`),
@@ -297,7 +344,7 @@ export const projects = {
     req<Milestone>('PUT', `/projects/${projectId}/milestones/${milestoneId}/planning-lock`, { locked }),
   invoices: (id: number) => req<MonthlyInvoice[]>('GET', `/projects/${id}/invoices`),
   closeMonth: (id: number, d: { year: number; month: number; billing_position_id: number }) =>
-    req<MonthlyInvoice>('POST', `/projects/${id}/invoices/close`, d),
+    req<MonthlyInvoice[]>('POST', `/projects/${id}/invoices/close`, d),
   bookings: (id: number, filters?: { person_id?: number; year?: number; month?: number; week?: number }) => {
     const p = new URLSearchParams()
     if (filters?.person_id) p.set('person_id', String(filters.person_id))
@@ -381,6 +428,18 @@ export const mappings = {
   update: (id: number, d: { sage_project_name: string; project_id: number }) =>
     req<SageProjectMapping>('PUT', `/sage-project-mappings/${id}`, d),
   delete: (id: number) => req<void>('DELETE', `/sage-project-mappings/${id}`),
+};
+
+// ─── Sage position (level → line item) mappings ────────────────────────────────
+
+export const positionMappings = {
+  list: (projectId?: number) =>
+    req<SagePositionMapping[]>('GET', `/sage-position-mappings${projectId != null ? `?project_id=${projectId}` : ''}`),
+  create: (d: { project_id: number; sage_project_level: string; billing_position_id: number }) =>
+    req<SagePositionMapping>('POST', '/sage-position-mappings', d),
+  update: (id: number, d: { project_id: number; sage_project_level: string; billing_position_id: number }) =>
+    req<SagePositionMapping>('PUT', `/sage-position-mappings/${id}`, d),
+  delete: (id: number) => req<void>('DELETE', `/sage-position-mappings/${id}`),
 };
 
 // ─── Calendar ────────────────────────────────────────────────────────────────

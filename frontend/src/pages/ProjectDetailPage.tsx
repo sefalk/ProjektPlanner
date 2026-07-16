@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
-  type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason,
+  type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason, type BillingPosition,
 } from '../api'
 import Modal from '../components/Modal'
 import Table from '../components/Table'
@@ -256,67 +256,274 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
   )
 }
 
-function BillingPositionForm({
-  onSave,
-  isPending,
-}: {
-  onSave: (d: { position_number: string; description: string; budget_euros: number }) => void
-  isPending: boolean
-}) {
-  const [form, setForm] = useState({ position_number: '', description: '', budget_euros: '' })
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    onSave({
-      position_number: form.position_number.trim(),
-      description: form.description.trim(),
-      budget_euros: form.budget_euros ? parseFloat(form.budget_euros) : 0,
-    })
-    setForm({ position_number: '', description: '', budget_euros: '' })
+/** Extract the FastAPI `detail` string from an ApiError, falling back to the raw message. */
+function errText(e: Error): string {
+  if (e instanceof ApiError && e.body && typeof e.body === 'object' && 'detail' in e.body) {
+    return String((e.body as { detail: unknown }).detail)
   }
+  return e.message
+}
 
+const EUR0 = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })
+const EUR2 = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+/** Fields shared by the add/edit position forms. */
+interface PositionFormValue {
+  position_number: string
+  description: string
+  billing_rate_per_hour: number
+  budget_euros: number
+}
+
+/** Inline form used both for adding and editing a line item. Shows the derived
+ *  hours budget (€ ÷ Satz) so the user sees the €/Std equivalence (P5). */
+function PositionFields({
+  value, onChange,
+}: { value: PositionFormValue; onChange: (v: PositionFormValue) => void }) {
+  const hours = value.billing_rate_per_hour > 0 ? value.budget_euros / value.billing_rate_per_hour : null
   return (
-    <form onSubmit={handleSubmit} className="flex gap-2 items-end flex-wrap">
+    <div className="flex gap-2 items-end flex-wrap">
       <div>
         <label className="block text-xs text-gray-500 mb-1">Positionsnr.</label>
-        <input
-          required
-          placeholder="z.B. AP1"
+        <input required placeholder="z.B. AP1"
           className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.position_number}
-          onChange={(e) => setForm({ ...form, position_number: e.target.value })}
-        />
+          value={value.position_number}
+          onChange={(e) => onChange({ ...value, position_number: e.target.value })} />
       </div>
-      <div className="flex-1 min-w-[10rem]">
+      <div className="flex-1 min-w-[9rem]">
         <label className="block text-xs text-gray-500 mb-1">Bezeichnung</label>
-        <input
-          required
-          placeholder="z.B. Softwareentwicklung"
+        <input placeholder="z.B. Softwareentwicklung"
           className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.description}
-          onChange={(e) => setForm({ ...form, description: e.target.value })}
-        />
+          value={value.description}
+          onChange={(e) => onChange({ ...value, description: e.target.value })} />
       </div>
       <div>
-        <label className="block text-xs text-gray-500 mb-1">Budget (€) <span className="text-gray-400">optional</span></label>
-        <input
-          type="number"
-          min={0}
-          step={0.01}
-          placeholder="0"
-          className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.budget_euros}
-          onChange={(e) => setForm({ ...form, budget_euros: e.target.value })}
-        />
+        <label className="block text-xs text-gray-500 mb-1">Satz (€/Std.)</label>
+        <input type="number" min={0} step={0.01} placeholder="0"
+          className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={value.billing_rate_per_hour || ''}
+          onChange={(e) => onChange({ ...value, billing_rate_per_hour: parseFloat(e.target.value) || 0 })} />
       </div>
-      <button
-        type="submit"
-        disabled={isPending}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 whitespace-nowrap"
-      >
-        <Plus size={13} /> Hinzufügen
-      </button>
-    </form>
+      <div>
+        <label className="block text-xs text-gray-500 mb-1">
+          Budget (€){hours != null && <span className="ml-1 text-gray-400">= {hours.toFixed(1)} Std.</span>}
+        </label>
+        <input type="number" min={0} step={0.01} placeholder="0"
+          className="border border-gray-300 rounded px-2.5 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={value.budget_euros || ''}
+          onChange={(e) => onChange({ ...value, budget_euros: parseFloat(e.target.value) || 0 })} />
+      </div>
+    </div>
+  )
+}
+
+/** Line-item (Projektposten) management: budget-consistency banner (§P3), editable
+ *  list, and add form defaulting to the open difference. */
+function BillingPositionsSection({
+  projectId, totalBudget, positions, invoiceList, positionMode,
+}: {
+  projectId: number
+  totalBudget: number
+  positions: BillingPosition[]
+  invoiceList: MonthlyInvoice[]
+  positionMode: boolean
+}) {
+  const qc = useQueryClient()
+  const [adding, setAdding] = useState<PositionFormValue | null>(null)
+  const [editing, setEditing] = useState<{ id: number; value: PositionFormValue } | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const onErr = (e: unknown) => setErr(e instanceof ApiError && e.status === 409
+    ? (typeof e.body === 'object' && e.body && 'detail' in e.body ? String((e.body as { detail: unknown }).detail) : 'Vorgang nicht möglich.')
+    : 'Fehler beim Speichern.')
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['billingPositions', projectId] })
+    qc.invalidateQueries({ queryKey: ['positionMode', projectId] })
+  }
+
+  const { data: modeStatus } = useQuery({
+    queryKey: ['positionMode', projectId],
+    queryFn: () => projects.positionModeStatus(projectId),
+  })
+  const toggleMode = useMutation({
+    mutationFn: (enabled: boolean) => projects.setPositionMode(projectId, enabled),
+    onSuccess: () => {
+      setErr(null)
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['positionMode', projectId] })
+      qc.invalidateQueries({ queryKey: ['milestones-detail', projectId] })
+    },
+    onError: onErr,
+  })
+
+  const addMut = useMutation({
+    mutationFn: (d: PositionFormValue) => projects.addBillingPosition(projectId, d),
+    onSuccess: () => { setAdding(null); setErr(null); invalidate() },
+    onError: onErr,
+  })
+  const updateMut = useMutation({
+    mutationFn: (v: { id: number; value: PositionFormValue }) => projects.updateBillingPosition(projectId, v.id, v.value),
+    onSuccess: () => { setEditing(null); setErr(null); invalidate() },
+    onError: onErr,
+  })
+  const deleteMut = useMutation({
+    mutationFn: (bpId: number) => projects.deleteBillingPosition(projectId, bpId),
+    onSuccess: () => { setErr(null); invalidate() },
+    onError: onErr,
+  })
+
+  const allocated = positions.reduce((s, p) => s + p.budget_euros, 0)
+  const open = totalBudget - allocated
+  const EPS = 1e-6
+  const isOver = allocated > totalBudget + EPS
+  const isComplete = Math.abs(open) <= EPS
+  const startAdd = () => setAdding({ position_number: '', description: '', billing_rate_per_hour: 0, budget_euros: Math.max(0, open) })
+
+  return (
+    <div className="mt-8 pt-6 border-t border-gray-200">
+      <h4 className="text-sm font-medium text-gray-700 mb-1">Projektposten (Vertragspositionen)</h4>
+      <p className="text-xs text-gray-400 mb-3">
+        Vertragspositionen mit eigenem Satz und Budget. Für einfache Projekte genügt eine Position;
+        die Summe der Posten-Budgets muss dem Projektbudget entsprechen.
+      </p>
+
+      {/* Budget-consistency banner (§P3) */}
+      <div className={`mb-3 text-xs rounded px-3 py-2 border ${
+        isOver ? 'bg-red-50 border-red-200 text-red-700'
+        : isComplete ? 'bg-green-50 border-green-200 text-green-700'
+        : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+        {positions.length === 0
+          ? <>Noch keine Posten. Gesamtbudget {EUR0(totalBudget)} ist unverteilt.</>
+          : isOver
+          ? <>Σ Posten-Budget {EUR2(allocated)} überschreitet das Gesamtbudget {EUR2(totalBudget)} um {EUR2(-open)}.</>
+          : isComplete
+          ? <>Vollständig verteilt: Σ {EUR2(allocated)} = Gesamtbudget.</>
+          : <>Verteilt {EUR2(allocated)} von {EUR2(totalBudget)} — offen: <strong>{EUR2(open)}</strong>. Abschließend muss alles verteilt sein.</>}
+      </div>
+
+      {err && <p className="text-xs text-red-600 mb-2">{err}</p>}
+
+      {/* Existing positions */}
+      {positions.length > 0 && (
+        <div className="mb-3 bg-white rounded border border-gray-200 divide-y divide-gray-100">
+          {positions.map((bp) => {
+            const inUse = invoiceList.some((inv) => inv.billing_position_id === bp.id)
+            if (editing?.id === bp.id) {
+              return (
+                <div key={bp.id} className="px-3 py-2.5 bg-blue-50/40">
+                  <PositionFields value={editing.value} onChange={(v) => setEditing({ id: bp.id, value: v })} />
+                  <div className="flex gap-2 mt-2">
+                    <button onClick={() => updateMut.mutate(editing)} disabled={updateMut.isPending}
+                      className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Speichern</button>
+                    <button onClick={() => { setEditing(null); setErr(null) }}
+                      className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+                  </div>
+                </div>
+              )
+            }
+            const hours = bp.billing_rate_per_hour > 0 ? bp.budget_euros / bp.billing_rate_per_hour : null
+            return (
+              <div key={bp.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <span className="font-medium text-gray-700">{bp.position_number}</span>
+                  {bp.description && <><span className="mx-1.5 text-gray-300">·</span><span className="text-gray-600">{bp.description}</span></>}
+                  <span className="ml-2 text-xs text-gray-400">
+                    {EUR2(bp.budget_euros)}
+                    {bp.billing_rate_per_hour > 0 && <> · {EUR2(bp.billing_rate_per_hour)}/Std.{hours != null && <> · {hours.toFixed(1)} Std.</>}</>}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => { setAdding(null); setErr(null); setEditing({ id: bp.id, value: { position_number: bp.position_number, description: bp.description, billing_rate_per_hour: bp.billing_rate_per_hour, budget_euros: bp.budget_euros } }) }}
+                    title="Bearbeiten"
+                    className="p-1 text-gray-300 hover:text-blue-500 transition-colors"><Pencil size={13} /></button>
+                  <button
+                    onClick={() => deleteMut.mutate(bp.id)}
+                    disabled={inUse || deleteMut.isPending}
+                    title={inUse ? 'Wird von einer Abrechnung verwendet — kann nicht gelöscht werden' : 'Löschen'}
+                    className="p-1 text-gray-300 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"><Trash2 size={13} /></button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Add new position */}
+      {adding ? (
+        <div className="bg-blue-50/40 rounded border border-blue-100 px-3 py-2.5">
+          <PositionFields value={adding} onChange={setAdding} />
+          <div className="flex gap-2 mt-2">
+            <button onClick={() => addMut.mutate(adding)} disabled={addMut.isPending || !adding.position_number.trim()}
+              className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Hinzufügen</button>
+            <button onClick={() => { setAdding(null); setErr(null) }}
+              className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={startAdd} disabled={isComplete}
+          title={isComplete ? 'Budget ist bereits vollständig verteilt' : 'Neuen Posten anlegen'}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap">
+          <Plus size={13} /> Posten hinzufügen
+        </button>
+      )}
+
+      {/* Position-mode toggle (§21 WP8) */}
+      <div className="mt-6 pt-4 border-t border-gray-100">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-gray-700">Posten-Modus</p>
+            <p className="text-xs text-gray-400 max-w-md">
+              Aktiviert die Verteilung, Zuweisung, Import-Zuordnung und Abrechnung je Posten.
+              Voraussetzung: alle aktiven Mitglieder einem Posten zugewiesen und Budget vollständig verteilt.
+            </p>
+          </div>
+          <button
+            onClick={() => toggleMode.mutate(!positionMode)}
+            disabled={toggleMode.isPending || (!positionMode && modeStatus != null && !modeStatus.can_enable)}
+            title={!positionMode && modeStatus?.reasons.length ? modeStatus.reasons.join('\n') : undefined}
+            className={`shrink-0 px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              positionMode ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+            {positionMode ? 'Posten-Modus aktiv — deaktivieren' : 'Posten-Modus aktivieren'}
+          </button>
+        </div>
+        {!positionMode && modeStatus != null && !modeStatus.can_enable && modeStatus.reasons.length > 0 && (
+          <ul className="mt-2 list-disc list-inside text-[11px] text-amber-600 space-y-0.5">
+            {modeStatus.reasons.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Line-item picker for the member forms (§21 P2). Rendered only when the project has
+ *  positions; selecting a priced position makes the member's rate come from that position. */
+function PositionSelect({
+  positions, value, onChange, required,
+}: {
+  positions: BillingPosition[]
+  value: number | null
+  onChange: (v: number | null) => void
+  required?: boolean
+}) {
+  if (positions.length === 0) return null
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">
+        Posten <span className="text-gray-400 font-normal">(Satz kommt vom Posten)</span>
+      </label>
+      <select required={required} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value ? parseInt(e.target.value) : null)}>
+        <option value="">— kein Posten —</option>
+        {positions.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.position_number}{p.description ? ` – ${p.description}` : ''}{p.billing_rate_per_hour > 0 ? ` (${p.billing_rate_per_hour} €/Std.)` : ''}
+          </option>
+        ))}
+      </select>
+    </div>
   )
 }
 
@@ -344,7 +551,7 @@ export default function ProjectDetailPage() {
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
   const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
-  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0 })
+  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
@@ -358,13 +565,13 @@ export default function ProjectDetailPage() {
   const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; personId: number; personName: string } | null>(null)  // edit estimated absence
   const [editAbsenceDays, setEditAbsenceDays] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
-  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0 })
+  const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
   const [error, setError] = useState<string | null>(null)
   const [memberWarnings, setMemberWarnings] = useState<string[]>([])
   const [closeWarnings, setCloseWarnings] = useState<string[]>([])
   const [pendingCloseForm, setPendingCloseForm] = useState<typeof closeForm | null>(null)
   const [showReinitConfirm, setShowReinitConfirm] = useState(false)
-  const [settingsForm, setSettingsForm] = useState<Omit<Project, 'id'> | null>(null)
+  const [settingsForm, setSettingsForm] = useState<Omit<Project, 'id' | 'position_mode'> | null>(null)
   const [settingsSaved, setSettingsSaved] = useState(false)
   const [showEmailTemplate, setShowEmailTemplate] = useState(false)
 
@@ -495,7 +702,7 @@ export default function ProjectDetailPage() {
         setMemberWarnings(result.warnings)
       }
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => setError(errText(e)),
   })
   const updateMember = useMutation({
     mutationFn: () => projects.updateMembership(projectId, editMember!.id, editMemberForm),
@@ -505,7 +712,7 @@ export default function ProjectDetailPage() {
       setError(null)
       if (result.warnings && result.warnings.length > 0) setMemberWarnings(result.warnings)
     },
-    onError: (e: Error) => setError(e.message),
+    onError: (e: Error) => setError(errText(e)),
   })
   const removeMember = useMutation({
     mutationFn: (mid: number) => projects.deleteMembership(projectId, mid),
@@ -513,7 +720,7 @@ export default function ProjectDetailPage() {
   })
 
   const updateProject = useMutation({
-    mutationFn: (data: Omit<Project, 'id'>) => projects.update(projectId, data),
+    mutationFn: (data: Omit<Project, 'id' | 'position_mode'>) => projects.update(projectId, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project', projectId] })
       setSettingsSaved(true)
@@ -522,20 +729,13 @@ export default function ProjectDetailPage() {
     onError: (e: Error) => setError(e.message),
   })
 
-  const addBillingPosition = useMutation({
-    mutationFn: (d: Parameters<typeof projects.addBillingPosition>[1]) =>
-      projects.addBillingPosition(projectId, d),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['billingPositions', projectId] }),
-    onError: (e: Error) => setError(e.message),
-  })
-
-  const deleteBillingPosition = useMutation({
-    mutationFn: (bpId: number) => projects.deleteBillingPosition(projectId, bpId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['billingPositions', projectId] }),
-    onError: (e: Error) => setError(e.message),
-  })
-
   if (!project) return <div className="p-6 text-sm text-gray-400">Lade…</div>
+
+  // Position mode (§21 WP8): the project's explicit opt-in flag is the single trigger.
+  const posById = new Map(billingPositions.map((p) => [p.id, p]))
+  const positionMode = project.position_mode
+  const memberRate = (m: ProjectMembership) =>
+    m.billing_position_id != null ? (posById.get(m.billing_position_id)?.billing_rate_per_hour ?? m.billing_rate_per_hour) : m.billing_rate_per_hour
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'milestones', label: 'Meilensteine' },
@@ -602,20 +802,28 @@ export default function ProjectDetailPage() {
           const fmtH = (n: number) => `${n.toFixed(2)} h`
           // Invoice (Ist) per closed month — what a locked month actually consumed of the
           // budget (§9.3), not its frozen plan.
-          const invoiceByMonth = new Map(invoiceList.map((i) => [`${i.year}-${i.month}`, i]))
+          // Invoiced Ist per closed month, summed over ALL invoices of that month (position
+          // mode has one invoice per line item, §21 WP6 — so aggregate, don't take one).
+          const invoiceByMonth = new Map<string, { hours: number; euros: number }>()
+          for (const i of invoiceList) {
+            const k = `${i.year}-${i.month}`
+            const e = invoiceByMonth.get(k) ?? { hours: 0, euros: 0 }
+            e.hours += i.total_hours; e.euros += i.total_amount_euros
+            invoiceByMonth.set(k, e)
+          }
           const plannedCost = (d: MilestoneDetail) => d.persons.reduce((s, p) => s + p.current_hours * p.billing_rate_per_hour, 0)
           // Budget-relevant € of a month: locked → invoiced Ist, open → planned current cost.
           // Summed this is the forecast (Prognose), which never exceeds the budget.
           const monthEuros = (d: MilestoneDetail) => {
             const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
-            return d.milestone.is_locked && inv != null ? inv.total_amount_euros : plannedCost(d)
+            return d.milestone.is_locked && inv != null ? inv.euros : plannedCost(d)
           }
           // Budget-relevant hours (forecast): closed → invoiced Ist hours, open → planned.
           // Summed this reconciles with the € Prognose ÷ Satz (unlike Σ plan of all months,
           // whose closed part uses the frozen plan, not the Ist).
           const monthHours = (d: MilestoneDetail) => {
             const inv = invoiceByMonth.get(`${d.milestone.year}-${d.milestone.month}`)
-            return d.milestone.is_locked && inv != null ? inv.total_hours : d.milestone.current_hours
+            return d.milestone.is_locked && inv != null ? inv.hours : d.milestone.current_hours
           }
           const totals = milestonesDetail.reduce(
             (acc, d: MilestoneDetail) => ({
@@ -649,6 +857,26 @@ export default function ProjectDetailPage() {
           }
           const memberBreakdown = [...perMember.values()].filter((e) => e.fc > 0 || e.ist > 0)
           const daysBreakdown = [...perMember.values()].filter((e) => e.at || e.ft || e.abwG || e.abwE)
+          // Per-position forecast breakdown (§21 WP7): group members by their line item;
+          // forecast € uses the effective (position) rate already carried per person.
+          type PosMember = { name: string; hours: number; euros: number; istHours: number; istEuros: number }
+          type PosAgg = { hours: number; euros: number; istHours: number; istEuros: number; members: Map<number, PosMember> }
+          const perPosition = new Map<number | null, PosAgg>()
+          for (const d of milestonesDetail) {
+            for (const p of d.persons) {
+              const key = p.billing_position_id ?? null
+              const fcH = d.milestone.is_locked ? (p.booked_hours ?? 0) : p.current_hours
+              const fcE = fcH * p.billing_rate_per_hour
+              const istH = p.booked_hours ?? 0          // Ist = actually booked hours
+              const istE = istH * p.billing_rate_per_hour
+              const agg = perPosition.get(key) ?? { hours: 0, euros: 0, istHours: 0, istEuros: 0, members: new Map() }
+              agg.hours += fcH; agg.euros += fcE; agg.istHours += istH; agg.istEuros += istE
+              const mem = agg.members.get(p.person_id) ?? { name: p.person_name, hours: 0, euros: 0, istHours: 0, istEuros: 0 }
+              mem.hours += fcH; mem.euros += fcE; mem.istHours += istH; mem.istEuros += istE
+              agg.members.set(p.person_id, mem)
+              perPosition.set(key, agg)
+            }
+          }
           const suggestionByMs = new Map(suggestions.map((s) => [s.milestone_id, s]))
           const rateByPid = new Map(memberships.map((m) => [m.person_id, m.billing_rate_per_hour]))
           const overlapsMonth = (m: ProjectMembership, y: number, mo: number) => {
@@ -1096,6 +1324,66 @@ export default function ProjectDetailPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Aufschlüsselung nach Posten (§21 WP7) — only in position mode */}
+              {positionMode && perPosition.size > 0 && (
+                <div className="mt-4 bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 text-sm font-medium text-gray-700 flex items-center justify-between">
+                    <span>Aufwand nach Posten <span className="font-normal text-gray-400">(aufklappen für Mitarbeiter)</span></span>
+                    <span className="flex items-center gap-4 text-[10px] uppercase tracking-wide text-gray-400 font-normal">
+                      <span className="w-24 text-right">Ist (Std.)</span>
+                      <span className="w-28 text-right">Ist (€)</span>
+                      <span className="w-24 text-right">Prognose (Std.)</span>
+                      <span className="w-28 text-right">Prognose (€)</span>
+                      <span className="w-32 text-right">Rest (€)</span>
+                    </span>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {[...perPosition.entries()]
+                      .sort((a, b) => (a[0] ?? Infinity) - (b[0] ?? Infinity))
+                      .map(([posId, agg]) => {
+                        const pos = posId != null ? posById.get(posId) : undefined
+                        const label = pos ? `${pos.position_number}${pos.description ? ` – ${pos.description}` : ''}` : '⚠ ohne Posten'
+                        const posBudget = pos?.budget_euros ?? 0
+                        const rest = posBudget - agg.euros
+                        return (
+                          <details key={posId ?? 'none'} className="group">
+                            <summary className="flex items-center justify-between px-4 py-2.5 text-sm cursor-pointer hover:bg-gray-50 list-none">
+                              <span className="flex items-center gap-1.5 min-w-0">
+                                <ChevronRight size={13} className="text-gray-400 group-open:rotate-90 transition-transform shrink-0" />
+                                <span className={pos ? 'font-medium text-gray-700 truncate' : 'font-medium text-red-500 truncate'}>{label}</span>
+                              </span>
+                              <span className="flex items-center gap-4 text-xs shrink-0">
+                                <span className="w-24 text-right text-gray-500">{fmtH(agg.istHours)}</span>
+                                <span className="w-28 text-right text-gray-500">{fmtEur(agg.istEuros)}</span>
+                                <span className="w-24 text-right text-gray-500">{fmtH(agg.hours)}</span>
+                                <span className="w-28 text-right text-gray-700 font-medium">{fmtEur(agg.euros)}</span>
+                                <span className={`w-32 text-right ${rest < -0.01 ? 'text-red-600' : 'text-gray-400'}`}
+                                  title="Posten-Budget − Prognose">
+                                  {pos ? fmtEur(rest) : '—'}
+                                </span>
+                              </span>
+                            </summary>
+                            <div className="px-4 pb-2.5 pl-9 space-y-0.5">
+                              {[...agg.members.values()].filter((m) => m.hours > 0.001 || m.istHours > 0.001).map((m) => (
+                                <div key={m.name} className="flex items-center justify-between text-[11px] text-gray-500">
+                                  <span className="truncate">{m.name}</span>
+                                  <span className="flex items-center gap-4 shrink-0">
+                                    <span className="w-24 text-right">{fmtH(m.istHours)}</span>
+                                    <span className="w-28 text-right">{fmtEur(m.istEuros)}</span>
+                                    <span className="w-24 text-right">{fmtH(m.hours)}</span>
+                                    <span className="w-28 text-right">{fmtEur(m.euros)}</span>
+                                    <span className="w-32" />
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )
+                      })}
+                  </div>
+                </div>
+              )}
             </div>
           )
         })()}
@@ -1108,18 +1396,46 @@ export default function ProjectDetailPage() {
           const rest = project.total_budget_euros - totalInvoiced
           const lastInv = [...invoiceList].sort((a, b) => a.year !== b.year ? b.year - a.year : b.month - a.month)[0]
           const fmt = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          const posLabel = (id: number) => {
+            const p = posById.get(id)
+            return p ? `${p.position_number}${p.description ? ` – ${p.description}` : ''}` : `#${id}`
+          }
+          const lastMonthInvoices = lastInv
+            ? invoiceList.filter((i) => i.year === lastInv.year && i.month === lastInv.month)
+            : []
+          const lastMonthAmount = lastMonthInvoices.reduce((s, i) => s + i.total_amount_euros, 0)
+          // Invoiced totals per line item (position mode): billing_position_id → {hours, euros}.
+          const invByPosition = new Map<number, { hours: number; euros: number }>()
+          for (const i of invoiceList) {
+            const e = invByPosition.get(i.billing_position_id) ?? { hours: 0, euros: 0 }
+            e.hours += i.total_hours; e.euros += i.total_amount_euros
+            invByPosition.set(i.billing_position_id, e)
+          }
 
-          const emailText = lastInv ? [
-            `hier der Projektstatus zu Ende ${MONTH_FULL[lastInv.month - 1]} ${lastInv.year}:`,
+          const emailLines = [
+            `hier der Projektstatus zu Ende ${lastInv ? MONTH_FULL[lastInv.month - 1] : ''} ${lastInv?.year ?? ''}:`,
             '',
             `Projekt ${project.project_number}:`,
             `Gesamt        | Summen`,
             `Budget        | ${fmt(project.total_budget_euros)}`,
             `Abgerechnet   | ${fmt(totalInvoiced)}`,
             `Rest          | ${fmt(rest)}`,
-            '',
-            `Der Rechnungsbetrag für ${MONTH_FULL[lastInv.month - 1]} lautet: ${fmt(lastInv.total_amount_euros)}`,
-          ].join('\n') : ''
+          ]
+          if (positionMode && invByPosition.size > 0) {
+            emailLines.push('', 'Abgerechnet nach Posten:')
+            for (const [pid, agg] of [...invByPosition.entries()].sort((a, b) => a[0] - b[0])) {
+              emailLines.push(`  ${posLabel(pid)}: ${fmt(agg.euros)}`)
+            }
+          }
+          if (lastInv) {
+            emailLines.push('', `Der Rechnungsbetrag für ${MONTH_FULL[lastInv.month - 1]} lautet: ${fmt(lastMonthAmount)}`)
+            if (positionMode && lastMonthInvoices.length > 1) {
+              for (const i of [...lastMonthInvoices].sort((a, b) => a.billing_position_id - b.billing_position_id)) {
+                emailLines.push(`  ${posLabel(i.billing_position_id)}: ${fmt(i.total_amount_euros)}`)
+              }
+            }
+          }
+          const emailText = lastInv ? emailLines.join('\n') : ''
 
           return (
             <div className="space-y-4">
@@ -1143,6 +1459,30 @@ export default function ProjectDetailPage() {
                 </div>
               </div>
 
+              {/* Per-position invoiced breakdown (§21 WP6) */}
+              {positionMode && billingPositions.length > 0 && (
+                <div className="bg-white rounded-lg border border-gray-200 p-4">
+                  <p className="text-xs font-medium text-gray-500 mb-2">Abgerechnet nach Posten</p>
+                  <div className="space-y-1.5">
+                    {billingPositions.map((bp) => {
+                      const agg = invByPosition.get(bp.id) ?? { hours: 0, euros: 0 }
+                      const posRest = bp.budget_euros - agg.euros
+                      return (
+                        <div key={bp.id} className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600 truncate">{bp.position_number}{bp.description ? ` – ${bp.description}` : ''}</span>
+                          <span className="flex items-center gap-4 shrink-0">
+                            <span className="text-gray-400 text-xs w-20 text-right">{agg.hours.toFixed(1)} h</span>
+                            <span className="text-blue-700 w-28 text-right">{fmt(agg.euros)}</span>
+                            <span className="text-gray-400 text-xs w-24 text-right" title="Posten-Budget − abgerechnet">von {fmt(bp.budget_euros)}</span>
+                            <span className={`text-xs w-28 text-right ${posRest < -0.01 ? 'text-red-600' : 'text-gray-400'}`}>Rest {fmt(posRest)}</span>
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-between items-center">
                 <h3 className="font-medium text-gray-700">Monatliche Abrechnungen</h3>
                 <button onClick={() => { setCloseForm({ ...closeForm, billing_position_id: billingPositions[0]?.id ?? 0 }); setShowCloseModal(true) }}
@@ -1155,18 +1495,23 @@ export default function ProjectDetailPage() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      {['Monat', 'Stunden', 'Betrag', 'Status', 'Aktionen'].map((h) => (
+                      {(positionMode ? ['Monat', 'Posten', 'Stunden', 'Betrag', 'Status', 'Aktionen'] : ['Monat', 'Stunden', 'Betrag', 'Status', 'Aktionen']).map((h) => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {invoiceList.length === 0 && (
-                      <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Abrechnungen.</td></tr>
+                      <tr><td colSpan={positionMode ? 6 : 5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Abrechnungen.</td></tr>
                     )}
-                    {invoiceList.map((inv) => (
+                    {[...invoiceList]
+                      .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month !== b.month ? a.month - b.month : a.billing_position_id - b.billing_position_id)
+                      .map((inv) => (
                       <tr key={inv.id}>
                         <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[inv.month]} {inv.year}</td>
+                        {positionMode && (
+                          <td className="px-4 py-3 text-sm text-gray-600">{posLabel(inv.billing_position_id)}</td>
+                        )}
                         <td className="px-4 py-3 text-sm text-gray-600">{inv.total_hours.toFixed(1)} h</td>
                         <td className="px-4 py-3 text-sm text-gray-600">{inv.total_amount_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}</td>
                         <td className="px-4 py-3 text-sm">
@@ -1192,7 +1537,7 @@ export default function ProjectDetailPage() {
                     ))}
                     {invoiceList.length > 0 && (
                       <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200">
-                        <td className="px-4 py-2.5 text-gray-700">Gesamt</td>
+                        <td className="px-4 py-2.5 text-gray-700" colSpan={positionMode ? 2 : 1}>Gesamt</td>
                         <td className="px-4 py-2.5 text-gray-700">{totalHoursInvoiced.toFixed(1)} h</td>
                         <td className="px-4 py-2.5 text-gray-700">{fmt(totalInvoiced)}</td>
                         <td colSpan={2} />
@@ -1270,7 +1615,20 @@ export default function ProjectDetailPage() {
                   { key: 'from_date', header: 'Von' },
                   { key: 'to_date', header: 'Bis' },
                   { key: 'weekly_capacity_hours', header: 'h/Woche', render: (m: ProjectMembership) => `${m.weekly_capacity_hours} h` },
-                  { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => `${m.billing_rate_per_hour} €` },
+                  { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => (
+                    <span title={m.billing_position_id != null ? 'Satz vom zugewiesenen Posten' : undefined}>
+                      {memberRate(m)} €{m.billing_position_id != null && <span className="ml-1 text-gray-300">(Posten)</span>}
+                    </span>
+                  ) },
+                  ...(billingPositions.length > 0 ? [{
+                    key: 'billing_position_id', header: 'Posten',
+                    render: (m: ProjectMembership) => {
+                      const p = m.billing_position_id != null ? posById.get(m.billing_position_id) : undefined
+                      return p
+                        ? <span title={p.description}>{p.position_number}</span>
+                        : <span className={positionMode ? 'text-red-500' : 'text-gray-300'} title={positionMode ? 'Kein Posten zugewiesen — im Posten-Modus erforderlich' : undefined}>{positionMode ? '⚠ keiner' : '–'}</span>
+                    },
+                  }] : []),
                   {
                     key: 'priority', header: 'Priorität',
                     render: (m: ProjectMembership) => (
@@ -1292,7 +1650,7 @@ export default function ProjectDetailPage() {
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority, vacation_days_taken: m.vacation_days_taken }); setError(null) }}
+                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority, vacation_days_taken: m.vacation_days_taken, billing_position_id: m.billing_position_id }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
@@ -1432,51 +1790,14 @@ export default function ProjectDetailPage() {
                 </div>
               </form>
 
-              {/* Billing positions (PSP-Elemente) */}
-              <div className="mt-8 pt-6 border-t border-gray-200">
-                <h4 className="text-sm font-medium text-gray-700 mb-1">Rechnungspositionen (PSP-Elemente)</h4>
-                <p className="text-xs text-gray-400 mb-3">
-                  Vertragspositionen, denen Monatsabrechnungen zugeordnet werden.
-                  Für die meisten Projekte genügt eine Position.
-                </p>
-
-                {/* Existing positions */}
-                {billingPositions.length > 0 && (
-                  <div className="mb-3 bg-white rounded border border-gray-200 divide-y divide-gray-100">
-                    {billingPositions.map((bp) => {
-                      const inUse = invoiceList.some((inv) => inv.billing_position_id === bp.id)
-                      return (
-                        <div key={bp.id} className="flex items-center justify-between px-3 py-2 text-sm">
-                          <div>
-                            <span className="font-medium text-gray-700">{bp.position_number}</span>
-                            <span className="mx-1.5 text-gray-300">·</span>
-                            <span className="text-gray-600">{bp.description}</span>
-                            {bp.budget_euros > 0 && (
-                              <span className="ml-2 text-xs text-gray-400">
-                                {bp.budget_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 })}
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => deleteBillingPosition.mutate(bp.id)}
-                            disabled={inUse || deleteBillingPosition.isPending}
-                            title={inUse ? 'Wird von einer Abrechnung verwendet — kann nicht gelöscht werden' : 'Löschen'}
-                            className="p-1 text-gray-300 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {/* Add new position */}
-                <BillingPositionForm
-                  onSave={(d) => addBillingPosition.mutate(d)}
-                  isPending={addBillingPosition.isPending}
-                />
-              </div>
+              {/* Line items (Projektposten) */}
+              <BillingPositionsSection
+                projectId={projectId}
+                totalBudget={project.total_budget_euros}
+                positions={billingPositions}
+                invoiceList={invoiceList}
+                positionMode={positionMode}
+              />
             </div>
           )
         })()}
@@ -1510,11 +1831,20 @@ export default function ProjectDetailPage() {
                 Keine Rechnungsposition vorhanden. Bitte zuerst eine PSP-Position unter den Projekteinstellungen anlegen.
               </p>
             )}
+            {positionMode ? (
+              <p className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded px-3 py-2">
+                Posten-Modus: Es wird je Posten eine eigene Rechnung erzeugt (Buchungen nach
+                Projektebene aufgeteilt, Satz vom Posten). Nicht zugeordnete Buchungen fallen
+                auf den unten gewählten Standard-Posten zurück.
+              </p>
+            ) : null}
             {billingPositions.length > 1 && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
-                  Rechnungsposition (PSP-Element)
-                  <span className="ml-1 font-normal text-gray-400">— welches Arbeitspaket wird abgerechnet?</span>
+                  {positionMode ? 'Standard-Posten (Fallback)' : 'Rechnungsposition (PSP-Element)'}
+                  <span className="ml-1 font-normal text-gray-400">
+                    {positionMode ? '— für Buchungen ohne Posten-Zuordnung' : '— welches Arbeitspaket wird abgerechnet?'}
+                  </span>
                 </label>
                 <select required className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
                   value={closeForm.billing_position_id}
@@ -1526,7 +1856,7 @@ export default function ProjectDetailPage() {
                 </select>
               </div>
             )}
-            {billingPositions.length === 1 && (
+            {billingPositions.length === 1 && !positionMode && (
               <p className="text-xs text-gray-400">
                 Rechnungsposition: <span className="text-gray-600 font-medium">{billingPositions[0].position_number} – {billingPositions[0].description}</span>
               </p>
@@ -1786,14 +2116,24 @@ export default function ProjectDetailPage() {
                   value={addMemberForm.weekly_capacity_hours}
                   onChange={(e) => setAddMemberForm({ ...addMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                <input required type="number" min={0} step={0.01}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={addMemberForm.billing_rate_per_hour}
-                  onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
-              </div>
+              {(() => {
+                const pos = addMemberForm.billing_position_id != null ? posById.get(addMemberForm.billing_position_id) : undefined
+                const fromPosition = pos != null && pos.billing_rate_per_hour > 0
+                return (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
+                    <input required={!fromPosition} type="number" min={0} step={0.01} disabled={fromPosition}
+                      className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+                      title={fromPosition ? 'Satz kommt vom zugewiesenen Posten' : undefined}
+                      value={fromPosition ? pos!.billing_rate_per_hour : addMemberForm.billing_rate_per_hour}
+                      onChange={(e) => setAddMemberForm({ ...addMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
+                  </div>
+                )
+              })()}
             </div>
+            <PositionSelect positions={billingPositions} required={positionMode}
+              value={addMemberForm.billing_position_id}
+              onChange={(v) => setAddMemberForm({ ...addMemberForm, billing_position_id: v })} />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
@@ -1850,14 +2190,24 @@ export default function ProjectDetailPage() {
                   value={editMemberForm.weekly_capacity_hours}
                   onChange={(e) => setEditMemberForm({ ...editMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                <input required type="number" min={0} step={0.01}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.billing_rate_per_hour}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
-              </div>
+              {(() => {
+                const pos = editMemberForm.billing_position_id != null ? posById.get(editMemberForm.billing_position_id) : undefined
+                const fromPosition = pos != null && pos.billing_rate_per_hour > 0
+                return (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
+                    <input required={!fromPosition} type="number" min={0} step={0.01} disabled={fromPosition}
+                      className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
+                      title={fromPosition ? 'Satz kommt vom zugewiesenen Posten' : undefined}
+                      value={fromPosition ? pos!.billing_rate_per_hour : editMemberForm.billing_rate_per_hour}
+                      onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
+                  </div>
+                )
+              })()}
             </div>
+            <PositionSelect positions={billingPositions} required={positionMode}
+              value={editMemberForm.billing_position_id}
+              onChange={(v) => setEditMemberForm({ ...editMemberForm, billing_position_id: v })} />
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>

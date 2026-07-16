@@ -10,15 +10,25 @@ from sqlmodel import Field, Session, SQLModel, select
 from app.db import get_session
 from app.models.billing import BillingPosition
 from app.models.enums import MilestoneStatus
+from app.models.invoice import MonthlyInvoice
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone
 from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import ImportBatch, TimeBooking
+from app.services.line_items import (
+    default_new_position_budget,
+    position_budget_state,
+    would_overshoot,
+)
 from app.services.milestones import (
+    MilestoneNotFound,
+    PositionModeNotEnableable,
     apply_project_range_change,
+    can_enable_position_mode,
     prune_member_budgets_to_range,
     remove_member_budgets,
+    set_position_mode,
 )
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -33,7 +43,24 @@ SessionDep = Annotated[Session, Depends(get_session)]
 class BillingPositionCreate(SQLModel):
     position_number: str = Field(min_length=1)
     description: str = ""
+    # None → default to the open (unallocated) difference (P3).
+    budget_euros: float | None = Field(default=None, ge=0)
+    billing_rate_per_hour: float = Field(default=0.0, ge=0)
+
+
+class BillingPositionUpdate(SQLModel):
+    position_number: str = Field(min_length=1)
+    description: str = ""
     budget_euros: float = Field(ge=0)
+    billing_rate_per_hour: float = Field(default=0.0, ge=0)
+
+
+class BillingPositionBudgetState(SQLModel):
+    total_budget_euros: float
+    allocated_euros: float
+    open_euros: float
+    is_over: bool
+    is_complete: bool
 
 
 class MembershipCreate(SQLModel):
@@ -44,6 +71,7 @@ class MembershipCreate(SQLModel):
     billing_rate_per_hour: float = Field(ge=0)
     priority: int = 0  # B6: smaller = higher priority for budget distribution
     vacation_days_taken: float = Field(default=0.0, ge=0)
+    billing_position_id: int | None = None  # position mode (P2); null = simple mode
 
 
 class MembershipUpdate(SQLModel):
@@ -53,6 +81,7 @@ class MembershipUpdate(SQLModel):
     billing_rate_per_hour: float = Field(ge=0)
     priority: int = 0
     vacation_days_taken: float = Field(default=0.0, ge=0)
+    billing_position_id: int | None = None
 
 
 class MembershipWithWarnings(SQLModel):
@@ -65,6 +94,7 @@ class MembershipWithWarnings(SQLModel):
     billing_rate_per_hour: float
     priority: int = 0
     vacation_days_taken: float = 0.0
+    billing_position_id: int | None = None
     warnings: list[str] = []
 
 
@@ -142,7 +172,8 @@ def update_project(project_id: int, data: Project, session: SessionDep):
     if not project:
         raise HTTPException(404, "Project not found.")
     old_start, old_end = project.start_date, project.end_date
-    update = data.model_dump(exclude_unset=True, exclude={"id"})
+    # position_mode is toggled only via the guarded /position-mode endpoint (§21 WP8).
+    update = data.model_dump(exclude_unset=True, exclude={"id", "position_mode"})
     for field, value in update.items():
         setattr(project, field, value)
     try:
@@ -170,6 +201,20 @@ def delete_project(project_id: int, session: SessionDep):
     session.commit()
 
 
+@router.get("/{project_id}/sage-levels", response_model=list[str])
+def list_sage_levels(project_id: int, session: SessionDep):
+    """Distinct Sage 'Projektebene 1' values seen in this project's bookings — used to
+    suggest level values when mapping levels to line items (§21 P6). Project-scoped."""
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+    rows = session.exec(
+        select(TimeBooking.sage_project_level)
+        .where(TimeBooking.project_id == project_id)
+        .distinct()
+    ).all()
+    return sorted({lvl for lvl in rows if lvl})
+
+
 # ---------------------------------------------------------------------------
 # Billing positions
 # ---------------------------------------------------------------------------
@@ -183,16 +228,78 @@ def list_billing_positions(project_id: int, session: SessionDep):
     ).all()
 
 
+def _positions(project_id: int, session: Session) -> list[BillingPosition]:
+    return list(session.exec(
+        select(BillingPosition).where(BillingPosition.project_id == project_id)
+    ).all())
+
+
+@router.get(
+    "/{project_id}/billing-positions/budget-state",
+    response_model=BillingPositionBudgetState,
+)
+def billing_positions_budget_state(project_id: int, session: SessionDep):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    state = position_budget_state(
+        project.total_budget_euros, [p.budget_euros for p in _positions(project_id, session)]
+    )
+    return BillingPositionBudgetState(**state.__dict__)
+
+
 @router.post("/{project_id}/billing-positions", response_model=BillingPosition, status_code=201)
 def create_billing_position(project_id: int, body: BillingPositionCreate, session: SessionDep):
-    if not session.get(Project, project_id):
+    project = session.get(Project, project_id)
+    if not project:
         raise HTTPException(404, "Project not found.")
+    existing = [p.budget_euros for p in _positions(project_id, session)]
+    # Default to the open difference (P3); otherwise honour the requested amount.
+    budget = (
+        default_new_position_budget(project.total_budget_euros, existing)
+        if body.budget_euros is None
+        else body.budget_euros
+    )
+    if would_overshoot(project.total_budget_euros, existing, budget):
+        raise HTTPException(
+            409,
+            f"Σ Posten-Budget würde das Gesamtbudget ({project.total_budget_euros:.2f} €) "
+            f"überschreiten.",
+        )
     bp = BillingPosition(
         project_id=project_id,
         position_number=body.position_number,
         description=body.description,
-        budget_euros=body.budget_euros,
+        budget_euros=budget,
+        billing_rate_per_hour=body.billing_rate_per_hour,
     )
+    session.add(bp)
+    session.commit()
+    session.refresh(bp)
+    return bp
+
+
+@router.put("/{project_id}/billing-positions/{bp_id}", response_model=BillingPosition)
+def update_billing_position(
+    project_id: int, bp_id: int, body: BillingPositionUpdate, session: SessionDep
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    bp = session.get(BillingPosition, bp_id)
+    if not bp or bp.project_id != project_id:
+        raise HTTPException(404, "Billing position not found.")
+    others = [p.budget_euros for p in _positions(project_id, session) if p.id != bp_id]
+    if would_overshoot(project.total_budget_euros, others, body.budget_euros):
+        raise HTTPException(
+            409,
+            f"Σ Posten-Budget würde das Gesamtbudget ({project.total_budget_euros:.2f} €) "
+            f"überschreiten.",
+        )
+    bp.position_number = body.position_number
+    bp.description = body.description
+    bp.budget_euros = body.budget_euros
+    bp.billing_rate_per_hour = body.billing_rate_per_hour
     session.add(bp)
     session.commit()
     session.refresh(bp)
@@ -204,8 +311,55 @@ def delete_billing_position(project_id: int, bp_id: int, session: SessionDep):
     bp = session.get(BillingPosition, bp_id)
     if not bp or bp.project_id != project_id:
         raise HTTPException(404, "Billing position not found.")
+    # Guard: a position may only be deleted while nothing references it (P8/§8).
+    assigned = session.exec(
+        select(ProjectMembership).where(ProjectMembership.billing_position_id == bp_id)
+    ).first()
+    if assigned:
+        raise HTTPException(409, "Posten hat zugewiesene Mitarbeiter und kann nicht gelöscht werden.")
+    invoiced = session.exec(
+        select(MonthlyInvoice).where(MonthlyInvoice.billing_position_id == bp_id)
+    ).first()
+    if invoiced:
+        raise HTTPException(409, "Posten hat Abrechnungen und kann nicht gelöscht werden.")
     session.delete(bp)
     session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Position mode (§21 WP8)
+# ---------------------------------------------------------------------------
+
+class PositionModeStatus(SQLModel):
+    enabled: bool
+    can_enable: bool
+    reasons: list[str]
+
+
+class PositionModeUpdate(SQLModel):
+    enabled: bool
+
+
+@router.get("/{project_id}/position-mode", response_model=PositionModeStatus)
+def get_position_mode(project_id: int, session: SessionDep):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    memberships = list(session.exec(
+        select(ProjectMembership).where(ProjectMembership.project_id == project_id)
+    ).all())
+    ok, reasons = can_enable_position_mode(project, memberships, _positions(project_id, session))
+    return PositionModeStatus(enabled=project.position_mode, can_enable=ok, reasons=reasons)
+
+
+@router.put("/{project_id}/position-mode", response_model=Project)
+def put_position_mode(project_id: int, body: PositionModeUpdate, session: SessionDep):
+    try:
+        return set_position_mode(project_id, body.enabled, session)
+    except MilestoneNotFound:
+        raise HTTPException(404, "Project not found.")
+    except PositionModeNotEnableable as exc:
+        raise HTTPException(409, {"detail": "Posten-Modus kann nicht aktiviert werden.", "reasons": exc.reasons})
 
 
 # ---------------------------------------------------------------------------
@@ -257,10 +411,23 @@ def _membership_overbooking_warnings(membership: ProjectMembership, session: Ses
     return warnings
 
 
+def _validate_membership_position(project_id: int, billing_position_id: int | None, session: Session) -> None:
+    """Enforce §21 P2: while the project is in position mode every member must be assigned
+    to a line item of THIS project. A provided assignment must always reference a position
+    of the project (checked in either mode)."""
+    project = session.get(Project, project_id)
+    pos_ids = {p.id for p in _positions(project_id, session)}
+    if project is not None and project.position_mode and billing_position_id is None:
+        raise HTTPException(400, "Im Posten-Modus muss dem Mitglied ein Posten zugewiesen werden.")
+    if billing_position_id is not None and billing_position_id not in pos_ids:
+        raise HTTPException(400, "Zugewiesener Posten gehört nicht zu diesem Projekt.")
+
+
 @router.post("/{project_id}/memberships", response_model=MembershipWithWarnings, status_code=201)
 def create_membership(project_id: int, body: MembershipCreate, session: SessionDep):
     if not session.get(Project, project_id):
         raise HTTPException(404, "Project not found.")
+    _validate_membership_position(project_id, body.billing_position_id, session)
     membership = ProjectMembership(
         project_id=project_id,
         person_id=body.person_id,
@@ -270,6 +437,7 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         billing_rate_per_hour=body.billing_rate_per_hour,
         priority=body.priority,
         vacation_days_taken=body.vacation_days_taken,
+        billing_position_id=body.billing_position_id,
     )
     try:
         session.add(membership)
@@ -289,6 +457,7 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         billing_rate_per_hour=membership.billing_rate_per_hour,
         priority=membership.priority,
         vacation_days_taken=membership.vacation_days_taken,
+        billing_position_id=membership.billing_position_id,
         warnings=warnings,
     )
 
@@ -298,12 +467,14 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
     m = session.get(ProjectMembership, membership_id)
     if not m or m.project_id != project_id:
         raise HTTPException(404, "Membership not found.")
+    _validate_membership_position(project_id, body.billing_position_id, session)
     m.from_date = date.fromisoformat(body.from_date)
     m.to_date = date.fromisoformat(body.to_date)
     m.weekly_capacity_hours = body.weekly_capacity_hours
     m.billing_rate_per_hour = body.billing_rate_per_hour
     m.priority = body.priority
     m.vacation_days_taken = body.vacation_days_taken
+    m.billing_position_id = body.billing_position_id
     session.add(m)
     session.commit()
     session.refresh(m)
@@ -323,6 +494,7 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
         billing_rate_per_hour=m.billing_rate_per_hour,
         priority=m.priority,
         vacation_days_taken=m.vacation_days_taken,
+        billing_position_id=m.billing_position_id,
         warnings=warnings,
     )
 

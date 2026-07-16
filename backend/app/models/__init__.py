@@ -19,7 +19,7 @@ from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.program import Program
 from app.models.project import Project
-from app.models.timebooking import ImportBatch, SageProjectMapping, TimeBooking
+from app.models.timebooking import ImportBatch, SagePositionMapping, SageProjectMapping, TimeBooking
 
 __all__ = [
     "ValidatedSQLModel",
@@ -40,6 +40,7 @@ __all__ = [
     "Project",
     "ProjectMembership",
     "ProjectStatus",
+    "SagePositionMapping",
     "SageProjectMapping",
     "TimeBooking",
     "VacationContingent",

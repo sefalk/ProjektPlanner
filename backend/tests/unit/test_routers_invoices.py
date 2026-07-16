@@ -49,7 +49,7 @@ def test_close_returns_201(client):
     proj_id, bp_id = _setup(client)
     r = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id))
     assert r.status_code == 201
-    data = r.json()
+    data = r.json()[0]
     assert data["total_hours"] == 0.0
     assert data["status"] == "planned"
 
@@ -102,7 +102,7 @@ def test_list_invoices_project_not_found(client):
 
 def test_get_invoice(client):
     proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
+    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()[0]
     r = client.get(f"/invoices/{inv['id']}")
     assert r.status_code == 200
     assert r.json()["id"] == inv["id"]
@@ -123,7 +123,7 @@ def test_get_entries_not_found(client):
 
 def test_get_entries_empty(client):
     proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
+    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()[0]
     r = client.get(f"/invoices/{inv['id']}/entries")
     assert r.status_code == 200
     assert r.json() == []
@@ -136,21 +136,21 @@ def test_get_entries_empty(client):
 
 def test_reopen_returns_204(client):
     proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
+    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()[0]
     r = client.delete(f"/invoices/{inv['id']}")
     assert r.status_code == 204
 
 
 def test_reopen_removes_invoice(client):
     proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
+    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()[0]
     client.delete(f"/invoices/{inv['id']}")
     assert client.get(f"/invoices/{inv['id']}").status_code == 404
 
 
 def test_reopen_invoiced_returns_204(client):
     proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
+    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()[0]
     client.put(f"/invoices/{inv['id']}/status", json={"status": "invoiced"})
     r = client.delete(f"/invoices/{inv['id']}")
     assert r.status_code == 204
@@ -167,7 +167,7 @@ def test_reopen_not_found(client):
 
 def test_status_update_to_invoiced(client):
     proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
+    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()[0]
     r = client.put(f"/invoices/{inv['id']}/status", json={"status": "invoiced"})
     assert r.status_code == 200
     assert r.json()["status"] == "invoiced"
@@ -175,7 +175,7 @@ def test_status_update_to_invoiced(client):
 
 def test_status_update_invalid_transition_returns_409(client):
     proj_id, bp_id = _setup(client)
-    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()
+    inv = client.post(f"/projects/{proj_id}/invoices/close", json=_close_body(bp_id)).json()[0]
     r = client.put(f"/invoices/{inv['id']}/status", json={"status": "paid"})
     assert r.status_code == 409
 

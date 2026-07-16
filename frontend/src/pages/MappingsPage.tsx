@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
-import { mappings, projects, type SageProjectMapping } from '../api'
+import { mappings, positionMappings, projects, type SageProjectMapping } from '../api'
 import PageHeader from '../components/PageHeader'
 import Table from '../components/Table'
 import Modal from '../components/Modal'
@@ -44,6 +44,131 @@ function MappingForm({ initial, onSave, onCancel }: {
           className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
       </div>
     </form>
+  )
+}
+
+/** Level → line item mapping per project (§21 P6). Only projects with priced positions
+ *  (position mode) need these; the section guides the user to configure them. */
+function PositionMappingsSection() {
+  const qc = useQueryClient()
+  const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projects.list })
+  const [projectId, setProjectId] = useState<number>(0)
+  const [level, setLevel] = useState('')
+  const [posId, setPosId] = useState<number>(0)
+
+  const { data: positions = [] } = useQuery({
+    queryKey: ['billingPositions', projectId],
+    queryFn: () => projects.billingPositions(projectId),
+    enabled: projectId > 0,
+  })
+  const { data: mapList = [] } = useQuery({
+    queryKey: ['positionMappings', projectId],
+    queryFn: () => positionMappings.list(projectId),
+    enabled: projectId > 0,
+  })
+  const { data: bookingLevels = [] } = useQuery({
+    queryKey: ['sageLevels', projectId],
+    queryFn: () => projects.sageLevels(projectId),
+    enabled: projectId > 0,
+  })
+  // Suggest levels seen in bookings that aren't mapped yet.
+  const mappedLevels = new Set(mapList.map((m) => m.sage_project_level))
+  const levelSuggestions = bookingLevels.filter((l) => !mappedLevels.has(l))
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['positionMappings', projectId] })
+  const create = useMutation({
+    mutationFn: () => positionMappings.create({ project_id: projectId, sage_project_level: level.trim(), billing_position_id: posId }),
+    onSuccess: () => { setLevel(''); setPosId(0); invalidate() },
+  })
+  const remove = useMutation({
+    mutationFn: (id: number) => positionMappings.delete(id),
+    onSuccess: invalidate,
+  })
+
+  const posLabel = (id: number) => {
+    const p = positions.find((x) => x.id === id)
+    return p ? `${p.position_number}${p.description ? ` – ${p.description}` : ''}` : String(id)
+  }
+  const priced = positions.filter((p) => p.billing_rate_per_hour > 0)
+
+  return (
+    <div className="mt-10">
+      <h3 className="text-sm font-medium text-gray-700 mb-1">Posten-Zuordnung (Projektebene 1 → Posten)</h3>
+      <p className="text-xs text-gray-400 mb-3 max-w-2xl">
+        Nur für Projekte im Posten-Modus (mit bepreisten Posten). Ordnet die Sage-„Projektebene 1"
+        einem Projektposten zu, damit Buchungen beim Import dem richtigen Posten zugeordnet werden.
+      </p>
+      <div className="max-w-md mb-4">
+        <label className="block text-xs font-medium text-gray-600 mb-1">Projekt</label>
+        <select className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+          value={projectId} onChange={(e) => { setProjectId(parseInt(e.target.value) || 0); setPosId(0); setLevel('') }}>
+          <option value={0}>— Projekt wählen —</option>
+          {projectList.map((p) => <option key={p.id} value={p.id}>{p.project_number} – {p.name}</option>)}
+        </select>
+      </div>
+
+      {projectId > 0 && (
+        priced.length === 0 ? (
+          <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2 max-w-md">
+            Dieses Projekt hat keine bepreisten Posten (Simple-Modus) — keine Ebenen-Zuordnung nötig.
+          </p>
+        ) : (
+          <div className="max-w-2xl space-y-3">
+            {mapList.length > 0 && (
+              <div className="bg-white rounded border border-gray-200 divide-y divide-gray-100">
+                {mapList.map((m) => (
+                  <div key={m.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                    <div>
+                      <span className="font-medium text-gray-700">{m.sage_project_level}</span>
+                      <span className="mx-1.5 text-gray-300">→</span>
+                      <span className="text-gray-600">{posLabel(m.billing_position_id)}</span>
+                    </div>
+                    <button onClick={() => remove.mutate(m.id)} aria-label="Zuordnung löschen"
+                      className="p-1 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <form onSubmit={(e) => { e.preventDefault(); create.mutate() }} className="flex gap-2 items-end flex-wrap">
+              <div className="flex-1 min-w-[10rem]">
+                <label className="block text-xs text-gray-500 mb-1">
+                  Projektebene 1 (Sage)
+                  {levelSuggestions.length > 0 && <span className="ml-1 text-gray-400">— {levelSuggestions.length} aus Buchungen</span>}
+                </label>
+                <input required placeholder="z.B. Development" list={`levels-${projectId}`}
+                  className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm"
+                  value={level} onChange={(e) => setLevel(e.target.value)} />
+                <datalist id={`levels-${projectId}`}>
+                  {bookingLevels.map((l) => <option key={l} value={l} />)}
+                </datalist>
+                {levelSuggestions.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {levelSuggestions.slice(0, 8).map((l) => (
+                      <button key={l} type="button" onClick={() => setLevel(l)}
+                        className="px-1.5 py-0.5 text-[11px] bg-gray-100 text-gray-600 rounded hover:bg-gray-200">
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-[10rem]">
+                <label className="block text-xs text-gray-500 mb-1">Posten</label>
+                <select required className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm"
+                  value={posId} onChange={(e) => setPosId(parseInt(e.target.value) || 0)}>
+                  <option value={0} disabled>— wählen —</option>
+                  {priced.map((p) => <option key={p.id} value={p.id}>{p.position_number}{p.description ? ` – ${p.description}` : ''}</option>)}
+                </select>
+              </div>
+              <button type="submit" disabled={create.isPending || !level.trim() || !posId}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 disabled:opacity-50 whitespace-nowrap">
+                <Plus size={13} /> Zuordnen
+              </button>
+            </form>
+          </div>
+        )
+      )}
+    </div>
   )
 }
 
@@ -118,6 +243,7 @@ export default function MappingsPage() {
             <Table columns={columns} rows={data} keyFn={(m) => m.id} />
           </div>
         )}
+        <PositionMappingsSection />
       </div>
 
       {showCreate && (

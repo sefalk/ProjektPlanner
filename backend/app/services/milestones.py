@@ -25,6 +25,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.models.enums import AbsenceType
+from app.models.billing import BillingPosition
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person, PersonAbsence
@@ -61,6 +62,15 @@ class BudgetConfirmationRequired(Exception):
         super().__init__("; ".join(warnings))
 
 
+class PositionModeNotEnableable(Exception):
+    """Raised when enabling position mode is blocked by unmet preconditions (§21 WP8).
+    Carries the human-readable reasons for the UI."""
+
+    def __init__(self, reasons: list[str]) -> None:
+        self.reasons = reasons
+        super().__init__("; ".join(reasons))
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -69,6 +79,19 @@ class BudgetConfirmationRequired(Exception):
 def _month_bounds(year: int, month: int) -> tuple[date, date]:
     last_day = monthrange(year, month)[1]
     return date(year, month, 1), date(year, month, last_day)
+
+
+def effective_rate(
+    membership: ProjectMembership, positions_by_id: dict[int, BillingPosition]
+) -> float:
+    """Effective hourly rate of a member (§21 P2): the assigned line item's rate in
+    position mode, otherwise the member's own rate (simple mode). positions_by_id maps
+    billing_position_id → BillingPosition (pass the project's positions)."""
+    if membership.billing_position_id is not None:
+        pos = positions_by_id.get(membership.billing_position_id)
+        if pos is not None:
+            return pos.billing_rate_per_hour
+    return membership.billing_rate_per_hour
 
 
 def _months_in_range(start: date, end: date) -> list[tuple[int, int]]:
@@ -403,6 +426,168 @@ def _remaining_euro_budget(
     return max(0.0, total_budget_euros - invoiced - open_cost)
 
 
+def project_positions(project_id: int, session: Session) -> dict[int, BillingPosition]:
+    """Line items (Projektposten) of a project, keyed by id."""
+    return {
+        p.id: p
+        for p in session.exec(
+            select(BillingPosition).where(BillingPosition.project_id == project_id)
+        ).all()
+    }
+
+
+def is_position_mode(project: Project) -> bool:
+    """Position mode (§21 WP8) is the project's explicit opt-in flag. It is the single
+    source of truth for distribution, member-assignment validation, import level-mapping
+    and invoicing. Enabling is guarded (see can_enable_position_mode)."""
+    return bool(project.position_mode)
+
+
+def can_enable_position_mode(
+    project: Project,
+    memberships: list[ProjectMembership],
+    positions: list[BillingPosition],
+) -> tuple[bool, list[str]]:
+    """Whether position mode may be turned on for a project, plus human-readable reasons
+    for any blockers (§21 WP8). Requires: at least one priced line item; Σ Posten-Budget ==
+    total (P3 fully allocated); every ACTIVE member assigned to a line item (P2)."""
+    reasons: list[str] = []
+    priced = [p for p in positions if p.billing_rate_per_hour > 0]
+    if not priced:
+        reasons.append("Es gibt keinen bepreisten Posten (Satz > 0).")
+    allocated = sum(p.budget_euros for p in positions)
+    if abs(allocated - project.total_budget_euros) > 1e-6:
+        reasons.append(
+            f"Σ Posten-Budget ({allocated:.2f} €) entspricht nicht dem Gesamtbudget "
+            f"({project.total_budget_euros:.2f} €)."
+        )
+    active = [
+        m for m in memberships
+        if m.from_date <= project.end_date and m.to_date >= project.start_date
+    ]
+    unassigned = [m for m in active if m.billing_position_id is None]
+    if unassigned:
+        reasons.append(f"{len(unassigned)} aktive(s) Mitglied(er) ohne Posten-Zuweisung.")
+    return (not reasons, reasons)
+
+
+def set_position_mode(project_id: int, enabled: bool, session: Session) -> Project:
+    """Toggle a project's Projektposten-Modus (§21 WP8). Enabling is guarded by
+    can_enable_position_mode; disabling is always allowed. Commits."""
+    project = session.get(Project, project_id)
+    if not project:
+        raise MilestoneNotFound(f"Project {project_id} not found.")
+    if enabled and not project.position_mode:
+        memberships = list(session.exec(
+            select(ProjectMembership).where(ProjectMembership.project_id == project_id)
+        ).all())
+        positions = list(session.exec(
+            select(BillingPosition).where(BillingPosition.project_id == project_id)
+        ).all())
+        ok, reasons = can_enable_position_mode(project, memberships, positions)
+        if not ok:
+            raise PositionModeNotEnableable(reasons)
+    project.position_mode = enabled
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project
+
+
+def build_rate_map(
+    memberships: list[ProjectMembership], positions_by_id: dict[int, BillingPosition]
+) -> dict[int, float]:
+    """person_id → effective hourly rate (position rate in position mode, else member rate)."""
+    return {m.person_id: effective_rate(m, positions_by_id) for m in memberships}
+
+
+def _remaining_position_euro_budget(
+    project_id: int,
+    pos: BillingPosition,
+    exclude_months: set[tuple[int, int]],
+    position_pids: set[int],
+    session: Session,
+) -> float:
+    """Budget still available for one line item (§21 P4), analogous to
+    `_remaining_euro_budget` but scoped to a single position:
+
+        R_posten = posten.budget_euros
+                   − Σ(invoiced amounts of this position)
+                   − Σ(planned cost of this position's members in existing open milestones
+                       whose months are not being recomputed now)
+    Clamped to >= 0.
+    """
+    from app.models.invoice import MonthlyInvoice
+
+    invoiced = session.exec(
+        select(func.coalesce(func.sum(MonthlyInvoice.total_amount_euros), 0.0)).where(
+            MonthlyInvoice.project_id == project_id,
+            MonthlyInvoice.billing_position_id == pos.id,
+        )
+    ).one()
+    invoiced = float(invoiced or 0.0)
+
+    existing = session.exec(
+        select(Milestone).where(
+            Milestone.project_id == project_id,
+            Milestone.is_locked == False,  # noqa: E712
+        )
+    ).all()
+    open_cost = 0.0
+    for ms in existing:
+        if (ms.year, ms.month) in exclude_months:
+            continue
+        budgets = session.exec(
+            select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
+        ).all()
+        open_cost += sum(
+            b.current_hours * pos.billing_rate_per_hour
+            for b in budgets
+            if b.person_id in position_pids
+        )
+
+    return max(0.0, pos.budget_euros - invoiced - open_cost)
+
+
+def distribute_over_positions(
+    avail_map: dict[SlotKey, float],
+    memberships: list[ProjectMembership],
+    positions_by_id: dict[int, BillingPosition],
+    priorities: dict[int, int],
+    override_rows: list[MilestonePersonBudget],
+    exclude_months: set[tuple[int, int]],
+    project_id: int,
+    session: Session,
+) -> dict[SlotKey, float]:
+    """Position-mode distribution (§21 P4): one independent bucket per line item.
+
+    Each position distributes its own R_posten over only the members assigned to it, at the
+    position's rate; buckets never borrow from one another (shifting hours between positions
+    = adjusting position budgets manually). Members not assigned to any position get 0 h
+    (WP4 makes assignment mandatory in position mode).
+    """
+    memb_by_pid = {m.person_id: m for m in memberships}
+    plan: dict[SlotKey, float] = dict.fromkeys(avail_map, 0.0)
+    for pos_id, pos in positions_by_id.items():
+        position_pids = {m.person_id for m in memberships if m.billing_position_id == pos_id}
+        if not position_pids:
+            continue
+        sub_avail = {k: h for k, h in avail_map.items() if k[0] in position_pids}
+        if not sub_avail:
+            continue
+        rate = pos.billing_rate_per_hour
+        rates = {pid: rate for pid in position_pids}
+        base = _remaining_position_euro_budget(project_id, pos, exclude_months, position_pids, session)
+        override_cost = sum(
+            b.current_hours * rate
+            for b in override_rows
+            if (mb := memb_by_pid.get(b.person_id)) is not None and mb.billing_position_id == pos_id
+        )
+        remaining = max(0.0, base - override_cost)
+        plan.update(distribute_budget(sub_avail, rates, priorities, remaining))
+    return plan
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -435,7 +620,9 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
     memberships = session.exec(
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
-    membership_rate_map: dict[int, float] = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    positions_by_id = project_positions(project_id, session)
+    position_mode = is_position_mode(project)
+    membership_rate_map: dict[int, float] = build_rate_map(memberships, positions_by_id)
 
     person_cache: dict[int, Person] = {}
 
@@ -531,7 +718,12 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
     budget_euros = project.total_budget_euros if project.total_budget_euros and project.total_budget_euros > 0 else 0.0
     budget_hours = project.total_budget_hours if project.total_budget_hours and project.total_budget_hours > 0 else 0.0
 
-    if budget_euros > 0:
+    if position_mode:
+        # §21 P4: distribute each line item's budget independently over its members.
+        plan_map = distribute_over_positions(
+            avail_map, memberships, positions_by_id, priorities, [], new_month_set, project_id, session
+        )
+    elif budget_euros > 0:
         remaining = _remaining_euro_budget(
             project_id, budget_euros, new_month_set, membership_rate_map, session
         )
@@ -678,12 +870,10 @@ def _projected_budget_after_edit(
     project = session.get(Project, milestone.project_id)
     budget_euros = project.total_budget_euros if project else 0.0
 
-    rate_map = {
-        m.person_id: m.billing_rate_per_hour
-        for m in session.exec(
-            select(ProjectMembership).where(ProjectMembership.project_id == milestone.project_id)
-        ).all()
-    }
+    memberships = session.exec(
+        select(ProjectMembership).where(ProjectMembership.project_id == milestone.project_id)
+    ).all()
+    rate_map = build_rate_map(memberships, project_positions(milestone.project_id, session))
 
     invoiced = session.exec(
         select(func.coalesce(func.sum(MonthlyInvoice.total_amount_euros), 0.0)).where(
@@ -827,7 +1017,8 @@ def set_milestone_target_budget(
     memberships = session.exec(
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
-    rate_map = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    positions_by_id = project_positions(project_id, session)
+    rate_map = build_rate_map(memberships, positions_by_id)
     priorities = {m.person_id: m.priority for m in memberships}
 
     month_start, month_end = _month_bounds(milestone.year, milestone.month)
@@ -1129,7 +1320,9 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
     memberships = session.exec(
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
-    rate_map = {m.person_id: m.billing_rate_per_hour for m in memberships}
+    positions_by_id = project_positions(project_id, session)
+    position_mode = is_position_mode(project)
+    rate_map = build_rate_map(memberships, positions_by_id)
     priorities = {m.person_id: m.priority for m in memberships}
 
     person_cache: dict[int, Person] = {}
@@ -1197,7 +1390,12 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
     budget_hours = project.total_budget_hours if project.total_budget_hours and project.total_budget_hours > 0 else 0.0
     open_month_set = {(ms.year, ms.month) for ms in open_ms}
 
-    if budget_euros > 0:
+    if position_mode:
+        plan = distribute_over_positions(
+            recompute_avail, memberships, positions_by_id, priorities, override_rows,
+            open_month_set, project_id, session,
+        )
+    elif budget_euros > 0:
         override_cost = sum(b.current_hours * rate_map.get(b.person_id, 0.0) for b in override_rows)
         base_remaining = _remaining_euro_budget(project_id, budget_euros, open_month_set, rate_map, session)
         remaining = max(0.0, base_remaining - override_cost)

@@ -38,9 +38,10 @@ class StatusUpdate(SQLModel):
 # ---------------------------------------------------------------------------
 
 
-@router.post("/projects/{project_id}/invoices/close", response_model=MonthlyInvoice, status_code=201)
+@router.post("/projects/{project_id}/invoices/close", response_model=list[MonthlyInvoice], status_code=201)
 def close(project_id: int, body: CloseRequest, session: SessionDep):
-    """Lock the milestone and generate invoice records for a project month."""
+    """Lock the milestone and generate invoice records for a project month. Returns one
+    invoice in simple mode, or one per line item in position mode (§21 WP6)."""
     try:
         return close_month(project_id, body.year, body.month, body.billing_position_id, session)
     except InvoiceNotFoundError as exc:

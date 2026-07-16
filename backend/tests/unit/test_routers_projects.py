@@ -76,6 +76,204 @@ def test_delete_billing_position_wrong_project(client):
     assert client.delete(f"/projects/{p2['id']}/billing-positions/{bp['id']}").status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Billing positions — Projektposten CRUD & budget consistency (doc 21 WP2)
+# ---------------------------------------------------------------------------
+
+def test_create_position_defaults_to_open_difference(client):
+    p = client.post("/projects", json=_project()).json()  # 50000 budget
+    bp = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "billing_rate_per_hour": 100.0,
+    }).json()
+    # No budget given → defaults to the full open difference (50000).
+    assert bp["budget_euros"] == 50000.0
+    assert bp["billing_rate_per_hour"] == 100.0
+
+
+def test_create_position_overshoot_blocked(client):
+    p = client.post("/projects", json=_project()).json()  # 50000
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 40000.0,
+    })
+    r = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P2", "budget_euros": 20000.0,
+    })
+    assert r.status_code == 409
+
+
+def test_update_position(client):
+    p = client.post("/projects", json=_project()).json()
+    bp = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 10000.0,
+    }).json()
+    r = client.put(f"/projects/{p['id']}/billing-positions/{bp['id']}", json={
+        "position_number": "P1b", "budget_euros": 25000.0, "billing_rate_per_hour": 120.0,
+    })
+    assert r.status_code == 200
+    assert r.json()["budget_euros"] == 25000.0
+    assert r.json()["billing_rate_per_hour"] == 120.0
+
+
+def test_update_position_overshoot_blocked(client):
+    p = client.post("/projects", json=_project()).json()  # 50000
+    bp1 = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 30000.0,
+    }).json()
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P2", "budget_euros": 15000.0,
+    })
+    # Raising P1 to 40000 → Σ = 55000 > 50000 → blocked.
+    r = client.put(f"/projects/{p['id']}/billing-positions/{bp1['id']}", json={
+        "position_number": "P1", "budget_euros": 40000.0,
+    })
+    assert r.status_code == 409
+
+
+def test_budget_state_reports_open_and_complete(client):
+    p = client.post("/projects", json=_project()).json()  # 50000
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 30000.0,
+    })
+    s = client.get(f"/projects/{p['id']}/billing-positions/budget-state").json()
+    assert s["allocated_euros"] == 30000.0
+    assert s["open_euros"] == 20000.0
+    assert s["is_complete"] is False
+    assert s["is_over"] is False
+
+    client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P2", "budget_euros": 20000.0,
+    })
+    s2 = client.get(f"/projects/{p['id']}/billing-positions/budget-state").json()
+    assert s2["is_complete"] is True
+    assert s2["open_euros"] == 0.0
+
+
+def test_delete_position_blocked_when_member_assigned(client):
+    p = client.post("/projects", json=_project()).json()
+    bp = client.post(f"/projects/{p['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 10000.0,
+    }).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+        "billing_position_id": bp["id"],
+    })
+    r = client.delete(f"/projects/{p['id']}/billing-positions/{bp['id']}")
+    assert r.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Member → position assignment (doc 21 WP4, §P2)
+# ---------------------------------------------------------------------------
+
+def _priced_position(client, project_id, number="A", budget=50000.0, rate=100.0):
+    return client.post(f"/projects/{project_id}/billing-positions", json={
+        "position_number": number, "budget_euros": budget, "billing_rate_per_hour": rate,
+    }).json()
+
+
+def _enable_position_mode(client, project_id):
+    return client.put(f"/projects/{project_id}/position-mode", json={"enabled": True})
+
+
+def test_enable_position_mode_guard_and_toggle(client):
+    p = client.post("/projects", json=_project()).json()  # budget 50000
+    # No priced position, budget unallocated → cannot enable.
+    r = client.get(f"/projects/{p['id']}/position-mode").json()
+    assert r["enabled"] is False and r["can_enable"] is False
+    assert _enable_position_mode(client, p["id"]).status_code == 409
+    # Add a priced position covering the full budget → now enable succeeds.
+    _priced_position(client, p["id"], budget=50000.0)
+    ok = _enable_position_mode(client, p["id"])
+    assert ok.status_code == 200 and ok.json()["position_mode"] is True
+
+
+def test_position_mode_requires_assignment(client):
+    p = client.post("/projects", json=_project()).json()
+    _priced_position(client, p["id"], budget=50000.0)
+    assert _enable_position_mode(client, p["id"]).status_code == 200
+    person = client.post("/persons", json=_person_payload()).json()
+    # Adding a member without a position is now rejected (position mode on).
+    r = client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+    })
+    assert r.status_code == 400
+
+
+def test_enable_blocked_by_unassigned_member(client):
+    p = client.post("/projects", json=_project()).json()
+    _priced_position(client, p["id"], budget=50000.0)
+    person = client.post("/persons", json=_person_payload()).json()
+    client.post(f"/projects/{p['id']}/memberships", json={  # unassigned member (simple mode)
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+    })
+    status = client.get(f"/projects/{p['id']}/position-mode").json()
+    assert status["can_enable"] is False
+    assert _enable_position_mode(client, p["id"]).status_code == 409
+
+
+def test_position_mode_assignment_accepted(client):
+    p = client.post("/projects", json=_project()).json()
+    bp = _priced_position(client, p["id"], budget=50000.0)
+    assert _enable_position_mode(client, p["id"]).status_code == 200
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 0.0,
+        "billing_position_id": bp["id"],
+    })
+    assert r.status_code == 201
+    assert r.json()["billing_position_id"] == bp["id"]
+
+
+def test_assignment_to_foreign_position_rejected(client):
+    # Foreign-position FK check applies in either mode (no toggle needed).
+    p1 = client.post("/projects", json=_project("P00001")).json()
+    p2 = client.post("/projects", json=_project("P00002")).json()
+    bp2 = _priced_position(client, p2["id"])  # belongs to p2
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{p1['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 0.0,
+        "billing_position_id": bp2["id"],  # foreign position
+    })
+    assert r.status_code == 400
+
+
+def test_simple_mode_no_assignment_needed(client):
+    # Position mode off → assignment optional (regression guard).
+    p = client.post("/projects", json=_project()).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    r = client.post(f"/projects/{p['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+    })
+    assert r.status_code == 201
+
+
+def test_sage_levels_from_bookings(client, session):
+    # Distinct, project-scoped Sage levels from bookings (finding 2026-07-16, WP5 UX).
+    from datetime import date as _date, datetime as _dt
+    from app.models.timebooking import ImportBatch, TimeBooking
+
+    p = client.post("/projects", json=_project()).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    batch = ImportBatch(project_id=p["id"], imported_at=_dt(2026, 1, 31),
+                        last_booking_date=_date(2026, 1, 15))
+    session.add(batch); session.flush()
+    for i, level in enumerate(["Development", "Development", "Test", ""]):
+        session.add(TimeBooking(
+            booking_date=_date(2026, 1, 10), person_id=person["id"], project_id=p["id"],
+            import_batch_id=batch.id, sage_project_name="X", sage_project_level=level, net_hours=1.0 + i))
+    session.commit()
+
+    levels = client.get(f"/projects/{p['id']}/sage-levels").json()
+    assert levels == ["Development", "Test"]  # distinct, sorted, blanks dropped
+
+
 def test_list_memberships_project_not_found(client):
     assert client.get("/projects/9999/memberships").status_code == 404
 

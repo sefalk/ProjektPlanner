@@ -209,6 +209,51 @@ def test_delete_mapping_removes_from_list(client):
 
 
 # ---------------------------------------------------------------------------
+# Sage position (level → line item) mappings (doc 21 WP5)
+# ---------------------------------------------------------------------------
+
+
+def test_create_position_mapping_and_list(client):
+    proj = client.post("/projects", json=_project()).json()
+    bp = client.post(f"/projects/{proj['id']}/billing-positions", json={
+        "position_number": "AP1", "budget_euros": 10000.0, "billing_rate_per_hour": 100.0,
+    }).json()
+    r = client.post("/sage-position-mappings", json={
+        "project_id": proj["id"], "sage_project_level": "Development", "billing_position_id": bp["id"],
+    })
+    assert r.status_code == 201
+    assert r.json()["billing_position_id"] == bp["id"]
+    listed = client.get(f"/sage-position-mappings?project_id={proj['id']}").json()
+    assert len(listed) == 1
+
+
+def test_create_position_mapping_duplicate_returns_409(client):
+    proj = client.post("/projects", json=_project()).json()
+    bp = client.post(f"/projects/{proj['id']}/billing-positions", json={
+        "position_number": "AP1", "budget_euros": 10000.0, "billing_rate_per_hour": 100.0,
+    }).json()
+    payload = {"project_id": proj["id"], "sage_project_level": "Dev", "billing_position_id": bp["id"]}
+    client.post("/sage-position-mappings", json=payload)
+    assert client.post("/sage-position-mappings", json=payload).status_code == 409
+
+
+def test_update_and_delete_position_mapping(client):
+    proj = client.post("/projects", json=_project()).json()
+    bp = client.post(f"/projects/{proj['id']}/billing-positions", json={
+        "position_number": "AP1", "budget_euros": 10000.0, "billing_rate_per_hour": 100.0,
+    }).json()
+    m = client.post("/sage-position-mappings", json={
+        "project_id": proj["id"], "sage_project_level": "Dev", "billing_position_id": bp["id"],
+    }).json()
+    upd = client.put(f"/sage-position-mappings/{m['id']}", json={
+        "project_id": proj["id"], "sage_project_level": "Test", "billing_position_id": bp["id"],
+    })
+    assert upd.status_code == 200 and upd.json()["sage_project_level"] == "Test"
+    assert client.delete(f"/sage-position-mappings/{m['id']}").status_code == 204
+    assert client.get(f"/sage-position-mappings?project_id={proj['id']}").json() == []
+
+
+# ---------------------------------------------------------------------------
 # GET /imports/{batch_id}/bookings
 # ---------------------------------------------------------------------------
 
