@@ -859,17 +859,20 @@ export default function ProjectDetailPage() {
           const daysBreakdown = [...perMember.values()].filter((e) => e.at || e.ft || e.abwG || e.abwE)
           // Per-position forecast breakdown (§21 WP7): group members by their line item;
           // forecast € uses the effective (position) rate already carried per person.
-          type PosAgg = { hours: number; euros: number; members: Map<number, { name: string; hours: number; euros: number }> }
+          type PosMember = { name: string; hours: number; euros: number; istHours: number; istEuros: number }
+          type PosAgg = { hours: number; euros: number; istHours: number; istEuros: number; members: Map<number, PosMember> }
           const perPosition = new Map<number | null, PosAgg>()
           for (const d of milestonesDetail) {
             for (const p of d.persons) {
               const key = p.billing_position_id ?? null
               const fcH = d.milestone.is_locked ? (p.booked_hours ?? 0) : p.current_hours
               const fcE = fcH * p.billing_rate_per_hour
-              const agg = perPosition.get(key) ?? { hours: 0, euros: 0, members: new Map() }
-              agg.hours += fcH; agg.euros += fcE
-              const mem = agg.members.get(p.person_id) ?? { name: p.person_name, hours: 0, euros: 0 }
-              mem.hours += fcH; mem.euros += fcE
+              const istH = p.booked_hours ?? 0          // Ist = actually booked hours
+              const istE = istH * p.billing_rate_per_hour
+              const agg = perPosition.get(key) ?? { hours: 0, euros: 0, istHours: 0, istEuros: 0, members: new Map() }
+              agg.hours += fcH; agg.euros += fcE; agg.istHours += istH; agg.istEuros += istE
+              const mem = agg.members.get(p.person_id) ?? { name: p.person_name, hours: 0, euros: 0, istHours: 0, istEuros: 0 }
+              mem.hours += fcH; mem.euros += fcE; mem.istHours += istH; mem.istEuros += istE
               agg.members.set(p.person_id, mem)
               perPosition.set(key, agg)
             }
@@ -1325,8 +1328,15 @@ export default function ProjectDetailPage() {
               {/* Aufschlüsselung nach Posten (§21 WP7) — only in position mode */}
               {positionMode && perPosition.size > 0 && (
                 <div className="mt-4 bg-white rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 text-sm font-medium text-gray-700">
-                    Aufwand nach Posten <span className="font-normal text-gray-400">(Prognose · aufklappen für Mitarbeiter)</span>
+                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 text-sm font-medium text-gray-700 flex items-center justify-between">
+                    <span>Aufwand nach Posten <span className="font-normal text-gray-400">(aufklappen für Mitarbeiter)</span></span>
+                    <span className="flex items-center gap-4 text-[10px] uppercase tracking-wide text-gray-400 font-normal">
+                      <span className="w-24 text-right">Ist (Std.)</span>
+                      <span className="w-28 text-right">Ist (€)</span>
+                      <span className="w-24 text-right">Prognose (Std.)</span>
+                      <span className="w-28 text-right">Prognose (€)</span>
+                      <span className="w-32 text-right">Rest (€)</span>
+                    </span>
                   </div>
                   <div className="divide-y divide-gray-100">
                     {[...perPosition.entries()]
@@ -1339,29 +1349,31 @@ export default function ProjectDetailPage() {
                         return (
                           <details key={posId ?? 'none'} className="group">
                             <summary className="flex items-center justify-between px-4 py-2.5 text-sm cursor-pointer hover:bg-gray-50 list-none">
-                              <span className="flex items-center gap-1.5">
-                                <ChevronRight size={13} className="text-gray-400 group-open:rotate-90 transition-transform" />
-                                <span className={pos ? 'font-medium text-gray-700' : 'font-medium text-red-500'}>{label}</span>
+                              <span className="flex items-center gap-1.5 min-w-0">
+                                <ChevronRight size={13} className="text-gray-400 group-open:rotate-90 transition-transform shrink-0" />
+                                <span className={pos ? 'font-medium text-gray-700 truncate' : 'font-medium text-red-500 truncate'}>{label}</span>
                               </span>
-                              <span className="flex items-center gap-4 text-xs">
-                                <span className="text-gray-500">{fmtH(agg.hours)}</span>
-                                <span className="text-gray-700 font-medium w-28 text-right">{fmtEur(agg.euros)}</span>
-                                {pos && (
-                                  <span className={`w-32 text-right ${rest < -0.01 ? 'text-red-600' : 'text-gray-400'}`}
-                                    title="Posten-Budget − Prognose">
-                                    Rest {fmtEur(rest)}
-                                  </span>
-                                )}
+                              <span className="flex items-center gap-4 text-xs shrink-0">
+                                <span className="w-24 text-right text-gray-500">{fmtH(agg.istHours)}</span>
+                                <span className="w-28 text-right text-gray-500">{fmtEur(agg.istEuros)}</span>
+                                <span className="w-24 text-right text-gray-500">{fmtH(agg.hours)}</span>
+                                <span className="w-28 text-right text-gray-700 font-medium">{fmtEur(agg.euros)}</span>
+                                <span className={`w-32 text-right ${rest < -0.01 ? 'text-red-600' : 'text-gray-400'}`}
+                                  title="Posten-Budget − Prognose">
+                                  {pos ? fmtEur(rest) : '—'}
+                                </span>
                               </span>
                             </summary>
                             <div className="px-4 pb-2.5 pl-9 space-y-0.5">
-                              {[...agg.members.values()].filter((m) => m.hours > 0.001).map((m) => (
+                              {[...agg.members.values()].filter((m) => m.hours > 0.001 || m.istHours > 0.001).map((m) => (
                                 <div key={m.name} className="flex items-center justify-between text-[11px] text-gray-500">
-                                  <span>{m.name}</span>
-                                  <span className="flex items-center gap-4">
-                                    <span>{fmtH(m.hours)}</span>
+                                  <span className="truncate">{m.name}</span>
+                                  <span className="flex items-center gap-4 shrink-0">
+                                    <span className="w-24 text-right">{fmtH(m.istHours)}</span>
+                                    <span className="w-28 text-right">{fmtEur(m.istEuros)}</span>
+                                    <span className="w-24 text-right">{fmtH(m.hours)}</span>
                                     <span className="w-28 text-right">{fmtEur(m.euros)}</span>
-                                    {pos && <span className="w-32" />}
+                                    <span className="w-32" />
                                   </span>
                                 </div>
                               ))}
@@ -1384,23 +1396,46 @@ export default function ProjectDetailPage() {
           const rest = project.total_budget_euros - totalInvoiced
           const lastInv = [...invoiceList].sort((a, b) => a.year !== b.year ? b.year - a.year : b.month - a.month)[0]
           const fmt = (n: number) => n.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          // Last month's amount across ALL its invoices (position mode has one per line item).
-          const lastMonthAmount = lastInv
+          const posLabel = (id: number) => {
+            const p = posById.get(id)
+            return p ? `${p.position_number}${p.description ? ` – ${p.description}` : ''}` : `#${id}`
+          }
+          const lastMonthInvoices = lastInv
             ? invoiceList.filter((i) => i.year === lastInv.year && i.month === lastInv.month)
-                .reduce((s, i) => s + i.total_amount_euros, 0)
-            : 0
+            : []
+          const lastMonthAmount = lastMonthInvoices.reduce((s, i) => s + i.total_amount_euros, 0)
+          // Invoiced totals per line item (position mode): billing_position_id → {hours, euros}.
+          const invByPosition = new Map<number, { hours: number; euros: number }>()
+          for (const i of invoiceList) {
+            const e = invByPosition.get(i.billing_position_id) ?? { hours: 0, euros: 0 }
+            e.hours += i.total_hours; e.euros += i.total_amount_euros
+            invByPosition.set(i.billing_position_id, e)
+          }
 
-          const emailText = lastInv ? [
-            `hier der Projektstatus zu Ende ${MONTH_FULL[lastInv.month - 1]} ${lastInv.year}:`,
+          const emailLines = [
+            `hier der Projektstatus zu Ende ${lastInv ? MONTH_FULL[lastInv.month - 1] : ''} ${lastInv?.year ?? ''}:`,
             '',
             `Projekt ${project.project_number}:`,
             `Gesamt        | Summen`,
             `Budget        | ${fmt(project.total_budget_euros)}`,
             `Abgerechnet   | ${fmt(totalInvoiced)}`,
             `Rest          | ${fmt(rest)}`,
-            '',
-            `Der Rechnungsbetrag für ${MONTH_FULL[lastInv.month - 1]} lautet: ${fmt(lastMonthAmount)}`,
-          ].join('\n') : ''
+          ]
+          if (positionMode && invByPosition.size > 0) {
+            emailLines.push('', 'Abgerechnet nach Posten:')
+            for (const [pid, agg] of [...invByPosition.entries()].sort((a, b) => a[0] - b[0])) {
+              emailLines.push(`  ${posLabel(pid)}: ${fmt(agg.euros)}`)
+            }
+          }
+          if (lastInv) {
+            emailLines.push('', `Der Rechnungsbetrag für ${MONTH_FULL[lastInv.month - 1]} lautet: ${fmt(lastMonthAmount)}`)
+            if (positionMode && lastMonthInvoices.length > 1) {
+              for (const i of [...lastMonthInvoices].sort((a, b) => a.billing_position_id - b.billing_position_id)) {
+                emailLines.push(`  ${posLabel(i.billing_position_id)}: ${fmt(i.total_amount_euros)}`)
+              }
+            }
+          }
+          const emailText = lastInv ? emailLines.join('\n') : ''
 
           return (
             <div className="space-y-4">
@@ -1424,6 +1459,30 @@ export default function ProjectDetailPage() {
                 </div>
               </div>
 
+              {/* Per-position invoiced breakdown (§21 WP6) */}
+              {positionMode && billingPositions.length > 0 && (
+                <div className="bg-white rounded-lg border border-gray-200 p-4">
+                  <p className="text-xs font-medium text-gray-500 mb-2">Abgerechnet nach Posten</p>
+                  <div className="space-y-1.5">
+                    {billingPositions.map((bp) => {
+                      const agg = invByPosition.get(bp.id) ?? { hours: 0, euros: 0 }
+                      const posRest = bp.budget_euros - agg.euros
+                      return (
+                        <div key={bp.id} className="flex items-center justify-between text-sm">
+                          <span className="text-gray-600 truncate">{bp.position_number}{bp.description ? ` – ${bp.description}` : ''}</span>
+                          <span className="flex items-center gap-4 shrink-0">
+                            <span className="text-gray-400 text-xs w-20 text-right">{agg.hours.toFixed(1)} h</span>
+                            <span className="text-blue-700 w-28 text-right">{fmt(agg.euros)}</span>
+                            <span className="text-gray-400 text-xs w-24 text-right" title="Posten-Budget − abgerechnet">von {fmt(bp.budget_euros)}</span>
+                            <span className={`text-xs w-28 text-right ${posRest < -0.01 ? 'text-red-600' : 'text-gray-400'}`}>Rest {fmt(posRest)}</span>
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-between items-center">
                 <h3 className="font-medium text-gray-700">Monatliche Abrechnungen</h3>
                 <button onClick={() => { setCloseForm({ ...closeForm, billing_position_id: billingPositions[0]?.id ?? 0 }); setShowCloseModal(true) }}
@@ -1436,18 +1495,23 @@ export default function ProjectDetailPage() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      {['Monat', 'Stunden', 'Betrag', 'Status', 'Aktionen'].map((h) => (
+                      {(positionMode ? ['Monat', 'Posten', 'Stunden', 'Betrag', 'Status', 'Aktionen'] : ['Monat', 'Stunden', 'Betrag', 'Status', 'Aktionen']).map((h) => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {invoiceList.length === 0 && (
-                      <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Abrechnungen.</td></tr>
+                      <tr><td colSpan={positionMode ? 6 : 5} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Abrechnungen.</td></tr>
                     )}
-                    {invoiceList.map((inv) => (
+                    {[...invoiceList]
+                      .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month !== b.month ? a.month - b.month : a.billing_position_id - b.billing_position_id)
+                      .map((inv) => (
                       <tr key={inv.id}>
                         <td className="px-4 py-3 text-sm font-medium text-gray-700">{MONTH_NAMES[inv.month]} {inv.year}</td>
+                        {positionMode && (
+                          <td className="px-4 py-3 text-sm text-gray-600">{posLabel(inv.billing_position_id)}</td>
+                        )}
                         <td className="px-4 py-3 text-sm text-gray-600">{inv.total_hours.toFixed(1)} h</td>
                         <td className="px-4 py-3 text-sm text-gray-600">{inv.total_amount_euros.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}</td>
                         <td className="px-4 py-3 text-sm">
@@ -1473,7 +1537,7 @@ export default function ProjectDetailPage() {
                     ))}
                     {invoiceList.length > 0 && (
                       <tr className="bg-gray-50 font-semibold text-sm border-t-2 border-gray-200">
-                        <td className="px-4 py-2.5 text-gray-700">Gesamt</td>
+                        <td className="px-4 py-2.5 text-gray-700" colSpan={positionMode ? 2 : 1}>Gesamt</td>
                         <td className="px-4 py-2.5 text-gray-700">{totalHoursInvoiced.toFixed(1)} h</td>
                         <td className="px-4 py-2.5 text-gray-700">{fmt(totalInvoiced)}</td>
                         <td colSpan={2} />

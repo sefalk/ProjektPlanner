@@ -66,6 +66,14 @@ function PositionMappingsSection() {
     queryFn: () => positionMappings.list(projectId),
     enabled: projectId > 0,
   })
+  const { data: bookingLevels = [] } = useQuery({
+    queryKey: ['sageLevels', projectId],
+    queryFn: () => projects.sageLevels(projectId),
+    enabled: projectId > 0,
+  })
+  // Suggest levels seen in bookings that aren't mapped yet.
+  const mappedLevels = new Set(mapList.map((m) => m.sage_project_level))
+  const levelSuggestions = bookingLevels.filter((l) => !mappedLevels.has(l))
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['positionMappings', projectId] })
   const create = useMutation({
@@ -123,10 +131,26 @@ function PositionMappingsSection() {
             )}
             <form onSubmit={(e) => { e.preventDefault(); create.mutate() }} className="flex gap-2 items-end flex-wrap">
               <div className="flex-1 min-w-[10rem]">
-                <label className="block text-xs text-gray-500 mb-1">Projektebene 1 (Sage)</label>
-                <input required placeholder="z.B. Development"
+                <label className="block text-xs text-gray-500 mb-1">
+                  Projektebene 1 (Sage)
+                  {levelSuggestions.length > 0 && <span className="ml-1 text-gray-400">— {levelSuggestions.length} aus Buchungen</span>}
+                </label>
+                <input required placeholder="z.B. Development" list={`levels-${projectId}`}
                   className="w-full border border-gray-300 rounded px-2.5 py-1.5 text-sm"
                   value={level} onChange={(e) => setLevel(e.target.value)} />
+                <datalist id={`levels-${projectId}`}>
+                  {bookingLevels.map((l) => <option key={l} value={l} />)}
+                </datalist>
+                {levelSuggestions.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {levelSuggestions.slice(0, 8).map((l) => (
+                      <button key={l} type="button" onClick={() => setLevel(l)}
+                        className="px-1.5 py-0.5 text-[11px] bg-gray-100 text-gray-600 rounded hover:bg-gray-200">
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex-1 min-w-[10rem]">
                 <label className="block text-xs text-gray-500 mb-1">Posten</label>

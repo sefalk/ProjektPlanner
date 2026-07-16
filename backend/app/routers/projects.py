@@ -201,6 +201,20 @@ def delete_project(project_id: int, session: SessionDep):
     session.commit()
 
 
+@router.get("/{project_id}/sage-levels", response_model=list[str])
+def list_sage_levels(project_id: int, session: SessionDep):
+    """Distinct Sage 'Projektebene 1' values seen in this project's bookings — used to
+    suggest level values when mapping levels to line items (§21 P6). Project-scoped."""
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found.")
+    rows = session.exec(
+        select(TimeBooking.sage_project_level)
+        .where(TimeBooking.project_id == project_id)
+        .distinct()
+    ).all()
+    return sorted({lvl for lvl in rows if lvl})
+
+
 # ---------------------------------------------------------------------------
 # Billing positions
 # ---------------------------------------------------------------------------

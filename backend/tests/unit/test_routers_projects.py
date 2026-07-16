@@ -254,6 +254,26 @@ def test_simple_mode_no_assignment_needed(client):
     assert r.status_code == 201
 
 
+def test_sage_levels_from_bookings(client, session):
+    # Distinct, project-scoped Sage levels from bookings (finding 2026-07-16, WP5 UX).
+    from datetime import date as _date, datetime as _dt
+    from app.models.timebooking import ImportBatch, TimeBooking
+
+    p = client.post("/projects", json=_project()).json()
+    person = client.post("/persons", json=_person_payload()).json()
+    batch = ImportBatch(project_id=p["id"], imported_at=_dt(2026, 1, 31),
+                        last_booking_date=_date(2026, 1, 15))
+    session.add(batch); session.flush()
+    for i, level in enumerate(["Development", "Development", "Test", ""]):
+        session.add(TimeBooking(
+            booking_date=_date(2026, 1, 10), person_id=person["id"], project_id=p["id"],
+            import_batch_id=batch.id, sage_project_name="X", sage_project_level=level, net_hours=1.0 + i))
+    session.commit()
+
+    levels = client.get(f"/projects/{p['id']}/sage-levels").json()
+    assert levels == ["Development", "Test"]  # distinct, sorted, blanks dropped
+
+
 def test_list_memberships_project_not_found(client):
     assert client.get("/projects/9999/memberships").status_code == 404
 

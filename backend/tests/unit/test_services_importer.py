@@ -372,6 +372,31 @@ def test_import_position_mode_missing_mapping_raises(session):
     assert (proj.id, "Development") in exc.value.pairs
 
 
+def test_position_mapping_is_project_scoped(session):
+    # Two projects with an identically-named level ("Development") must resolve to their
+    # OWN position — no cross-project mixing (finding 2026-07-16).
+    from app.services.importer import resolve_position_mappings
+
+    proj_a = _make_project(session, "P00001")
+    proj_a.position_mode = True
+    proj_b = _make_project(session, "P00002")
+    proj_b.position_mode = True
+    bp_a = _priced_position(session, proj_a.id, number="A-DEV")
+    bp_b = _priced_position(session, proj_b.id, number="B-DEV")
+    _position_mapping(session, proj_a.id, "Development", bp_a.id)
+    _position_mapping(session, proj_b.id, "Development", bp_b.id)
+    session.commit()
+
+    result = resolve_position_mappings(
+        [(proj_a.id, "Development"), (proj_b.id, "Development")],
+        {proj_a.id, proj_b.id},
+        session,
+    )
+    assert result[(proj_a.id, "Development")] == bp_a.id
+    assert result[(proj_b.id, "Development")] == bp_b.id
+    assert bp_a.id != bp_b.id
+
+
 def test_import_simple_mode_leaves_position_null(session):
     # Unpriced position → simple mode → no mapping needed, booking not linked.
     _make_person(session)

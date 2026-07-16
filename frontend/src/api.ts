@@ -305,6 +305,7 @@ export const projects = {
   ) => req<ProjectMembership>('PUT', `/projects/${projectId}/memberships/${membershipId}`, d),
   deleteMembership: (projectId: number, membershipId: number) =>
     req<void>('DELETE', `/projects/${projectId}/memberships/${membershipId}`),
+  sageLevels: (id: number) => req<string[]>('GET', `/projects/${id}/sage-levels`),
   billingPositions: (id: number) => req<BillingPosition[]>('GET', `/projects/${id}/billing-positions`),
   billingPositionsBudgetState: (id: number) =>
     req<BillingPositionBudgetState>('GET', `/projects/${id}/billing-positions/budget-state`),
