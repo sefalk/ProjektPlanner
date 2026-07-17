@@ -151,27 +151,38 @@ def test_clear_target_budget_unlocks(client):
     assert r.json()["target_budget_euros"] is None
 
 
+def _budget_id(client, proj_id, ms_id, person_id) -> int:
+    detail = client.get(f"/projects/{proj_id}/milestones/detail").json()
+    return next(
+        p["budget_id"]
+        for m in detail if m["milestone"]["id"] == ms_id
+        for p in m["persons"] if p["person_id"] == person_id
+    )
+
+
 def test_hours_lock_toggle(client):
     proj_id, person_id = _setup(client)
     ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
-    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/lock", json={"locked": True})
+    bid = _budget_id(client, proj_id, ms["id"], person_id)
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{bid}/lock", json={"locked": True})
     assert r.status_code == 200
     assert r.json()["is_manual_override"] is True
-    r2 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/lock", json={"locked": False})
+    r2 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{bid}/lock", json={"locked": False})
     assert r2.json()["is_manual_override"] is False
 
 
 def test_estimated_absence_override_endpoint(client):
     proj_id, person_id = _setup(client)
     ms = client.post(f"/projects/{proj_id}/milestones/initialize").json()[0]
-    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/estimated-absence", json={"days": 4.0})
+    bid = _budget_id(client, proj_id, ms["id"], person_id)
+    r = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{bid}/estimated-absence", json={"days": 4.0})
     assert r.status_code == 200
     assert r.json()["estimated_absence_days_override"] == 4.0
     # clear
-    r2 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/estimated-absence", json={"days": None})
+    r2 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{bid}/estimated-absence", json={"days": None})
     assert r2.json()["estimated_absence_days_override"] is None
     # negative → 422
-    r3 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/persons/{person_id}/estimated-absence", json={"days": -2.0})
+    r3 = client.put(f"/projects/{proj_id}/milestones/{ms['id']}/budgets/{bid}/estimated-absence", json={"days": -2.0})
     assert r3.status_code == 422
 
 

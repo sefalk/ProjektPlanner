@@ -1141,23 +1141,21 @@ def set_milestone_planning_lock(milestone_id: int, locked: bool, session: Sessio
 
 
 def set_budget_hours_lock(
-    milestone_id: int, person_id: int, locked: bool, session: Session
+    milestone_id: int, budget_id: int, locked: bool, session: Session
 ) -> MilestonePersonBudget:
-    """Lock/unlock a person's hours for a month. Locked rows are preserved by
-    resync/rebalance; unlocking keeps the current value until the next recompute."""
+    """Lock/unlock one budget row's hours for a month. Locked rows are preserved by
+    resync/rebalance; unlocking keeps the current value until the next recompute.
+
+    Keyed by budget_id (WP6 Nacharbeit) so a multi-assigned person's positions are
+    addressed individually."""
     milestone = session.get(Milestone, milestone_id)
     if not milestone:
         raise MilestoneNotFound(f"Milestone {milestone_id} not found.")
     if milestone.is_locked:
         raise MilestoneLocked(f"Milestone {milestone_id} is locked.")
-    budget = session.exec(
-        select(MilestonePersonBudget).where(
-            MilestonePersonBudget.milestone_id == milestone_id,
-            MilestonePersonBudget.person_id == person_id,
-        )
-    ).first()
-    if not budget:
-        raise BudgetNotFound(f"No budget for person {person_id} in milestone {milestone_id}.")
+    budget = session.get(MilestonePersonBudget, budget_id)
+    if not budget or budget.milestone_id != milestone_id:
+        raise BudgetNotFound(f"Budget {budget_id} not found in milestone {milestone_id}.")
     budget.is_manual_override = locked
     session.add(budget)
     session.commit()
@@ -1166,11 +1164,14 @@ def set_budget_hours_lock(
 
 
 def set_estimated_absence(
-    milestone_id: int, person_id: int, days: float | None, session: Session
+    milestone_id: int, budget_id: int, days: float | None, session: Session
 ) -> MilestonePersonBudget:
-    """Set (or clear, days=None) the manual estimated-absence override for a person/month.
+    """Set (or clear, days=None) the manual estimated-absence override for one budget row.
     Affects the availability calc. Rejected on locked (closed) months.
-    Raises ValueError on negative days."""
+    Raises ValueError on negative days.
+
+    Keyed by budget_id (WP6 Nacharbeit) so a multi-assigned person's positions are
+    addressed individually."""
     milestone = session.get(Milestone, milestone_id)
     if not milestone:
         raise MilestoneNotFound(f"Milestone {milestone_id} not found.")
@@ -1178,14 +1179,9 @@ def set_estimated_absence(
         raise MilestoneLocked(f"Milestone {milestone_id} is locked.")
     if days is not None and days < 0:
         raise ValueError("Estimated absence days cannot be negative.")
-    budget = session.exec(
-        select(MilestonePersonBudget).where(
-            MilestonePersonBudget.milestone_id == milestone_id,
-            MilestonePersonBudget.person_id == person_id,
-        )
-    ).first()
-    if not budget:
-        raise BudgetNotFound(f"No budget for person {person_id} in milestone {milestone_id}.")
+    budget = session.get(MilestonePersonBudget, budget_id)
+    if not budget or budget.milestone_id != milestone_id:
+        raise BudgetNotFound(f"Budget {budget_id} not found in milestone {milestone_id}.")
     budget.estimated_absence_days_override = days
     session.add(budget)
     session.commit()

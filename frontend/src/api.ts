@@ -339,12 +339,12 @@ export const projects = {
     req<MilestoneTargetResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/target-budget`, { target_euros: targetEuros }),
   clearMilestoneTargetBudget: (projectId: number, milestoneId: number) =>
     req<Milestone>('DELETE', `/projects/${projectId}/milestones/${milestoneId}/target-budget`),
-  setHoursLock: (projectId: number, milestoneId: number, personId: number, locked: boolean) =>
-    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/lock`, { locked }),
-  setEstimatedAbsence: (projectId: number, milestoneId: number, personId: number, days: number | null) =>
-    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/estimated-absence`, { days }),
-  updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number, confirm?: boolean) =>
-    req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
+  setHoursLock: (projectId: number, milestoneId: number, budgetId: number, locked: boolean) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/budgets/${budgetId}/lock`, { locked }),
+  setEstimatedAbsence: (projectId: number, milestoneId: number, budgetId: number, days: number | null) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/budgets/${budgetId}/estimated-absence`, { days }),
+  updatePersonBudget: (projectId: number, milestoneId: number, budgetId: number, hours: number, confirm?: boolean) =>
+    req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/budgets/${budgetId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
   recommendations: (id: number) => req<UtilizationRecommendation[]>('GET', `/projects/${id}/milestones/recommendations`),
   recalcPreview: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/milestones/recalc-preview`),
   setPlanningLock: (projectId: number, milestoneId: number, locked: boolean) =>
