@@ -106,6 +106,8 @@ export interface BillingPosition {
   budget_euros: number;
   /** Hourly rate of the line item (Projektposten). 0 = no rate (simple invoicing position). */
   billing_rate_per_hour: number;
+  /** WP3: false = hard cap (never planned past budget); true = cheap position, may exceed budget. */
+  overrunnable: boolean;
 }
 
 /** Aggregate €-budget state across a project's line items (doc 21 §P3). */
@@ -177,6 +179,7 @@ export interface MilestonePersonDetail {
   booked_hours: number;
   is_manual_override: boolean;
   estimated_absence_days_override: number | null;
+  cap_reason?: string | null;
 }
 
 export interface MilestoneDetail {
@@ -190,6 +193,7 @@ export interface BudgetSuggestion {
   person_id: number;
   current_hours: number;
   suggested_hours: number;
+  billing_position_id: number | null;
 }
 
 export interface MilestoneSuggestion {
@@ -314,12 +318,12 @@ export const projects = {
     req<BillingPositionBudgetState>('GET', `/projects/${id}/billing-positions/budget-state`),
   addBillingPosition: (
     id: number,
-    d: { position_number: string; description?: string; budget_euros?: number | null; billing_rate_per_hour?: number },
+    d: { position_number: string; description?: string; budget_euros?: number | null; billing_rate_per_hour?: number; overrunnable?: boolean },
   ) => req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
   updateBillingPosition: (
     projectId: number,
     bpId: number,
-    d: { position_number: string; description?: string; budget_euros: number; billing_rate_per_hour?: number },
+    d: { position_number: string; description?: string; budget_euros: number; billing_rate_per_hour?: number; overrunnable?: boolean },
   ) => req<BillingPosition>('PUT', `/projects/${projectId}/billing-positions/${bpId}`, d),
   deleteBillingPosition: (projectId: number, bpId: number) =>
     req<void>('DELETE', `/projects/${projectId}/billing-positions/${bpId}`),

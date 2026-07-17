@@ -72,6 +72,8 @@ class MilestonePersonDetailOut(SQLModel):
     booked_hours: float = 0.0
     is_manual_override: bool = False
     estimated_absence_days_override: float | None = None
+    # WP6 diagnostics: why this row is planned below its available capacity (else None).
+    cap_reason: str | None = None
 
 
 class MilestoneDetailOut(SQLModel):
@@ -304,6 +306,22 @@ def list_milestones_detail(project_id: int, session: SessionDep):
             stats = _person_available_hours(person, membership, project, ms.year, ms.month, session)
             pattern = _parse_work_week_pattern(person.work_week_pattern) if person.work_week_pattern else None
             days_per_week = float(sum(1 for h in pattern if h > 0)) if pattern else 5.0
+            # WP6: a non-override row planned below its available capacity was capped by a
+            # budget (capacity itself = available_hours). Name which budget bound it.
+            cap_reason: str | None = None
+            if not ms.is_locked and not budget.is_manual_override and stats.hours - budget.current_hours > 0.05:
+                if project.position_mode and membership.billing_position_id is not None:
+                    pos = positions_by_id.get(membership.billing_position_id)
+                    posnum = pos.position_number if pos else "?"
+                    cap_reason = (
+                        f"Nur {budget.current_hours:.1f} von {stats.hours:.1f} h verplant — "
+                        f"Budget von Posten '{posnum}' ausgeschöpft."
+                    )
+                else:
+                    cap_reason = (
+                        f"Nur {budget.current_hours:.1f} von {stats.hours:.1f} h verplant — "
+                        f"Projektbudget ausgeschöpft."
+                    )
             persons_out.append(MilestonePersonDetailOut(
                 person_id=person.id,
                 person_name=person.name,
@@ -324,6 +342,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 booked_hours=booked_map.get((person.id, budget.billing_position_id), 0.0),
                 is_manual_override=budget.is_manual_override,
                 estimated_absence_days_override=budget.estimated_absence_days_override,
+                cap_reason=cap_reason,
             ))
 
         # Milestone-level warnings (§8.1 / V11)

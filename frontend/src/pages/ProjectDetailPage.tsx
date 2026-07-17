@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
+import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy, AlertTriangle } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason, type BillingPosition,
@@ -273,6 +273,7 @@ interface PositionFormValue {
   description: string
   billing_rate_per_hour: number
   budget_euros: number
+  overrunnable: boolean
 }
 
 /** Inline form used both for adding and editing a line item. Shows the derived
@@ -313,6 +314,12 @@ function PositionFields({
           value={value.budget_euros || ''}
           onChange={(e) => onChange({ ...value, budget_euros: parseFloat(e.target.value) || 0 })} />
       </div>
+      <label className="flex items-center gap-1.5 text-xs text-gray-600 pb-1.5" title="Günstiger Posten: darf bei der Neuberechnung über sein Budget hinaus geplant werden (teure Posten bleiben hart begrenzt).">
+        <input type="checkbox"
+          checked={value.overrunnable}
+          onChange={(e) => onChange({ ...value, overrunnable: e.target.checked })} />
+        überschreitbar
+      </label>
     </div>
   )
 }
@@ -377,7 +384,7 @@ function BillingPositionsSection({
   const EPS = 1e-6
   const isOver = allocated > totalBudget + EPS
   const isComplete = Math.abs(open) <= EPS
-  const startAdd = () => setAdding({ position_number: '', description: '', billing_rate_per_hour: 0, budget_euros: Math.max(0, open) })
+  const startAdd = () => setAdding({ position_number: '', description: '', billing_rate_per_hour: 0, budget_euros: Math.max(0, open), overrunnable: false })
 
   return (
     <div className="mt-8 pt-6 border-t border-gray-200">
@@ -427,6 +434,12 @@ function BillingPositionsSection({
                 <div className="min-w-0">
                   <span className="font-medium text-gray-700">{bp.position_number}</span>
                   {bp.description && <><span className="mx-1.5 text-gray-300">·</span><span className="text-gray-600">{bp.description}</span></>}
+                  {bp.overrunnable && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700"
+                      title="Überschreitbar: darf bei der Neuberechnung über sein Budget hinaus geplant werden.">
+                      überschreitbar
+                    </span>
+                  )}
                   <span className="ml-2 text-xs text-gray-400">
                     {EUR2(bp.budget_euros)}
                     {bp.billing_rate_per_hour > 0 && <> · {EUR2(bp.billing_rate_per_hour)}/Std.{hours != null && <> · {hours.toFixed(1)} Std.</>}</>}
@@ -434,7 +447,7 @@ function BillingPositionsSection({
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
-                    onClick={() => { setAdding(null); setErr(null); setEditing({ id: bp.id, value: { position_number: bp.position_number, description: bp.description, billing_rate_per_hour: bp.billing_rate_per_hour, budget_euros: bp.budget_euros } }) }}
+                    onClick={() => { setAdding(null); setErr(null); setEditing({ id: bp.id, value: { position_number: bp.position_number, description: bp.description, billing_rate_per_hour: bp.billing_rate_per_hour, budget_euros: bp.budget_euros, overrunnable: bp.overrunnable } }) }}
                     title="Bearbeiten"
                     className="p-1 text-gray-300 hover:text-blue-500 transition-colors"><Pencil size={13} /></button>
                   <button
@@ -988,7 +1001,8 @@ export default function ProjectDetailPage() {
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       const sug = suggestionByMs.get(ms.id)
                       const rebalDelta = sug ? sug.suggested_total_hours - ms.current_hours : 0
-                      const sugByPid = sug ? new Map(sug.budgets.map((b) => [b.person_id, b.suggested_hours])) : null
+                      // Keyed by budget_id (WP5): a person may have several rows (one per Posten).
+                      const sugByBudget = sug ? new Map(sug.budgets.map((b) => [b.budget_id, b.suggested_hours])) : null
                       const rebalSuggestedEuros = sug ? sug.budgets.reduce((s, b) => s + b.suggested_hours * (rateByPid.get(b.person_id) ?? 0), 0) : 0
                       const rebalDeltaEuros = sug ? rebalSuggestedEuros - plannedEuros : 0
                       const showRebal = sug && !ms.is_locked && !ms.is_planning_locked && Math.abs(rebalDelta) > 0.1
@@ -1149,7 +1163,7 @@ export default function ProjectDetailPage() {
                                     const editable = ms.status === 'open' && !ms.is_locked
                                     const absOverride = p.estimated_absence_days_override
                                     // Per-member rebalance hint (share of the "Neu berechnen" preview for this person).
-                                    const pSug = sugByPid ? sugByPid.get(p.person_id) : undefined
+                                    const pSug = sugByBudget ? sugByBudget.get(p.budget_id) : undefined
                                     const pRebalDelta = pSug != null ? pSug - cur : 0
                                     const showPRebal = showRebal && pSug != null && Math.abs(pRebalDelta) > 0.1
                                     // PWS gauge: target vs effective (Ist) as vertical markers, delta as a segment.
@@ -1158,15 +1172,26 @@ export default function ProjectDetailPage() {
                                     const iPos = effPws !== null ? Math.min(100, effPws / pwsMax * 100) : null
                                     const deltaColor = deltaPws === null ? '' : deltaPws > 0.05 ? 'text-orange-600' : deltaPws < -0.05 ? 'text-blue-600' : 'text-green-600'
                                     return (
-                                    <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
+                                    <tr key={p.budget_id} className="text-sm border-b border-slate-100 last:border-0">
                                       <td className="pl-12 pr-4 py-2 text-gray-700 whitespace-nowrap">
                                         {p.person_name}
+                                        {p.billing_position_id != null && (
+                                          <span className="ml-1.5 text-[11px] text-gray-400">
+                                            ({posById.get(p.billing_position_id)?.position_number ?? '?'})
+                                          </span>
+                                        )}
                                       </td>
                                       <td className="px-4 py-2 text-gray-400 whitespace-nowrap">
                                         {avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}
                                         {showPRebal && (
                                           <div className="text-[11px] text-indigo-600" title="Vorschlag aus „Neu berechnen“ für diese Person.">
                                             → {fmtH(pSug!)} ({pRebalDelta > 0 ? '+' : ''}{pRebalDelta.toFixed(2)})
+                                          </div>
+                                        )}
+                                        {p.cap_reason && (
+                                          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-600 whitespace-normal max-w-[12rem]" title={p.cap_reason}>
+                                            <AlertTriangle size={11} className="shrink-0" />
+                                            <span>{p.cap_reason}</span>
                                           </div>
                                         )}
                                       </td>
