@@ -226,7 +226,7 @@ function ContingentForm({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-type Tab = 'absences' | 'contingents' | 'projects'
+type Tab = 'absences' | 'projects'
 
 // ─── Membership form ──────────────────────────────────────────────────────────
 
@@ -421,7 +421,6 @@ export default function PersonDetailPage() {
         <div className="flex gap-0 mt-4 border-b border-gray-200 -mb-px">
           {([
             { id: 'absences' as Tab, label: 'Abwesenheiten' },
-            { id: 'contingents' as Tab, label: 'Urlaubskontingente' },
             { id: 'projects' as Tab, label: 'Projekte' },
           ]).map((t) => (
             <button key={t.id} onClick={() => { setTab(t.id); setError(null) }}
@@ -496,58 +495,6 @@ export default function PersonDetailPage() {
           </div>
         )}
 
-        {/* ── Vacation contingents ── */}
-        {tab === 'contingents' && (
-          <div>
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-medium text-gray-700">Urlaubskontingente</h3>
-              <button onClick={() => setShowAddContingent(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
-                <Plus size={14} /> Neues Kontingent
-              </button>
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    {['Jahr', 'Urlaubstage', ''].map((h) => (
-                      <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {sortedContingents.length === 0 && (
-                    <tr><td colSpan={3} className="px-4 py-8 text-center text-sm text-gray-400">Noch keine Kontingente eingetragen.</td></tr>
-                  )}
-                  {sortedContingents.map((c) => (
-                    <tr key={c.id}>
-                      <td className="px-4 py-3 text-sm font-medium text-gray-700">{c.year}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{c.total_days} Tage</td>
-                      <td className="px-4 py-3 text-sm">
-                        <div className="flex items-center gap-2">
-                          <button
-                            aria-label={`Kontingent ${c.year} bearbeiten`}
-                            onClick={() => setEditingContingent(c)}
-                            className="text-gray-400 hover:text-blue-500 transition-colors"
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            aria-label={`Kontingent ${c.year} löschen`}
-                            onClick={() => setConfirmDeleteContingent(c)}
-                            className="text-gray-400 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
         {/* ── Projects (memberships) ── */}
         {tab === 'projects' && (
           <div>
@@ -600,14 +547,52 @@ export default function PersonDetailPage() {
         )}
       </div>
 
-      {/* Edit person modal */}
+      {/* Person settings modal (person fields + vacation contingents) */}
       {showEdit && (
-        <Modal title="Person bearbeiten" onClose={() => { setShowEdit(false); setError(null) }}>
+        <Modal title="Personeneinstellungen" onClose={() => { setShowEdit(false); setEditingContingent(null); setShowAddContingent(false); setError(null) }}>
           <EditPersonForm
             initial={person}
             onSave={(d) => updatePerson.mutate(d)}
             onCancel={() => { setShowEdit(false); setError(null) }}
           />
+
+          {/* Vacation contingents — moved here from the removed tab */}
+          <div className="mt-5 pt-4 border-t border-gray-200">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold text-gray-700">Urlaubskontingente</h4>
+              {!showAddContingent && !editingContingent && (
+                <button onClick={() => setShowAddContingent(true)}
+                  className="flex items-center gap-1 text-xs text-blue-600 hover:underline">
+                  <Plus size={12} /> Kontingent
+                </button>
+              )}
+            </div>
+
+            {(showAddContingent || editingContingent) ? (
+              <ContingentForm
+                initial={editingContingent ?? undefined}
+                onSave={(d) => editingContingent
+                  ? updateContingent.mutate({ id: editingContingent.id, d })
+                  : addContingent.mutate(d)}
+                onCancel={() => { setShowAddContingent(false); setEditingContingent(null); setError(null) }}
+              />
+            ) : (
+              <div className="space-y-1">
+                {sortedContingents.length === 0 && (
+                  <p className="text-xs text-gray-400">Noch keine Kontingente eingetragen.</p>
+                )}
+                {sortedContingents.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between text-sm border border-gray-100 rounded px-2 py-1">
+                    <span className="text-gray-700"><span className="font-medium">{c.year}</span> · {c.total_days} Tage</span>
+                    <span className="flex items-center gap-2">
+                      <button aria-label={`Kontingent ${c.year} bearbeiten`} onClick={() => { setEditingContingent(c); setError(null) }} className="text-gray-400 hover:text-blue-500"><Pencil size={13} /></button>
+                      <button aria-label={`Kontingent ${c.year} löschen`} onClick={() => setConfirmDeleteContingent(c)} className="text-gray-400 hover:text-red-500"><Trash2 size={13} /></button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </Modal>
       )}
 
@@ -628,27 +613,6 @@ export default function PersonDetailPage() {
             initial={editingAbsence}
             onSave={(d) => updateAbsence.mutate(d)}
             onCancel={() => { setEditingAbsence(null); setError(null) }}
-          />
-        </Modal>
-      )}
-
-      {/* Add contingent modal */}
-      {showAddContingent && (
-        <Modal title="Urlaubskontingent" onClose={() => { setShowAddContingent(false); setError(null) }}>
-          <ContingentForm
-            onSave={(d) => addContingent.mutate(d)}
-            onCancel={() => { setShowAddContingent(false); setError(null) }}
-          />
-        </Modal>
-      )}
-
-      {/* Edit contingent modal */}
-      {editingContingent && (
-        <Modal title="Kontingent bearbeiten" onClose={() => { setEditingContingent(null); setError(null) }}>
-          <ContingentForm
-            initial={editingContingent}
-            onSave={(d) => updateContingent.mutate({ id: editingContingent.id, d })}
-            onCancel={() => { setEditingContingent(null); setError(null) }}
           />
         </Modal>
       )}
