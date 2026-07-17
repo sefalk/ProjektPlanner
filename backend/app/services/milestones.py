@@ -594,6 +594,12 @@ def distribute_over_positions(
             continue
         rate = pos.billing_rate_per_hour
         rates = {ak: rate for ak in pos_keys}
+        if pos.overrunnable:
+            # Cheap position (doc 23 WP3): no budget cap → fund to full capacity, so it
+            # can absorb the hours a hard (expensive) position cannot. The overrun itself
+            # is surfaced separately (WP6 diagnostics / Aufwand-nach-Posten panel).
+            plan.update(distribute_budget(sub_avail, rates, priorities, None))
+            continue
         base = _remaining_position_euro_budget(project_id, pos, exclude_months, session)
         override_cost = sum(
             b.current_hours * rate

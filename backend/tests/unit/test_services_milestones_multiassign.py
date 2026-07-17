@@ -15,7 +15,7 @@ from app.services.milestones import initialize_milestones
 from sqlmodel import select
 
 
-def _setup(session, budget_a: float, budget_b: float):
+def _setup(session, budget_a: float, budget_b: float, b_overrunnable: bool = False):
     """Position-mode project, one person assigned to two positions (20h each)."""
     proj = Project(
         project_number="P09001", name="Multi", start_date=date(2026, 1, 1),
@@ -25,7 +25,10 @@ def _setup(session, budget_a: float, budget_b: float):
     session.add(proj)
     session.flush()
     pos_a = BillingPosition(project_id=proj.id, position_number="A", budget_euros=budget_a, billing_rate_per_hour=100.0)
-    pos_b = BillingPosition(project_id=proj.id, position_number="B", budget_euros=budget_b, billing_rate_per_hour=50.0)
+    pos_b = BillingPosition(
+        project_id=proj.id, position_number="B", budget_euros=budget_b,
+        billing_rate_per_hour=50.0, overrunnable=b_overrunnable,
+    )
     session.add(pos_a)
     session.add(pos_b)
     session.flush()
@@ -78,3 +81,20 @@ def test_positions_capped_independently(session):
     assert row_a.current_hours * pos_a.billing_rate_per_hour <= pos_a.budget_euros + 1e-6
     assert row_a.current_hours < row_b.current_hours
     assert abs(row_a.current_hours - 2.0) < 1e-6  # 200 € / 100 €·h⁻¹
+
+
+def test_overrunnable_position_funds_beyond_budget(session):
+    """WP3: a cheap OVERRUNNABLE position is funded to full capacity even past its budget,
+    while a hard position stays capped. So cheaper hours absorb what the expensive one can't."""
+    # A hard, tiny (2 h cap). B overrunnable with a tiny nominal budget (100 € @ 50/h = 2 h)
+    # but must fund to full capacity regardless.
+    proj, pos_a, pos_b, person = _setup(session, budget_a=200.0, budget_b=100.0, b_overrunnable=True)
+    initialize_milestones(proj.id, session)
+
+    ms, by_pos = _budgets(session, proj.id)
+    row_a, row_b = by_pos[pos_a.id], by_pos[pos_b.id]
+    # A hard-capped at its budget (2 h); B funded far beyond its 2 h nominal budget.
+    assert abs(row_a.current_hours - 2.0) < 1e-6
+    assert row_b.current_hours > 2.0 + 1e-6
+    # B's planned cost exceeds its nominal budget — the allowed overrun.
+    assert row_b.current_hours * pos_b.billing_rate_per_hour > pos_b.budget_euros + 1e-6

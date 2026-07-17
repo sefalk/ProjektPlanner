@@ -46,6 +46,7 @@ class BillingPositionCreate(SQLModel):
     # None → default to the open (unallocated) difference (P3).
     budget_euros: float | None = Field(default=None, ge=0)
     billing_rate_per_hour: float = Field(default=0.0, ge=0)
+    overrunnable: bool = False  # doc 23 WP3: cheap position may exceed its budget
 
 
 class BillingPositionUpdate(SQLModel):
@@ -53,6 +54,7 @@ class BillingPositionUpdate(SQLModel):
     description: str = ""
     budget_euros: float = Field(ge=0)
     billing_rate_per_hour: float = Field(default=0.0, ge=0)
+    overrunnable: bool = False
 
 
 class BillingPositionBudgetState(SQLModel):
@@ -272,6 +274,7 @@ def create_billing_position(project_id: int, body: BillingPositionCreate, sessio
         description=body.description,
         budget_euros=budget,
         billing_rate_per_hour=body.billing_rate_per_hour,
+        overrunnable=body.overrunnable,
     )
     session.add(bp)
     session.commit()
@@ -300,6 +303,7 @@ def update_billing_position(
     bp.description = body.description
     bp.budget_euros = body.budget_euros
     bp.billing_rate_per_hour = body.billing_rate_per_hour
+    bp.overrunnable = body.overrunnable
     session.add(bp)
     session.commit()
     session.refresh(bp)
