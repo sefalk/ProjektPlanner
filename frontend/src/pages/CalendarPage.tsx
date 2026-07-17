@@ -12,6 +12,12 @@ import {
   type CalendarMilestone, type MilestoneSuggestion, type Project,
 } from '../api'
 import PageHeader from '../components/PageHeader'
+import {
+  TYPE_BAR_BG as ABSENCE_BG,
+  TYPE_SHORT as ABSENCE_LABEL,
+  TYPE_LABELS as ABSENCE_NAME,
+  STATUS_LABELS as STATUS_NAME,
+} from '../lib/absenceColors'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -22,30 +28,6 @@ const MONTH_NAMES = [
 const MONTH_SHORT = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
 
 const WEEKDAY_SHORT = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa']
-
-const ABSENCE_BG: Record<string, string> = {
-  vacation: 'bg-blue-200',
-  sick: 'bg-yellow-200',
-  training: 'bg-emerald-200',
-}
-
-const ABSENCE_LABEL: Record<string, string> = {
-  vacation: 'U',
-  sick: 'K',
-  training: 'F',
-}
-
-const ABSENCE_NAME: Record<string, string> = {
-  vacation: 'Urlaub',
-  sick: 'Krank',
-  training: 'Fortbildung',
-}
-
-const STATUS_NAME: Record<string, string> = {
-  planned: 'geplant',
-  confirmed: 'bestätigt',
-  ongoing: 'laufend',
-}
 
 const PROJECT_PALETTE = [
   'bg-slate-300', 'bg-sky-300', 'bg-violet-300', 'bg-rose-300',

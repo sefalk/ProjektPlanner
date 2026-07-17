@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # Holiday API
     holiday_api_url: str = "https://feiertage-api.de/api/"
     holiday_api_fallback_url: str = "https://openholidaysapi.org"
+    # Foreign holidays (non-DE): Nager.Date covers ~all countries incl. Greece.
+    holiday_api_foreign_url: str = "https://date.nager.at/api/v3"
     default_holiday_country: str = "DE"
     default_holiday_state: str = "BY"
 

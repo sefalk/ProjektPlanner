@@ -18,6 +18,11 @@ from app.models.person import Person, PersonAbsence
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
 from app.services.holiday import HolidayFetchError, get_holidays_in_range
+from app.services.holiday_region import (
+    extra_holiday_dates,
+    get_active_extra_keys,
+    resolve_holiday_region,
+)
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -83,6 +88,35 @@ class CalendarResponse(BaseModel):
     holidays: list[HolidayOut]
     persons: list[PersonOut]
     milestones: list[MilestoneOut]
+
+
+# ── Year view (absence calendar) ──────────────────────────────────────────────
+
+class YearHolidayOut(BaseModel):
+    holiday_date: date
+    name: str
+    is_workday: bool
+    country: str
+    state: str
+
+
+class YearPersonOut(BaseModel):
+    id: int
+    name: str
+    default_weekly_hours: float
+    # Effective holiday region for this person (override or inherited global).
+    holiday_country: str
+    holiday_state: str
+    absences: list[AbsenceOut]
+    memberships: list[MembershipOut]
+
+
+class YearCalendarResponse(BaseModel):
+    year: int
+    country: str
+    state: str
+    holidays: list[YearHolidayOut]
+    persons: list[YearPersonOut]
 
 
 # ---------------------------------------------------------------------------
@@ -246,4 +280,147 @@ def get_calendar(
         holidays=holidays,
         persons=persons_out,
         milestones=milestones_out,
+    )
+
+
+@router.get("/year", response_model=YearCalendarResponse)
+def get_calendar_year(
+    session: SessionDep,
+    year: int = Query(..., ge=2000, le=2100),
+    country: str | None = Query(None),
+    state: str | None = Query(None),
+) -> YearCalendarResponse:
+    """Whole-year aggregation for the absence calendar.
+
+    Returns holidays plus every person's absences and memberships that overlap
+    the year. Holidays cover the union of every person's effective region
+    (per-person override or the global default), each tagged with its country/
+    state so the frontend can show and colour them per region. Passing both
+    ``country`` and ``state`` forces a single region (manual region filter).
+    """
+    global_country, global_state = resolve_holiday_region(session)
+    forced = country is not None and state is not None
+
+    start = date(year, 1, 1)
+    end = date(year, 12, 31)
+
+    persons_raw = list(session.exec(select(Person).order_by(Person.name)).all())
+    person_ids = [p.id for p in persons_raw if p.id is not None]
+
+    # Effective region per person + the set of regions we must fetch holidays for.
+    person_region: dict[int, tuple[str, str]] = {}
+    for p in persons_raw:
+        if p.id is not None:
+            person_region[p.id] = resolve_holiday_region(session, p)
+
+    if forced:
+        regions = {(country, state)}
+    else:
+        regions = set(person_region.values()) | {(global_country, global_state)}
+
+    # Holidays for every region (best-effort per region).
+    holidays: list[YearHolidayOut] = []
+    for rc, rs in sorted(regions):
+        try:
+            raw = get_holidays_in_range(start, end, rc, rs, session)
+        except HolidayFetchError:
+            raw = []
+        for h in raw:
+            holidays.append(
+                YearHolidayOut(
+                    holiday_date=h.holiday_date,
+                    name=h.name,
+                    is_workday=h.is_workday,
+                    country=h.country,
+                    state=h.state,
+                )
+            )
+
+    # Inject activated optional local holidays (WP5) for the global region,
+    # skipping dates that region already returned.
+    global_dates = {h.holiday_date for h in holidays if (h.country, h.state) == (global_country, global_state)}
+    if (global_country, global_state) in regions:
+        for name, hdate in extra_holiday_dates(year, get_active_extra_keys(session)):
+            if hdate in global_dates:
+                continue
+            holidays.append(
+                YearHolidayOut(
+                    holiday_date=hdate,
+                    name=name,
+                    is_workday=hdate.weekday() < 5,
+                    country=global_country,
+                    state=global_state,
+                )
+            )
+    holidays.sort(key=lambda h: (h.holiday_date, h.country, h.state))
+
+    # Absences overlapping [start, end]
+    absences_raw = session.exec(
+        select(PersonAbsence).where(
+            PersonAbsence.person_id.in_(person_ids),
+            PersonAbsence.start_date <= end,
+            or_(PersonAbsence.end_date.is_(None), PersonAbsence.end_date >= start),
+        )
+    ).all()
+
+    absences_by_person: dict[int, list[AbsenceOut]] = {pid: [] for pid in person_ids}
+    for a in absences_raw:
+        if a.person_id in absences_by_person and a.id is not None:
+            absences_by_person[a.person_id].append(
+                AbsenceOut(
+                    id=a.id,
+                    start_date=a.start_date,
+                    end_date=a.end_date,
+                    absence_type=a.absence_type.value,
+                    status=a.status.value,
+                )
+            )
+
+    # Memberships overlapping [start, end], joined with Project (for project filter)
+    memberships_raw = session.exec(
+        select(ProjectMembership, Project)
+        .join(Project, ProjectMembership.project_id == Project.id)
+        .where(
+            ProjectMembership.person_id.in_(person_ids),
+            ProjectMembership.from_date <= end,
+            ProjectMembership.to_date >= start,
+        )
+    ).all()
+
+    memberships_by_person: dict[int, list[MembershipOut]] = {pid: [] for pid in person_ids}
+    for m, proj in memberships_raw:
+        if m.person_id in memberships_by_person:
+            memberships_by_person[m.person_id].append(
+                MembershipOut(
+                    project_id=proj.id,  # type: ignore[arg-type]
+                    project_number=proj.project_number,
+                    project_name=proj.name,
+                    program_id=proj.program_id,
+                    from_date=m.from_date,
+                    to_date=m.to_date,
+                    weekly_capacity_hours=m.weekly_capacity_hours,
+                )
+            )
+
+    persons_out = [
+        YearPersonOut(
+            id=p.id,  # type: ignore[arg-type]
+            name=p.name,
+            default_weekly_hours=p.default_weekly_hours,
+            holiday_country=person_region[p.id][0],
+            holiday_state=person_region[p.id][1],
+            absences=absences_by_person.get(p.id, []),  # type: ignore[arg-type]
+            memberships=memberships_by_person.get(p.id, []),  # type: ignore[arg-type]
+        )
+        for p in persons_raw
+        if p.id is not None
+    ]
+
+    resp_country, resp_state = (country, state) if forced else (global_country, global_state)
+    return YearCalendarResponse(
+        year=year,
+        country=resp_country,  # type: ignore[arg-type]
+        state=resp_state,
+        holidays=holidays,
+        persons=persons_out,
     )

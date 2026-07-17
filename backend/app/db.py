@@ -47,6 +47,11 @@ def seed_default_settings() -> None:
         "default_vacation_days": "30",
         "sick_days_per_year": "10",
         "training_days_per_year": "5",
+        # Holiday region for the year calendar (WP5). holiday_extra = CSV of
+        # activated optional local holidays (keys from EXTRA_HOLIDAY_CATALOG).
+        "holiday_country": "DE",
+        "holiday_state": "BY",
+        "holiday_extra": "",
     }
     with Session(engine) as session:
         for key, value in defaults.items():
