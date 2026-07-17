@@ -485,7 +485,9 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
     # Referential action (V11): drop this member's budgets from open milestones that no
     # longer overlap the (possibly shrunk) membership range. Recomputing changed weekly
     # hours into remaining months is the resync path (WP4/WP5), not done here.
-    prune_member_budgets_to_range(project_id, m.person_id, m.from_date, m.to_date, session)
+    prune_member_budgets_to_range(
+        project_id, m.person_id, m.from_date, m.to_date, m.billing_position_id, session
+    )
     session.commit()
     warnings = _membership_overbooking_warnings(m, session)
     return MembershipWithWarnings(

@@ -131,7 +131,7 @@ def test_prune_removes_budgets_outside_new_range(session):
     initialize_milestones(proj.id, session)
 
     # Membership shrinks to February only.
-    prune_member_budgets_to_range(proj.id, a.id, date(2026, 2, 1), date(2026, 2, 28), session)
+    prune_member_budgets_to_range(proj.id, a.id, date(2026, 2, 1), date(2026, 2, 28), None, session)
     session.commit()
 
     ms = _milestones(session, proj.id)
@@ -156,7 +156,7 @@ def test_prune_protects_locked_month(session):
     session.commit()
 
     # New range excludes January, but it is locked → protected.
-    prune_member_budgets_to_range(proj.id, a.id, date(2026, 2, 1), date(2026, 3, 31), session)
+    prune_member_budgets_to_range(proj.id, a.id, date(2026, 2, 1), date(2026, 3, 31), None, session)
     session.commit()
 
     assert len(_budgets(session, jan.id)) == 1
