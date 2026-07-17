@@ -137,3 +137,29 @@ def test_detail_shows_legacy_null_position_budget_row(session):
     detail = list_milestones_detail(proj.id, session)
     jan = next(m for m in detail if m.milestone.month == 1)
     assert any(p.person_id == person.id for p in jan.persons)  # legacy row still shown
+
+
+def test_booked_without_position_attributed_to_primary_row(session):
+    """Regression: bookings without a position (NULL — simple-mode / unmapped import) must
+    still show as Ist. They can't be split across a person's positions, so they go to the
+    person's primary budget row exactly once (total preserved, not doubled, not lost)."""
+    from datetime import date as _date
+
+    from app.models.timebooking import TimeBooking
+    from app.routers.milestones import list_milestones_detail
+
+    proj, pos_a, pos_b, person = _setup(session, budget_a=1_000_000.0, budget_b=1_000_000.0)
+    initialize_milestones(proj.id, session)
+    session.add(TimeBooking(
+        booking_date=_date(2026, 1, 15), person_id=person.id, project_id=proj.id,
+        import_batch_id=1, sage_project_name="X", sage_project_level="Y",
+        billing_position_id=None, net_hours=8.0,
+    ))
+    session.commit()
+
+    detail = list_milestones_detail(proj.id, session)
+    jan = next(m for m in detail if m.milestone.month == 1)
+    mine = [p for p in jan.persons if p.person_id == person.id]
+    assert len(mine) == 2  # one row per position
+    assert abs(sum(p.booked_hours for p in mine) - 8.0) < 1e-6  # total preserved
+    assert sum(1 for p in mine if p.booked_hours > 0) == 1      # attributed to exactly one row
