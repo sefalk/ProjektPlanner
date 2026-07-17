@@ -14,6 +14,10 @@ class AbsenceType(str, Enum):
     vacation = "vacation"
     training = "training"
     sick = "sick"
+    # Geplante Abwesenheit ohne Pauschale/Kontingent (z. B. Elternzeit, Sabbatical).
+    # Reduziert konkret die Verfügbarkeit, fließt aber in keine Richtwert-/Kontingent-
+    # Schätzung ein (die sind typ-selektiv auf vacation/sick/training verdrahtet).
+    other = "other"
 
 
 class AbsenceStatus(str, Enum):

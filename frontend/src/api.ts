@@ -364,7 +364,7 @@ export interface PersonAbsence {
   person_id: number;
   start_date: string;
   end_date: string | null;
-  absence_type: 'vacation' | 'sick' | 'training';
+  absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
   note: string;
 }
@@ -457,7 +457,7 @@ export interface CalendarAbsence {
   id: number;
   start_date: string;
   end_date: string | null;
-  absence_type: 'vacation' | 'sick' | 'training';
+  absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
 }
 
