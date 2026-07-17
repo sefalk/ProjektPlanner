@@ -196,16 +196,16 @@ def clear_target_budget(project_id: int, milestone_id: int, session: SessionDep)
 
 
 @router.put(
-    "/{project_id}/milestones/{milestone_id}/persons/{person_id}/lock",
+    "/{project_id}/milestones/{milestone_id}/budgets/{budget_id}/lock",
     response_model=MilestonePersonBudget,
 )
-def put_hours_lock(project_id: int, milestone_id: int, person_id: int, body: LockUpdate, session: SessionDep):
-    """Lock/unlock a person's Soll-hours for the month (locked = preserved by resync/rebalancing)."""
+def put_hours_lock(project_id: int, milestone_id: int, budget_id: int, body: LockUpdate, session: SessionDep):
+    """Lock/unlock one budget row's Soll-hours for the month (locked = preserved by resync)."""
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        return set_budget_hours_lock(milestone_id, person_id, body.locked, session)
+        return set_budget_hours_lock(milestone_id, budget_id, body.locked, session)
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:
@@ -213,16 +213,16 @@ def put_hours_lock(project_id: int, milestone_id: int, person_id: int, body: Loc
 
 
 @router.put(
-    "/{project_id}/milestones/{milestone_id}/persons/{person_id}/estimated-absence",
+    "/{project_id}/milestones/{milestone_id}/budgets/{budget_id}/estimated-absence",
     response_model=MilestonePersonBudget,
 )
-def put_estimated_absence(project_id: int, milestone_id: int, person_id: int, body: EstimatedAbsenceUpdate, session: SessionDep):
-    """Set (or clear, days=null) the manual estimated-absence override for a person/month."""
+def put_estimated_absence(project_id: int, milestone_id: int, budget_id: int, body: EstimatedAbsenceUpdate, session: SessionDep):
+    """Set (or clear, days=null) the manual estimated-absence override for one budget row."""
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        return set_estimated_absence(milestone_id, person_id, body.days, session)
+        return set_estimated_absence(milestone_id, budget_id, body.days, session)
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:

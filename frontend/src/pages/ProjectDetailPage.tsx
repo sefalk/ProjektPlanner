@@ -568,14 +568,14 @@ export default function ProjectDetailPage() {
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
-  const [editBudget, setEditBudget] = useState<{ milestoneId: number; personId: number; personName: string; currentHours: number } | null>(null)
+  const [editBudget, setEditBudget] = useState<{ milestoneId: number; budgetId: number; personName: string; currentHours: number } | null>(null)
   const [editHours, setEditHours] = useState(0)
   const [budgetWarnings, setBudgetWarnings] = useState<string[]>([])   // manual-edit warnings (V6)
   const [budgetNeedsConfirm, setBudgetNeedsConfirm] = useState(false)  // budget overrun awaiting confirm
   const [editTarget, setEditTarget] = useState<{ milestoneId: number; year: number; month: number } | null>(null)  // edit monthly € target
   const [editTargetAmount, setEditTargetAmount] = useState(0)
   const [targetWarnings, setTargetWarnings] = useState<string[]>([])
-  const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; personId: number; personName: string } | null>(null)  // edit estimated absence
+  const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; budgetId: number; personName: string } | null>(null)  // edit estimated absence
   const [editAbsenceDays, setEditAbsenceDays] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
@@ -626,8 +626,8 @@ export default function ProjectDetailPage() {
   })
 
   const updatePersonBudget = useMutation({
-    mutationFn: ({ milestoneId, personId, hours, confirm }: { milestoneId: number; personId: number; hours: number; confirm?: boolean }) =>
-      projects.updatePersonBudget(projectId, milestoneId, personId, hours, confirm),
+    mutationFn: ({ milestoneId, budgetId, hours, confirm }: { milestoneId: number; budgetId: number; hours: number; confirm?: boolean }) =>
+      projects.updatePersonBudget(projectId, milestoneId, budgetId, hours, confirm),
     onSuccess: () => {
       invalidateMilestones()
       setEditBudget(null)
@@ -666,14 +666,14 @@ export default function ProjectDetailPage() {
     onError: (e: Error) => setError(e.message),
   })
   const toggleHoursLock = useMutation({
-    mutationFn: ({ milestoneId, personId, locked }: { milestoneId: number; personId: number; locked: boolean }) =>
-      projects.setHoursLock(projectId, milestoneId, personId, locked),
+    mutationFn: ({ milestoneId, budgetId, locked }: { milestoneId: number; budgetId: number; locked: boolean }) =>
+      projects.setHoursLock(projectId, milestoneId, budgetId, locked),
     onSuccess: () => { invalidateMilestones(); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const setEstAbsence = useMutation({
-    mutationFn: ({ milestoneId, personId, days }: { milestoneId: number; personId: number; days: number | null }) =>
-      projects.setEstimatedAbsence(projectId, milestoneId, personId, days),
+    mutationFn: ({ milestoneId, budgetId, days }: { milestoneId: number; budgetId: number; days: number | null }) =>
+      projects.setEstimatedAbsence(projectId, milestoneId, budgetId, days),
     onSuccess: () => { invalidateMilestones(); setEditAbsence(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
@@ -1201,7 +1201,7 @@ export default function ProjectDetailPage() {
                                             <span>{fmtH(cur)} <span className="text-[10px] text-gray-400">(Soll)</span></span>
                                             {editable && (
                                               <button
-                                                onClick={() => { setEditBudget({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
+                                                onClick={() => { setEditBudget({ milestoneId: ms.id, budgetId: p.budget_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
                                                 title="Soll-Stunden dieser Person anpassen"
                                                 className="p-0.5 text-gray-400 hover:text-blue-600">
                                                 <Pencil size={11} />
@@ -1209,7 +1209,7 @@ export default function ProjectDetailPage() {
                                             )}
                                             {editable && (
                                               <button
-                                                onClick={() => toggleHoursLock.mutate({ milestoneId: ms.id, personId: p.person_id, locked: !p.is_manual_override })}
+                                                onClick={() => toggleHoursLock.mutate({ milestoneId: ms.id, budgetId: p.budget_id, locked: !p.is_manual_override })}
                                                 title={p.is_manual_override ? 'Stunden gesperrt — bleiben bei Neuberechnung erhalten. Klicken zum Entsperren.' : 'Stunden entsperrt — Neuberechnung darf anpassen. Klicken zum Sperren.'}
                                                 className={`p-0.5 ${p.is_manual_override ? 'text-purple-500 hover:text-purple-700' : 'text-gray-300 hover:text-gray-500'}`}>
                                                 {p.is_manual_override ? <Lock size={11} /> : <Unlock size={11} />}
@@ -1257,7 +1257,7 @@ export default function ProjectDetailPage() {
                                           </span>
                                           {editable && (
                                             <button
-                                              onClick={() => { setEditAbsence({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name }); setEditAbsenceDays(Math.round(estAbs * 10) / 10) }}
+                                              onClick={() => { setEditAbsence({ milestoneId: ms.id, budgetId: p.budget_id, personName: p.person_name }); setEditAbsenceDays(Math.round(estAbs * 10) / 10) }}
                                               title="Geschätzte Abwesenheit (Tage) manuell setzen"
                                               className="p-0.5 text-gray-400 hover:text-blue-600">
                                               <Pencil size={11} />
@@ -1265,7 +1265,7 @@ export default function ProjectDetailPage() {
                                           )}
                                           {editable && absOverride != null && (
                                             <button
-                                              onClick={() => setEstAbsence.mutate({ milestoneId: ms.id, personId: p.person_id, days: null })}
+                                              onClick={() => setEstAbsence.mutate({ milestoneId: ms.id, budgetId: p.budget_id, days: null })}
                                               title="Geschätzte Abwesenheit gesperrt (manuell) — klicken zum Entsperren (zurück auf automatische Schätzung)"
                                               className="p-0.5 text-purple-500 hover:text-purple-700">
                                               <Lock size={11} />
@@ -1945,7 +1945,7 @@ export default function ProjectDetailPage() {
         const closeEdit = () => { setEditBudget(null); setBudgetWarnings([]); setBudgetNeedsConfirm(false) }
         return (
         <Modal title={`Stunden anpassen — ${editBudget.personName}`} onClose={closeEdit}>
-          <form onSubmit={(e) => { e.preventDefault(); updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours }) }} className="space-y-3">
+          <form onSubmit={(e) => { e.preventDefault(); updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, budgetId: editBudget.budgetId, hours: editHours }) }} className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Aktuelle Stunden</label>
               <input
@@ -1970,7 +1970,7 @@ export default function ProjectDetailPage() {
                 className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
               {budgetNeedsConfirm ? (
                 <button type="button"
-                  onClick={() => updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours, confirm: true })}
+                  onClick={() => updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, budgetId: editBudget.budgetId, hours: editHours, confirm: true })}
                   className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700">Trotzdem speichern</button>
               ) : (
                 <button type="submit"
@@ -2026,7 +2026,7 @@ export default function ProjectDetailPage() {
       {/* Edit estimated absence (days) — manual override */}
       {editAbsence && (
         <Modal title={`Geschätzte Abwesenheit — ${editAbsence.personName}`} onClose={() => setEditAbsence(null)}>
-          <form onSubmit={(e) => { e.preventDefault(); setEstAbsence.mutate({ milestoneId: editAbsence.milestoneId, personId: editAbsence.personId, days: editAbsenceDays }) }} className="space-y-3">
+          <form onSubmit={(e) => { e.preventDefault(); setEstAbsence.mutate({ milestoneId: editAbsence.milestoneId, budgetId: editAbsence.budgetId, days: editAbsenceDays }) }} className="space-y-3">
             <p className="text-xs text-gray-500">
               Manuell angenommene Abwesenheitstage (nicht verplanter Resturlaub, pauschal Krank/Fortbildung).
               Ein gesetzter Wert ersetzt die automatische Schätzung, ist gesperrt und fließt in die Verfügbarkeit ein.
