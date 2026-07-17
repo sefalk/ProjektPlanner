@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight, ChevronDown, Search, ArrowUpRight } from 'lucide-react'
-import { persons, calendar, programs, projects as projectsApi, type Person } from '../api'
+import { Plus, Pencil, Trash2, ChevronDown, Search, ArrowUpRight } from 'lucide-react'
+import { persons, calendar, programs, projects as projectsApi, type Person, type YearCalendarPerson } from '../api'
 import PageHeader from '../components/PageHeader'
 import Modal from '../components/Modal'
 import YearCalendar from '../components/absence/YearCalendar'
@@ -147,8 +147,11 @@ export default function PersonsPage() {
   const [confirmDelete, setConfirmDelete] = useState<Person | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const [calYear, setCalYear] = useState(new Date().getFullYear())
   const [quickCreate, setQuickCreate] = useState<{ personId: number | null; start: string; end: string } | null>(null)
+
+  // Vertical scroll spans several years; the calendar centres on the current month.
+  const currentYear = new Date().getFullYear()
+  const YEARS = useMemo(() => [-1, 0, 1, 2, 3].map((o) => currentYear + o), [currentYear])
 
   // Selection & filters. deselected = ids explicitly hidden; empty ⇒ all selected (default).
   const [deselected, setDeselected] = useState<Set<number>>(new Set())
@@ -164,10 +167,34 @@ export default function PersonsPage() {
     queryFn: persons.withProjects,
   })
 
-  const { data: yearCal, isLoading: calLoading } = useQuery({
-    queryKey: ['calendar-year', calYear],
-    queryFn: () => calendar.year(calYear),
+  const yearQueries = useQueries({
+    queries: YEARS.map((y) => ({ queryKey: ['calendar-year', y], queryFn: () => calendar.year(y) })),
   })
+  const calLoading = yearQueries.some((q) => q.isPending)
+  const dataSig = yearQueries.map((q) => q.dataUpdatedAt ?? 0).join(',')
+
+  const holidaysByYear = useMemo(() => {
+    const m: Record<number, import('../api').YearHoliday[]> = {}
+    YEARS.forEach((y, i) => { m[y] = yearQueries[i].data?.holidays ?? [] })
+    return m
+  }, [dataSig]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Merge persons across the fetched years (absences deduped by id).
+  const mergedPersons = useMemo(() => {
+    const map = new Map<number, YearCalendarPerson>()
+    YEARS.forEach((_, i) => {
+      for (const p of yearQueries[i].data?.persons ?? []) {
+        const ex = map.get(p.id)
+        if (!ex) { map.set(p.id, { ...p, absences: [...p.absences] }); continue }
+        const seen = new Set(ex.absences.map((a) => a.id))
+        for (const a of p.absences) if (!seen.has(a.id)) ex.absences.push(a)
+      }
+    })
+    return [...map.values()]
+  }, [dataSig]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const firstData = yearQueries.find((q) => q.data)?.data
+  const globalRegion = firstData ? regionKey(firstData.country, firstData.state) : 'DE-BY'
 
   const { data: programList = [] } = useQuery({ queryKey: ['programs'], queryFn: programs.list })
   const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list })
@@ -210,20 +237,17 @@ export default function PersonsPage() {
 
   // Persons for the calendar: selected only, absences filtered by type.
   const calendarPersons = useMemo(() => {
-    const src = yearCal?.persons ?? []
-    return src
+    return mergedPersons
       .filter((p) => isSelected(p.id))
       .map((p) => ({ ...p, absences: p.absences.filter((a) => typeFilter.has(a.absence_type)) }))
-  }, [yearCal, deselected, typeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mergedPersons, deselected, typeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Holiday regions. Auto = union of the shown persons' regions; a manual pick overrides.
-  const globalRegion = yearCal ? regionKey(yearCal.country, yearCal.state) : 'DE-BY'
   const regionOptions = useMemo(() => {
-    const set = new Set<string>()
-    if (yearCal) set.add(regionKey(yearCal.country, yearCal.state))
-    for (const p of yearCal?.persons ?? []) set.add(regionKey(p.holiday_country, p.holiday_state))
+    const set = new Set<string>([globalRegion])
+    for (const p of mergedPersons) set.add(regionKey(p.holiday_country, p.holiday_state))
     return [...set]
-  }, [yearCal])
+  }, [mergedPersons, globalRegion])
   const displayedRegions = useMemo(() => {
     if (regionFilter) return new Set([regionFilter])
     const s = new Set(calendarPersons.map((p) => regionKey(p.holiday_country, p.holiday_state)))
@@ -258,7 +282,7 @@ export default function PersonsPage() {
   const selectAll = () => { setDeselected(new Set()); setSelProgram(null); setSelProject(null) }
   const selectNone = () => setDeselected(new Set(allIds))
   const selectWithAbsence = () => {
-    const withAbs = new Set((yearCal?.persons ?? []).filter((p) => p.absences.length > 0).map((p) => p.id))
+    const withAbs = new Set<number>(mergedPersons.filter((p) => p.absences.length > 0).map((p) => p.id))
     selectOnly(withAbs)
   }
   const applyProgram = (progId: number | null) => {
@@ -305,31 +329,12 @@ export default function PersonsPage() {
       {error && (
         <div className="mx-6 mt-4 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-200">{error}</div>
       )}
-      <div className="p-6 space-y-6">
+      <div className="p-6 flex flex-col gap-6">
         {/* Year calendar for absences */}
-        <section>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-sm font-semibold text-gray-700">Jahreskalender – Abwesenheiten</h2>
-              <span className="text-xs text-gray-400">Zeitraum ziehen für neue Abwesenheit</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setCalYear((y) => y - 1)}
-                aria-label="Vorheriges Jahr"
-                className="p-1.5 rounded hover:bg-gray-100 text-gray-600"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <span className="text-sm font-medium text-gray-700 min-w-[3.5rem] text-center">{calYear}</span>
-              <button
-                onClick={() => setCalYear((y) => y + 1)}
-                aria-label="Nächstes Jahr"
-                className="p-1.5 rounded hover:bg-gray-100 text-gray-600"
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
+        <section className="order-2">
+          <div className="flex items-baseline gap-2 mb-2">
+            <h2 className="text-sm font-semibold text-gray-700">Jahreskalender – Abwesenheiten</h2>
+            <span className="text-xs text-gray-400">Zeitraum ziehen für neue Abwesenheit · vertikal scrollen für weitere Monate</span>
           </div>
 
           {/* Filter bar */}
@@ -397,8 +402,8 @@ export default function PersonsPage() {
             <p className="text-sm text-gray-400">Lade Kalender…</p>
           ) : (
             <YearCalendar
-              year={calYear}
-              holidays={yearCal?.holidays ?? []}
+              years={YEARS}
+              holidaysByYear={holidaysByYear}
               persons={calendarPersons}
               displayedRegions={displayedRegions}
               onRangeSelect={(personId, start, end) => setQuickCreate({ personId, start, end })}
@@ -416,7 +421,7 @@ export default function PersonsPage() {
         </section>
 
         {/* Person list — selection is shared with the calendar */}
-        <section>
+        <section className="order-1">
           <div className="flex items-center justify-between mb-2 gap-2">
             <button
               onClick={() => setTableCollapsed((v) => !v)}
@@ -532,7 +537,7 @@ export default function PersonsPage() {
 
       {quickCreate && (
         <AbsenceQuickCreateModal
-          persons={(yearCal?.persons ?? data).map((p) => ({ id: p.id, name: p.name }))}
+          persons={(mergedPersons.length ? mergedPersons : data).map((p) => ({ id: p.id, name: p.name }))}
           initialPersonId={quickCreate.personId}
           startDate={quickCreate.start}
           endDate={quickCreate.end}
