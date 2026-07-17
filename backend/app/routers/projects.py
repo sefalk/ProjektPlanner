@@ -445,7 +445,11 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         session.refresh(membership)
     except IntegrityError:
         session.rollback()
-        raise HTTPException(409, "Membership already exists for this person and project.")
+        # Unique key is (project, person, billing_position): a person may be assigned to
+        # several positions, but not to the same position twice (doc 23, WP1).
+        raise HTTPException(
+            409, "Diese Person ist diesem Posten in diesem Projekt bereits zugewiesen."
+        )
     warnings = _membership_overbooking_warnings(membership, session)
     return MembershipWithWarnings(
         id=membership.id,
