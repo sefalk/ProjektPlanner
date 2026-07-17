@@ -114,3 +114,26 @@ def test_cap_reason_names_exhausted_position(session):
     assert a_rows and all(r.cap_reason and pos_a.position_number in r.cap_reason for r in a_rows)
     # B is funded to full capacity → no cap reason.
     assert b_rows and all(r.cap_reason is None for r in b_rows)
+
+
+def test_detail_shows_legacy_null_position_budget_row(session):
+    """Regression: a legacy budget row (billing_position_id = NULL, created before WP1)
+    whose membership now carries a position must still appear in the detail view — it is
+    resolved via the person-level fallback instead of being silently dropped."""
+    from app.routers.milestones import list_milestones_detail
+
+    proj, pos_a, pos_b, person = _setup(session, budget_a=1_000_000.0, budget_b=1_000_000.0)
+    # A closed month with only a legacy NULL-position row for the person (as an old DB has).
+    ms = Milestone(project_id=proj.id, year=2026, month=1, initial_hours=10.0,
+                   current_hours=10.0, is_locked=True)
+    session.add(ms)
+    session.flush()
+    session.add(MilestonePersonBudget(
+        milestone_id=ms.id, person_id=person.id, billing_position_id=None,
+        initial_hours=10.0, current_hours=10.0,
+    ))
+    session.commit()
+
+    detail = list_milestones_detail(proj.id, session)
+    jan = next(m for m in detail if m.milestone.month == 1)
+    assert any(p.person_id == person.id for p in jan.persons)  # legacy row still shown

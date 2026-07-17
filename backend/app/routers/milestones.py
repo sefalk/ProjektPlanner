@@ -267,6 +267,12 @@ def list_milestones_detail(project_id: int, session: SessionDep):
     membership_map: dict[tuple[int, int | None], ProjectMembership] = {
         (m.person_id, m.billing_position_id): m for m in memberships
     }
+    # Fallback for LEGACY budget rows created before WP1 (billing_position_id = NULL) whose
+    # membership now carries a position: resolve by person so the row is still displayed
+    # instead of silently dropped (regression fix). First membership per person wins.
+    membership_by_person: dict[int, ProjectMembership] = {}
+    for m in memberships:
+        membership_by_person.setdefault(m.person_id, m)
     positions_by_id = project_positions(project_id, session)
 
     persons_map: dict[int, Person] = {}
@@ -300,7 +306,10 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         persons_out: list[MilestonePersonDetailOut] = []
         for budget in budgets:
             person = persons_map.get(budget.person_id)
-            membership = membership_map.get((budget.person_id, budget.billing_position_id))
+            membership = (
+                membership_map.get((budget.person_id, budget.billing_position_id))
+                or membership_by_person.get(budget.person_id)
+            )
             if person is None or membership is None:
                 continue
             stats = _person_available_hours(person, membership, project, ms.year, ms.month, session)
