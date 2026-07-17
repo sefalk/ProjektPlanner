@@ -260,7 +260,11 @@ def list_milestones_detail(project_id: int, session: SessionDep):
     memberships = session.exec(
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
-    membership_map: dict[int, ProjectMembership] = {m.person_id: m for m in memberships}
+    # Keyed by assignment (person, position) so a multi-assigned person resolves the
+    # right membership per budget row (WP2).
+    membership_map: dict[tuple[int, int | None], ProjectMembership] = {
+        (m.person_id, m.billing_position_id): m for m in memberships
+    }
     positions_by_id = project_positions(project_id, session)
 
     persons_map: dict[int, Person] = {}
@@ -277,20 +281,24 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         month_start = date(ms.year, ms.month, 1)
         month_end = date(ms.year, ms.month, _monthrange(ms.year, ms.month)[1])
         booked_rows = session.exec(
-            select(TimeBooking.person_id, func.sum(TimeBooking.net_hours))
+            select(TimeBooking.person_id, TimeBooking.billing_position_id, func.sum(TimeBooking.net_hours))
             .where(
                 TimeBooking.project_id == project_id,
                 TimeBooking.booking_date >= month_start,
                 TimeBooking.booking_date <= month_end,
                 TimeBooking.is_excluded == False,  # noqa: E712
             )
-            .group_by(TimeBooking.person_id)
+            .group_by(TimeBooking.person_id, TimeBooking.billing_position_id)
         ).all()
-        booked_map: dict[int, float] = {pid: float(h) for pid, h in booked_rows}
+        # Booked hours per assignment (person, position); in simple mode both booking and
+        # budget carry billing_position_id = None, so this matches the person's row (WP2).
+        booked_map: dict[tuple[int, int | None], float] = {
+            (pid, bpid): float(h) for pid, bpid, h in booked_rows
+        }
         persons_out: list[MilestonePersonDetailOut] = []
         for budget in budgets:
             person = persons_map.get(budget.person_id)
-            membership = membership_map.get(budget.person_id)
+            membership = membership_map.get((budget.person_id, budget.billing_position_id))
             if person is None or membership is None:
                 continue
             stats = _person_available_hours(person, membership, project, ms.year, ms.month, session)
@@ -313,7 +321,7 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=effective_rate(membership, positions_by_id),
                 billing_position_id=membership.billing_position_id,
-                booked_hours=booked_map.get(person.id, 0.0),
+                booked_hours=booked_map.get((person.id, budget.billing_position_id), 0.0),
                 is_manual_override=budget.is_manual_override,
                 estimated_absence_days_override=budget.estimated_absence_days_override,
             ))

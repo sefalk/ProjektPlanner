@@ -180,9 +180,12 @@ def _parse_work_week_pattern(pattern: str) -> list[float] | None:
 
 
 def _estimated_absence_override(
-    person_id: int, project_id: int, year: int, month: int, session: Session
+    person_id: int, project_id: int, year: int, month: int,
+    billing_position_id: int | None, session: Session,
 ) -> float | None:
-    """Return the manual estimated-absence override for this person/month, or None."""
+    """Return the manual estimated-absence override for this assignment/month, or None.
+
+    Keyed by (person, position) so a multi-assigned person's positions don't collide (WP2)."""
     ms = session.exec(
         select(Milestone).where(
             Milestone.project_id == project_id,
@@ -196,6 +199,7 @@ def _estimated_absence_override(
         select(MilestonePersonBudget).where(
             MilestonePersonBudget.milestone_id == ms.id,
             MilestonePersonBudget.person_id == person_id,
+            MilestonePersonBudget.billing_position_id == billing_position_id,
         )
     ).first()
     return row.estimated_absence_days_override if row else None
@@ -307,8 +311,10 @@ def _person_available_hours(
     )
     training_estimate = _estimated_pauschal_days(person.id, AbsenceType.training, annual_training, eff_start, eff_end, session)
 
-    # A manual (locked) override, if set for this person/month, replaces the whole estimate.
-    override = _estimated_absence_override(person.id, project.id, year, month, session)
+    # A manual (locked) override, if set for this assignment/month, replaces the whole estimate.
+    override = _estimated_absence_override(
+        person.id, project.id, year, month, membership.billing_position_id, session
+    )
     estimated_absence = override if override is not None else (vacation_estimate + sick_estimate + training_estimate)
     total_deduction = abs_days + estimated_absence
     net_hours = gross_hours - total_deduction * avg_daily_hours
@@ -329,25 +335,29 @@ def _person_available_hours(
 # ---------------------------------------------------------------------------
 
 
-SlotKey = tuple[int, tuple[int, int]]  # (person_id, (year, month))
+# WP2 (doc 23): the plan is keyed by ASSIGNMENT, not by person. An assignment key is
+# (person_id, billing_position_id) — a bijection to the ProjectMembership within a project
+# (billing_position_id is None in simple mode, where a person has exactly one membership).
+AssignmentKey = tuple[int, int | None]  # (person_id, billing_position_id)
+SlotKey = tuple[AssignmentKey, tuple[int, int]]  # ((person_id, position_id), (year, month))
 
 
 def distribute_budget(
     avail: dict[SlotKey, float],
-    rates: dict[int, float],
-    priorities: dict[int, int],
+    rates: dict[AssignmentKey, float],
+    priorities: dict[AssignmentKey, int],
     remaining_budget: float | None,
 ) -> dict[SlotKey, float]:
-    """Distribute a capped budget over (person, month) capacity slots.
+    """Distribute a capped budget over (assignment, month) capacity slots.
 
     See docs/implementation/20-milestone-review-and-rework.md §6.6.
 
     Args:
-        avail: {(person_id, (year, month)): available_net_hours}. The hard per-person
+        avail: {(assignment_key, (year, month)): available_net_hours}. The hard per-slot
                capacity cap — the result never exceeds these values.
-        rates: {person_id: euro_rate_per_hour}. Pass {pid: 1.0} to cap by HOURS instead
+        rates: {assignment_key: euro_rate_per_hour}. Pass {ak: 1.0} to cap by HOURS instead
                of euros (legacy total_budget_hours path).
-        priorities: {person_id: priority}; smaller = higher priority, equal = same tier,
+        priorities: {assignment_key: priority}; smaller = higher priority, equal = same tier,
                missing = 0. Higher tiers are funded to full capacity first (B6).
         remaining_budget: the cap in the same unit as (hours × rate). None => no cap,
                i.e. plan = full available capacity (global scale s = 1).
@@ -421,7 +431,10 @@ def _remaining_euro_budget(
         budgets = session.exec(
             select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
         ).all()
-        open_cost += sum(b.current_hours * rate_map.get(b.person_id, 0.0) for b in budgets)
+        open_cost += sum(
+            b.current_hours * rate_map.get((b.person_id, b.billing_position_id), 0.0)
+            for b in budgets
+        )
 
     return max(0.0, total_budget_euros - invoiced - open_cost)
 
@@ -496,16 +509,18 @@ def set_position_mode(project_id: int, enabled: bool, session: Session) -> Proje
 
 def build_rate_map(
     memberships: list[ProjectMembership], positions_by_id: dict[int, BillingPosition]
-) -> dict[int, float]:
-    """person_id → effective hourly rate (position rate in position mode, else member rate)."""
-    return {m.person_id: effective_rate(m, positions_by_id) for m in memberships}
+) -> dict[AssignmentKey, float]:
+    """assignment_key → effective hourly rate (position rate in position mode, else member rate)."""
+    return {
+        (m.person_id, m.billing_position_id): effective_rate(m, positions_by_id)
+        for m in memberships
+    }
 
 
 def _remaining_position_euro_budget(
     project_id: int,
     pos: BillingPosition,
     exclude_months: set[tuple[int, int]],
-    position_pids: set[int],
     session: Session,
 ) -> float:
     """Budget still available for one line item (§21 P4), analogous to
@@ -543,7 +558,7 @@ def _remaining_position_euro_budget(
         open_cost += sum(
             b.current_hours * pos.billing_rate_per_hour
             for b in budgets
-            if b.person_id in position_pids
+            if b.billing_position_id == pos.id
         )
 
     return max(0.0, pos.budget_euros - invoiced - open_cost)
@@ -553,7 +568,7 @@ def distribute_over_positions(
     avail_map: dict[SlotKey, float],
     memberships: list[ProjectMembership],
     positions_by_id: dict[int, BillingPosition],
-    priorities: dict[int, int],
+    priorities: dict[AssignmentKey, int],
     override_rows: list[MilestonePersonBudget],
     exclude_months: set[tuple[int, int]],
     project_id: int,
@@ -561,27 +576,35 @@ def distribute_over_positions(
 ) -> dict[SlotKey, float]:
     """Position-mode distribution (§21 P4): one independent bucket per line item.
 
-    Each position distributes its own R_posten over only the members assigned to it, at the
+    Each position distributes its own R_posten over only the assignments bound to it, at the
     position's rate; buckets never borrow from one another (shifting hours between positions
-    = adjusting position budgets manually). Members not assigned to any position get 0 h
-    (WP4 makes assignment mandatory in position mode).
+    = adjusting position budgets manually). A person assigned to several positions has one
+    assignment slot per position (WP2). Members not assigned to any position get 0 h.
     """
-    memb_by_pid = {m.person_id: m for m in memberships}
     plan: dict[SlotKey, float] = dict.fromkeys(avail_map, 0.0)
     for pos_id, pos in positions_by_id.items():
-        position_pids = {m.person_id for m in memberships if m.billing_position_id == pos_id}
-        if not position_pids:
+        pos_keys = {
+            (m.person_id, m.billing_position_id)
+            for m in memberships if m.billing_position_id == pos_id
+        }
+        if not pos_keys:
             continue
-        sub_avail = {k: h for k, h in avail_map.items() if k[0] in position_pids}
+        sub_avail = {k: h for k, h in avail_map.items() if k[0] in pos_keys}
         if not sub_avail:
             continue
         rate = pos.billing_rate_per_hour
-        rates = {pid: rate for pid in position_pids}
-        base = _remaining_position_euro_budget(project_id, pos, exclude_months, position_pids, session)
+        rates = {ak: rate for ak in pos_keys}
+        if pos.overrunnable:
+            # Cheap position (doc 23 WP3): no budget cap → fund to full capacity, so it
+            # can absorb the hours a hard (expensive) position cannot. The overrun itself
+            # is surfaced separately (WP6 diagnostics / Aufwand-nach-Posten panel).
+            plan.update(distribute_budget(sub_avail, rates, priorities, None))
+            continue
+        base = _remaining_position_euro_budget(project_id, pos, exclude_months, session)
         override_cost = sum(
             b.current_hours * rate
             for b in override_rows
-            if (mb := memb_by_pid.get(b.person_id)) is not None and mb.billing_position_id == pos_id
+            if b.billing_position_id == pos_id
         )
         remaining = max(0.0, base - override_cost)
         plan.update(distribute_budget(sub_avail, rates, priorities, remaining))
@@ -643,7 +666,7 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
             "Add at least one member before initializing milestones."
         )
 
-    current_person_ids = {m.person_id for m in memberships}
+    current_keys = {(m.person_id, m.billing_position_id) for m in memberships}
     all_project_months = _months_in_range(project.start_date, project.end_date)
 
     # When force=True, delete all unlocked milestones so they get fully re-created below.
@@ -684,35 +707,36 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
                     MilestonePersonBudget.milestone_id == exists.id
                 )
             ).all()
-            existing_person_ids = {b.person_id for b in existing_budgets}
-            if current_person_ids - existing_person_ids:
+            existing_keys = {(b.person_id, b.billing_position_id) for b in existing_budgets}
+            if current_keys - existing_keys:
                 repair_milestones.append(exists)
 
     if not new_months and not repair_milestones:
         return []
 
-    # First pass: compute available capacity per person per month
-    month_capacity: dict[tuple[int, int], dict[int, float]] = {}
+    # First pass: compute available capacity per ASSIGNMENT (person × position) per month.
+    # Each membership is its own slot (WP2); a person on several positions yields several slots.
+    month_capacity: dict[tuple[int, int], dict[AssignmentKey, float]] = {}
     for year, month in new_months:
-        person_hours: dict[int, float] = {}
+        slot_hours: dict[AssignmentKey, float] = {}
         for m in memberships:
             person = _get_person(m.person_id)
             if person is None:
                 continue
             stats = _person_available_hours(person, m, project, year, month, session)
             if stats.hours > 0:
-                person_hours[m.person_id] = person_hours.get(m.person_id, 0.0) + stats.hours
-        month_capacity[(year, month)] = person_hours
+                slot_hours[(m.person_id, m.billing_position_id)] = stats.hours
+        month_capacity[(year, month)] = slot_hours
 
-    # Build the (person, month) availability map and distribute the budget across all new
+    # Build the (assignment, month) availability map and distribute the budget across all new
     # months jointly (§6.6). The budget cap is global, so a single distribution call spans
     # every new month; member priority (B6) funds higher tiers first.
     avail_map: dict[SlotKey, float] = {}
-    for (year, month), person_hours in month_capacity.items():
-        for pid, hours in person_hours.items():
-            avail_map[(pid, (year, month))] = hours
+    for (year, month), slot_hours in month_capacity.items():
+        for ak, hours in slot_hours.items():
+            avail_map[(ak, (year, month))] = hours
 
-    priorities = {m.person_id: m.priority for m in memberships}
+    priorities = {(m.person_id, m.billing_position_id): m.priority for m in memberships}
     new_month_set = set(new_months)
 
     budget_euros = project.total_budget_euros if project.total_budget_euros and project.total_budget_euros > 0 else 0.0
@@ -746,8 +770,8 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
     # Create new milestone rows from the distributed plan
     created: list[Milestone] = []
     for year, month in new_months:
-        person_hours = month_capacity[(year, month)]
-        month_plan = {pid: plan_map.get((pid, (year, month)), 0.0) for pid in person_hours}
+        slot_hours = month_capacity[(year, month)]
+        month_plan = {ak: plan_map.get((ak, (year, month)), 0.0) for ak in slot_hours}
         total = sum(month_plan.values())
 
         milestone = Milestone(
@@ -760,13 +784,14 @@ def initialize_milestones(project_id: int, session: Session, force: bool = False
         session.add(milestone)
         session.flush()
 
-        # Create a budget row for every active member this month (even 0 h, e.g. lower
-        # priority tiers not funded), so the per-person breakdown stays transparent.
-        for person_id in person_hours:
-            hours = month_plan.get(person_id, 0.0)
+        # Create a budget row for every active assignment this month (even 0 h, e.g. lower
+        # priority tiers not funded), so the per-(person, position) breakdown stays transparent.
+        for (pid, bpid) in slot_hours:
+            hours = month_plan.get((pid, bpid), 0.0)
             session.add(MilestonePersonBudget(
                 milestone_id=milestone.id,
-                person_id=person_id,
+                person_id=pid,
+                billing_position_id=bpid,
                 initial_hours=hours,
                 current_hours=hours,
             ))
@@ -893,7 +918,7 @@ def _projected_budget_after_edit(
             select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
         ).all():
             hrs = new_hours if b.id == budget.id else b.current_hours
-            projected += hrs * rate_map.get(b.person_id, 0.0)
+            projected += hrs * rate_map.get((b.person_id, b.billing_position_id), 0.0)
 
     return projected, budget_euros
 
@@ -935,10 +960,13 @@ def manual_budget_update(
 
     # Soft capacity warning (B2 stays hard only for the automatic distribution, §9.2).
     project = session.get(Project, milestone.project_id)
+    # Resolve the membership by (person, position) so a multi-assigned person's positions
+    # don't collide (WP2). In simple mode billing_position_id is None → the single row.
     membership = session.exec(
         select(ProjectMembership).where(
             ProjectMembership.project_id == milestone.project_id,
             ProjectMembership.person_id == budget.person_id,
+            ProjectMembership.billing_position_id == budget.billing_position_id,
         )
     ).first()
     person = session.get(Person, budget.person_id)
@@ -1019,12 +1047,12 @@ def set_milestone_target_budget(
     ).all()
     positions_by_id = project_positions(project_id, session)
     rate_map = build_rate_map(memberships, positions_by_id)
-    priorities = {m.person_id: m.priority for m in memberships}
+    priorities = {(m.person_id, m.billing_position_id): m.priority for m in memberships}
 
     month_start, month_end = _month_bounds(milestone.year, milestone.month)
     active = [m for m in memberships if m.from_date <= month_end and m.to_date >= month_start]
 
-    # Available net capacity per active member this month.
+    # Available net capacity per active assignment this month.
     avail_map: dict[SlotKey, float] = {}
     for m in active:
         person = session.get(Person, m.person_id)
@@ -1032,24 +1060,26 @@ def set_milestone_target_budget(
             continue
         avail = _person_available_hours(person, m, project, milestone.year, milestone.month, session).hours
         if avail > 0:
-            avail_map[(m.person_id, (milestone.year, milestone.month))] = avail
+            avail_map[((m.person_id, m.billing_position_id), (milestone.year, milestone.month))] = avail
 
     plan = distribute_budget(avail_map, rate_map, priorities, target_euros)
-    achieved = sum(hours * rate_map.get(pid, 0.0) for (pid, _ym), hours in plan.items())
+    achieved = sum(hours * rate_map.get(ak, 0.0) for (ak, _ym), hours in plan.items())
 
-    # Apply the plan: upsert a manual-override row per active member.
+    # Apply the plan: upsert a manual-override row per active assignment.
     existing = {
-        b.person_id: b
+        (b.person_id, b.billing_position_id): b
         for b in session.exec(
             select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == milestone_id)
         ).all()
     }
     for m in active:
-        hours = plan.get((m.person_id, (milestone.year, milestone.month)), 0.0)
-        row = existing.get(m.person_id)
+        ak = (m.person_id, m.billing_position_id)
+        hours = plan.get((ak, (milestone.year, milestone.month)), 0.0)
+        row = existing.get(ak)
         if row is None:
             session.add(MilestonePersonBudget(
                 milestone_id=milestone_id, person_id=m.person_id,
+                billing_position_id=m.billing_position_id,
                 initial_hours=hours, current_hours=hours, is_manual_override=True,
             ))
         else:
@@ -1219,11 +1249,14 @@ def prune_member_budgets_to_range(
     person_id: int,
     from_date: date,
     to_date: date,
+    billing_position_id: int | None,
     session: Session,
 ) -> list[Milestone]:
     """Remove a member's budget rows from OPEN milestones whose month no longer overlaps
     the member's [from_date, to_date] range (V11, membership date change).
 
+    Scoped to the assignment's position (WP2): only rows of this (person, position) are
+    pruned, so changing one assignment's dates never removes the person's other positions.
     Locked months are protected. Budgets for months still inside the range are left as
     they are — recomputing changed weekly hours into existing budgets is the resync path
     (WP4/WP5), not this referential cleanup. Does not commit.
@@ -1243,6 +1276,7 @@ def prune_member_budgets_to_range(
             select(MilestonePersonBudget).where(
                 MilestonePersonBudget.milestone_id == ms.id,
                 MilestonePersonBudget.person_id == person_id,
+                MilestonePersonBudget.billing_position_id == billing_position_id,
             )
         ).all()
         if not rows:
@@ -1323,7 +1357,7 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
     positions_by_id = project_positions(project_id, session)
     position_mode = is_position_mode(project)
     rate_map = build_rate_map(memberships, positions_by_id)
-    priorities = {m.person_id: m.priority for m in memberships}
+    priorities = {(m.person_id, m.billing_position_id): m.priority for m in memberships}
 
     person_cache: dict[int, Person] = {}
 
@@ -1343,7 +1377,7 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
     summary = ResyncSummary()
     changed: set[int] = set()
 
-    rows_by_ms: dict[int, dict[int, MilestonePersonBudget]] = {}
+    rows_by_ms: dict[int, dict[AssignmentKey, MilestonePersonBudget]] = {}
     recompute_avail: dict[SlotKey, float] = {}
     override_rows: list[MilestonePersonBudget] = []
     zero_avail_autos: list[MilestonePersonBudget] = []
@@ -1351,37 +1385,37 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
     for ms in open_ms:
         month_start, month_end = _month_bounds(ms.year, ms.month)
         active = [m for m in memberships if m.from_date <= month_end and m.to_date >= month_start]
-        active_pids = {m.person_id for m in active}
+        active_keys = {(m.person_id, m.billing_position_id) for m in active}
         rows = {
-            b.person_id: b
+            (b.person_id, b.billing_position_id): b
             for b in session.exec(
                 select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
             ).all()
         }
         rows_by_ms[ms.id] = rows
 
-        # Remove rows for members no longer active this month (überzählig, BUG-7).
-        for pid, b in list(rows.items()):
-            if pid not in active_pids:
+        # Remove rows for assignments no longer active this month (überzählig, BUG-7).
+        for ak, b in list(rows.items()):
+            if ak not in active_keys:
                 session.delete(b)
-                del rows[pid]
+                del rows[ak]
                 summary.removed += 1
                 changed.add(ms.id)
 
         for m in active:
-            pid = m.person_id
-            b = rows.get(pid)
+            ak = (m.person_id, m.billing_position_id)
+            b = rows.get(ak)
             if b is not None and b.is_manual_override:
                 override_rows.append(b)  # fixed commitment, never recomputed
                 continue
-            person = _get_person(pid)
+            person = _get_person(m.person_id)
             if person is None:
                 continue
             avail = _person_available_hours(person, m, project, ms.year, ms.month, session).hours
             if avail > 0:
-                recompute_avail[(pid, (ms.year, ms.month))] = avail
+                recompute_avail[(ak, (ms.year, ms.month))] = avail
             elif b is not None:
-                zero_avail_autos.append(b)  # existing row, member now has no capacity
+                zero_avail_autos.append(b)  # existing row, assignment now has no capacity
 
     session.flush()
 
@@ -1396,7 +1430,10 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
             open_month_set, project_id, session,
         )
     elif budget_euros > 0:
-        override_cost = sum(b.current_hours * rate_map.get(b.person_id, 0.0) for b in override_rows)
+        override_cost = sum(
+            b.current_hours * rate_map.get((b.person_id, b.billing_position_id), 0.0)
+            for b in override_rows
+        )
         base_remaining = _remaining_euro_budget(project_id, budget_euros, open_month_set, rate_map, session)
         remaining = max(0.0, base_remaining - override_cost)
         plan = distribute_budget(recompute_avail, rate_map, priorities, remaining)
@@ -1414,13 +1451,13 @@ def _align_open_milestones(project: Project, session: Session) -> ResyncSummary:
         plan = distribute_budget(recompute_avail, rate_map, priorities, None)
 
     ms_by_ym = {(ms.year, ms.month): ms for ms in open_ms}
-    for (pid, ym), hours in plan.items():
+    for (ak, ym), hours in plan.items():
         ms = ms_by_ym[ym]
         rows = rows_by_ms[ms.id]
-        b = rows.get(pid)
+        b = rows.get(ak)
         if b is None:
             session.add(MilestonePersonBudget(
-                milestone_id=ms.id, person_id=pid,
+                milestone_id=ms.id, person_id=ak[0], billing_position_id=ak[1],
                 initial_hours=hours, current_hours=hours,  # baseline set at creation (V10)
             ))
             summary.added += 1

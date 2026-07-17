@@ -25,6 +25,7 @@ from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person
 from app.models.project import Project
 from app.services.milestones import (
+    AssignmentKey,
     SlotKey,
     _month_bounds,
     _person_available_hours,
@@ -48,6 +49,7 @@ class BudgetSuggestion:
     person_id: int
     current_hours: float
     suggested_hours: float
+    billing_position_id: int | None = None  # WP2: disambiguates a person's positions
 
 
 @dataclass
@@ -105,7 +107,7 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
     positions_by_id = project_positions(project_id, session)
     position_mode = is_position_mode(project)
     rate_map = build_rate_map(memberships, positions_by_id)
-    priorities = {m.person_id: m.priority for m in memberships}
+    priorities = {(m.person_id, m.billing_position_id): m.priority for m in memberships}
     open_month_set = {(ms.year, ms.month) for ms in open_milestones}
 
     person_cache: dict[int, Person] = {}
@@ -115,7 +117,7 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
             person_cache[pid] = session.get(Person, pid)
         return person_cache[pid]
 
-    rows_by_ms: dict[int, dict[int, MilestonePersonBudget]] = {}
+    rows_by_ms: dict[int, dict[AssignmentKey, MilestonePersonBudget]] = {}
     avail_map: dict[SlotKey, float] = {}
     override_rows: list[MilestonePersonBudget] = []
     override_cost = 0.0
@@ -124,24 +126,25 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
         month_start, month_end = _month_bounds(ms.year, ms.month)
         active = [m for m in memberships if m.from_date <= month_end and m.to_date >= month_start]
         rows = {
-            b.person_id: b
+            (b.person_id, b.billing_position_id): b
             for b in session.exec(
                 select(MilestonePersonBudget).where(MilestonePersonBudget.milestone_id == ms.id)
             ).all()
         }
         rows_by_ms[ms.id] = rows
         for m in active:
-            b = rows.get(m.person_id)
+            ak = (m.person_id, m.billing_position_id)
+            b = rows.get(ak)
             if b is not None and b.is_manual_override:
                 override_rows.append(b)
-                override_cost += b.current_hours * rate_map.get(m.person_id, 0.0)
+                override_cost += b.current_hours * rate_map.get(ak, 0.0)
                 continue
             person = _get_person(m.person_id)
             if person is None:
                 continue
             avail = _person_available_hours(person, m, project, ms.year, ms.month, session).hours
             if avail > 0:
-                avail_map[(m.person_id, (ms.year, ms.month))] = avail
+                avail_map[(ak, (ms.year, ms.month))] = avail
 
     budget_euros = project.total_budget_euros if project.total_budget_euros and project.total_budget_euros > 0 else 0.0
     if position_mode:
@@ -160,16 +163,17 @@ def preview_recalculation(project_id: int, session: Session) -> list[MilestoneSu
     for ms in open_milestones:
         rows = rows_by_ms[ms.id]
         budget_suggestions: list[BudgetSuggestion] = []
-        for person_id, budget in rows.items():
+        for ak, budget in rows.items():
             if budget.is_manual_override:
                 suggested = budget.current_hours  # fixed commitment
             else:
-                suggested = plan.get((person_id, (ms.year, ms.month)), 0.0)
+                suggested = plan.get((ak, (ms.year, ms.month)), 0.0)
             budget_suggestions.append(BudgetSuggestion(
                 budget_id=budget.id,  # type: ignore[arg-type]
-                person_id=person_id,
+                person_id=budget.person_id,
                 current_hours=budget.current_hours,
                 suggested_hours=suggested,
+                billing_position_id=budget.billing_position_id,
             ))
         suggestions.append(MilestoneSuggestion(
             milestone_id=ms.id,  # type: ignore[arg-type]

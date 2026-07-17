@@ -1,7 +1,17 @@
-"""ProjectMembership — links a person to a project for a specific period."""
+"""ProjectMembership — links a person to a project for a specific period.
+
+Multi-Assignment (doc 23, WP1): a person may hold several memberships in the
+same project, each bound to a different line item (Projektposten). The unique
+constraint therefore spans (project_id, person_id, billing_position_id):
+- Simple mode: billing_position_id is NULL and a person has exactly one row.
+- Position mode: one row per (person, position); the same person can be
+  assigned to multiple positions of the project, each with its own rate,
+  capacity and priority.
+"""
 
 from datetime import date
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field
 
 from app.models.base import ValidatedSQLModel
@@ -9,6 +19,12 @@ from app.models.base import ValidatedSQLModel
 
 class ProjectMembership(ValidatedSQLModel, table=True):
     __tablename__ = "project_membership"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "person_id", "billing_position_id",
+            name="uq_membership_project_person_position",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     project_id: int = Field(foreign_key="project.id", index=True)
