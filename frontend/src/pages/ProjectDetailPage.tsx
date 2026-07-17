@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
+import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy, AlertTriangle } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason, type BillingPosition,
@@ -1186,6 +1186,12 @@ export default function ProjectDetailPage() {
                                         {showPRebal && (
                                           <div className="text-[11px] text-indigo-600" title="Vorschlag aus „Neu berechnen“ für diese Person.">
                                             → {fmtH(pSug!)} ({pRebalDelta > 0 ? '+' : ''}{pRebalDelta.toFixed(2)})
+                                          </div>
+                                        )}
+                                        {p.cap_reason && (
+                                          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-600 whitespace-normal max-w-[12rem]" title={p.cap_reason}>
+                                            <AlertTriangle size={11} className="shrink-0" />
+                                            <span>{p.cap_reason}</span>
                                           </div>
                                         )}
                                       </td>

@@ -98,3 +98,19 @@ def test_overrunnable_position_funds_beyond_budget(session):
     assert row_b.current_hours > 2.0 + 1e-6
     # B's planned cost exceeds its nominal budget — the allowed overrun.
     assert row_b.current_hours * pos_b.billing_rate_per_hour > pos_b.budget_euros + 1e-6
+
+
+def test_cap_reason_names_exhausted_position(session):
+    """WP6: a row capped below its capacity carries a diagnostic naming the bound budget."""
+    from app.routers.milestones import list_milestones_detail
+
+    # Position A tiny (capped below capacity), B effectively uncapped (funded to full).
+    proj, pos_a, pos_b, person = _setup(session, budget_a=200.0, budget_b=1_000_000.0)
+    initialize_milestones(proj.id, session)
+
+    detail = list_milestones_detail(proj.id, session)
+    a_rows = [p for ms in detail for p in ms.persons if p.billing_position_id == pos_a.id]
+    b_rows = [p for ms in detail for p in ms.persons if p.billing_position_id == pos_b.id]
+    assert a_rows and all(r.cap_reason and pos_a.position_number in r.cap_reason for r in a_rows)
+    # B is funded to full capacity → no cap reason.
+    assert b_rows and all(r.cap_reason is None for r in b_rows)

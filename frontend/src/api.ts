@@ -179,6 +179,7 @@ export interface MilestonePersonDetail {
   booked_hours: number;
   is_manual_override: boolean;
   estimated_absence_days_override: number | null;
+  cap_reason?: string | null;
 }
 
 export interface MilestoneDetail {
