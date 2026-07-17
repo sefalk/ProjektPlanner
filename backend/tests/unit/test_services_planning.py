@@ -235,6 +235,17 @@ def test_absence_days_sick_confirmed_counts(mem_session):
     assert result == 3
 
 
+def test_absence_days_other_counts_like_any_absence(mem_session):
+    """'Sonstiges' (Elternzeit/Sabbatical) reduces availability like every concrete absence."""
+    p = _make_person(mem_session)
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),
+        absence_type=AbsenceType.other, status=AbsenceStatus.confirmed,
+    )
+    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
+    assert result == 5
+
+
 # ---------------------------------------------------------------------------
 # estimated_vacation_days
 # ---------------------------------------------------------------------------
@@ -284,6 +295,23 @@ def test_estimated_vacation_already_has_concrete_absence(mem_session):
     # The 10 planned days reduce the remaining contingent;
     # estimate applies only to remaining days without concrete absences.
     assert result >= 0.0
+
+
+def test_estimated_vacation_ignores_other_type(mem_session):
+    """'Sonstiges' has no Pauschale: it must NOT deduct from the vacation contingent
+    (only AbsenceType.vacation does). The estimate stays at the full pro-rata value."""
+    p = _make_person(mem_session)
+    vc = VacationContingent(person_id=p.id, year=2026, total_days=20.0)
+    mem_session.add(vc)
+    mem_session.commit()
+    # A big 'other' absence in the year — must leave the vacation estimate untouched.
+    _make_absence(
+        mem_session, p.id, date(2026, 1, 5), date(2026, 3, 31),
+        absence_type=AbsenceType.other, status=AbsenceStatus.confirmed,
+    )
+    result = estimated_vacation_days(p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session)
+    expected = 20.0 * (31 / 184)  # identical to test_estimated_vacation_proportional
+    assert abs(result - expected) < 0.01
 
 
 # ---------------------------------------------------------------------------

@@ -10,21 +10,23 @@
 
 import type { PersonAbsence } from '../api'
 
-type AbsenceType = PersonAbsence['absence_type'] // 'vacation' | 'sick' | 'training'
+type AbsenceType = PersonAbsence['absence_type'] // 'vacation' | 'sick' | 'training' | 'other'
 type AbsenceStatus = PersonAbsence['status'] // 'planned' | 'confirmed' | 'ongoing'
 
-/** Long German labels (Urlaub / Krank / Fortbildung). */
+/** Long German labels (Urlaub / Krank / Fortbildung / Sonstiges). */
 export const TYPE_LABELS: Record<AbsenceType, string> = {
   vacation: 'Urlaub',
   sick: 'Krank',
   training: 'Fortbildung',
+  other: 'Sonstiges',
 }
 
-/** Single-letter codes for compact inline tags (U / K / F). */
+/** Single-letter codes for compact inline tags (U / K / F / S). */
 export const TYPE_SHORT: Record<AbsenceType, string> = {
   vacation: 'U',
   sick: 'K',
   training: 'F',
+  other: 'S',
 }
 
 /** Light badge classes (bg + text) — tables, legends, chips. */
@@ -32,6 +34,7 @@ export const TYPE_BADGE: Record<AbsenceType, string> = {
   vacation: 'bg-blue-100 text-blue-700',
   sick: 'bg-yellow-100 text-yellow-700',
   training: 'bg-emerald-100 text-emerald-700',
+  other: 'bg-purple-100 text-purple-700',
 }
 
 /** Stronger fill classes — per-day overlays / bars in the month calendar. */
@@ -39,6 +42,7 @@ export const TYPE_BAR_BG: Record<AbsenceType, string> = {
   vacation: 'bg-blue-200',
   sick: 'bg-yellow-200',
   training: 'bg-emerald-200',
+  other: 'bg-purple-200',
 }
 
 export const STATUS_LABELS: Record<AbsenceStatus, string> = {

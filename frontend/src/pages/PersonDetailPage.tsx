@@ -120,6 +120,7 @@ function AbsenceForm({
             <option value="vacation">Urlaub</option>
             <option value="training">Fortbildung</option>
             <option value="sick">Krank</option>
+            <option value="other">Sonstiges</option>
           </select>
         </div>
         <div>
