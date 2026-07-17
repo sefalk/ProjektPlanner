@@ -21,6 +21,10 @@ class Person(ValidatedSQLModel, table=True):
     # Comma-separated daily hours Mon–Fri, e.g. "8,8,8,8,0" for 4-day/32h week.
     work_week_pattern: str | None = Field(default=None)
     default_billing_rate: float | None = Field(default=None, gt=0)
+    # Per-person holiday region override (WP6). NULL = inherit the global
+    # setting; a value overrides it (e.g. nearshore staff in another region).
+    holiday_country: str | None = Field(default=None)
+    holiday_state: str | None = Field(default=None)
 
 
 class VacationContingent(ValidatedSQLModel, table=True):
