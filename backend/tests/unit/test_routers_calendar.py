@@ -178,7 +178,7 @@ def test_calendar_year_person_region_override(client):
     """A per-person region override wins; others inherit the global default."""
     p_over = client.post("/persons", json={
         "name": "Nearshore MA", "sage_employee_name": "Nearshore MA",
-        "default_weekly_hours": 40.0, "holiday_state": "BW",
+        "default_weekly_hours": 40.0, "holiday_country": "DE", "holiday_state": "BW",
     }).json()
     p_inherit = client.post("/persons", json={
         "name": "Local MA", "sage_employee_name": "Local MA",

@@ -24,5 +24,6 @@ class Holiday(ValidatedSQLModel, table=True):
     holiday_date: date = Field(index=True)
     name: str
     country: str = Field(min_length=2, max_length=2)  # ISO 3166-1 alpha-2
-    state: str = Field(min_length=2)
+    # Subdivision code (e.g. "BY"); empty for national-only countries (e.g. GR).
+    state: str = Field(default="")
     is_workday: bool

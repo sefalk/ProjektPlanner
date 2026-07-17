@@ -48,13 +48,13 @@ def resolve_holiday_region(
     A per-person override (WP6) wins over the global setting; NULL fields on the
     person inherit the corresponding global value independently.
     """
+    # A per-person country override is taken as a (country, state) pair — the
+    # state is used as-is (empty for national-only countries like GR), never
+    # mixed with the global state. Without a country override, inherit global.
+    if person is not None and person.holiday_country:
+        return person.holiday_country, (person.holiday_state or "")
     country = _get(session, KEY_COUNTRY, config.default_holiday_country)
     state = _get(session, KEY_STATE, config.default_holiday_state)
-    if person is not None:
-        if person.holiday_country:
-            country = person.holiday_country
-        if person.holiday_state:
-            state = person.holiday_state
     return country, state
 
 

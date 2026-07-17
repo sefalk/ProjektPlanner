@@ -100,6 +100,45 @@ def _fetch_primary(
     return _parse_feiertage_response(response.json(), year, country, state)
 
 
+def _parse_nager_response(
+    data: list, year: int, country: str, state: str
+) -> list[Holiday]:
+    holidays: list[Holiday] = []
+    seen: set = set()
+    for item in data:
+        # National holidays only (subnational 'counties' left to DE providers).
+        if item.get("global") is False:
+            continue
+        types = item.get("types") or []
+        if types and "Public" not in types:
+            continue
+        d = date.fromisoformat(item["date"])
+        if d in seen:  # dedupe same-date entries (e.g. GR 25.03. carries two)
+            continue
+        seen.add(d)
+        name = item.get("localName") or item.get("name") or "Holiday"
+        holidays.append(
+            Holiday(
+                holiday_date=d,
+                name=name,
+                country=country,
+                state=state,
+                is_workday=d.weekday() < 5,
+            )
+        )
+    return holidays
+
+
+def _fetch_foreign(
+    year: int, country: str, state: str, client: httpx.Client
+) -> list[Holiday]:
+    """Public holidays for a non-DE country via Nager.Date."""
+    url = f"{settings.holiday_api_foreign_url}/PublicHolidays/{year}/{country}"
+    response = client.get(url)
+    response.raise_for_status()
+    return _parse_nager_response(response.json(), year, country, state)
+
+
 def _fetch_fallback(
     year: int, country: str, state: str, client: httpx.Client
 ) -> list[Holiday]:
@@ -153,17 +192,22 @@ def ensure_holidays(
 
     http = client or httpx.Client()
     holidays: list[Holiday] | None = None
-    primary_succeeded = False
+
+    # Germany: feiertage-api.de (best subdivision quality) with openholidays
+    # fallback. Any other country: Nager.Date, openholidays as fallback.
+    if country == "DE":
+        primary, fallback = _fetch_primary, _fetch_fallback
+    else:
+        primary, fallback = _fetch_foreign, _fetch_fallback
 
     try:
-        holidays = _fetch_primary(year, country, state, http)
-        primary_succeeded = True
+        holidays = primary(year, country, state, http)
     except (httpx.HTTPError, httpx.ConnectError):
         pass
 
-    if not primary_succeeded:
+    if holidays is None:
         try:
-            holidays = _fetch_fallback(year, country, state, http)
+            holidays = fallback(year, country, state, http)
         except (httpx.HTTPError, httpx.ConnectError):
             pass
 

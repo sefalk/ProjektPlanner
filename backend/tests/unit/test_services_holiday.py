@@ -289,3 +289,61 @@ def test_is_workday_matches_weekday(day):
         is_workday=(d.weekday() < 5),
     )
     assert h.is_workday == (d.weekday() < 5)
+
+
+# ---------------------------------------------------------------------------
+# Foreign countries — Nager.Date adapter (§22 WP9)
+# ---------------------------------------------------------------------------
+
+NAGER_2026_GR = [
+    {"date": "2026-01-01", "localName": "Πρωτοχρονιά", "name": "New Year's Day", "global": True, "counties": None, "types": ["Public"]},
+    {"date": "2026-03-25", "localName": "Ευαγγελισμός της Θεοτόκου", "name": "Annunciation", "global": True, "counties": None, "types": ["Public"]},
+    {"date": "2026-03-25", "localName": "Εικοστή Πέμπτη Μαρτίου", "name": "Independence Day", "global": True, "counties": None, "types": ["Public"]},
+    {"date": "2026-04-12", "localName": "Κυριακή του Πάσχα", "name": "Easter Sunday", "global": True, "counties": None, "types": ["Public"]},
+    {"date": "2026-07-04", "localName": "Nur regional", "name": "Regional", "global": False, "counties": ["GR-A"], "types": ["Public"]},
+    {"date": "2026-08-15", "localName": "Κοίμηση της Θεοτόκου", "name": "Assumption", "global": True, "counties": None, "types": ["Bank"]},
+]
+
+
+def _nager_client(payload=NAGER_2026_GR):
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "date.nager.at" in url:
+            if isinstance(payload, int):
+                return httpx.Response(payload)
+            return httpx.Response(200, json=payload)
+        return httpx.Response(503)  # openholidays fallback unavailable for GR
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_foreign_country_uses_nager(mem_session):
+    holidays = ensure_holidays(2026, "GR", "", mem_session, _nager_client())
+    dates = {h.holiday_date.isoformat() for h in holidays}
+    assert "2026-04-12" in dates  # Orthodox Easter (not Western 2026-04-05)
+    assert all(h.country == "GR" and h.state == "" for h in holidays)
+
+
+def test_nager_dedupes_same_date(mem_session):
+    holidays = ensure_holidays(2026, "GR", "", mem_session, _nager_client())
+    same_day = [h for h in holidays if h.holiday_date.isoformat() == "2026-03-25"]
+    assert len(same_day) == 1  # two GR entries on 25.03. collapse to one
+
+
+def test_nager_skips_regional_and_non_public(mem_session):
+    holidays = ensure_holidays(2026, "GR", "", mem_session, _nager_client())
+    dates = {h.holiday_date.isoformat() for h in holidays}
+    assert "2026-07-04" not in dates  # global=false → skipped
+    assert "2026-08-15" not in dates  # types=[Bank] (no Public) → skipped
+
+
+def test_germany_still_uses_feiertage_api(mem_session):
+    """Routing must not send DE to Nager."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        assert "date.nager.at" not in url, "DE must not hit Nager"
+        if "feiertage-api.de" in url:
+            return httpx.Response(200, json=FEIERTAGE_2026_BY)
+        return httpx.Response(503)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    holidays = ensure_holidays(2026, "DE", "BY", mem_session, client)
+    assert len(holidays) == len(FEIERTAGE_2026_BY)

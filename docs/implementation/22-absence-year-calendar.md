@@ -83,6 +83,12 @@ Der Kalender lebt **unter dem Reiter „Personen"**, zusätzlich zur Personenlis
 5. **Feiertags-Region global + Zusatz-Checkliste** — Settings-Keys + Region-Sektion unter Einstellungen; Endpoint liest Settings.
 6. **Per-MA Feiertagsregion-Override + Multi-Region** — `Person`-Region-Attribute (Default global, überschreibbar), PersonForm-UI, Kalender zeigt Union der Regionen sichtbarer MA, Region-Filter, farblich abgesetzte Feiertage je Region.
 
+## 7a. Nachträge aus der Review (WP7–WP9)
+
+- **WP7 (#16):** Kalender breiter (2rem-Zellen), Platzhalterzellen mit diagonaler Grau-Schraffur, **vertikales Monats-Scrolling** über mehrere Jahre (statt Jahre-Paging) mit Monat-/Jahr-Sprung + Recenter und vertikaler Jahres-Spalte; Personentabelle über dem Kalender.
+- **WP8 (#17):** Extra-Tab „Urlaubskontingente" entfernt; Kontingent-Verwaltung in das „Personeneinstellungen"-Modal integriert.
+- **WP9 (#18):** Auslands-Feiertage. **DE bleibt feiertage-api.de**; alle anderen Länder über einen **Nager.Date**-Adapter (`services/holiday.py`, geroutet in `ensure_holidays` nach `country`). `resolve_holiday_region` behandelt einen Länder-Override als (country, state)-Paar (state leer für national-only Länder wie GR). `Holiday.state` erlaubt jetzt leeren Wert. Per-MA-Länderauswahl via `components/absence/RegionOverrideSelect`; griechische Feiertage inkl. korrektem orthodoxem Ostern.
+
 ## 8. Invarianten / Nicht-Ziele
 
 - Bestehender Monatskalender, Abwesenheitstabelle & -formular bleiben funktional unverändert (nur Farb-/Label-Maps werden geteilt).

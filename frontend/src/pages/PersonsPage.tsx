@@ -8,7 +8,8 @@ import Modal from '../components/Modal'
 import YearCalendar from '../components/absence/YearCalendar'
 import AbsenceQuickCreateModal from '../components/absence/AbsenceQuickCreateModal'
 import { personColor, TYPE_LABELS, TYPE_SHORT } from '../lib/absenceColors'
-import { GERMAN_STATES, regionKey, regionLabel, regionShade } from '../lib/holidayRegions'
+import { regionKey, regionLabel, regionShade } from '../lib/holidayRegions'
+import RegionOverrideSelect from '../components/absence/RegionOverrideSelect'
 
 type AbsenceType = 'vacation' | 'sick' | 'training'
 const ALL_TYPES: AbsenceType[] = ['vacation', 'training', 'sick']
@@ -109,22 +110,11 @@ function PersonForm({ initial, onSave, onCancel }: {
           />
         )}
       </div>
-      <div>
-        <label htmlFor="person-region" className="block text-xs font-medium text-gray-600 mb-1">
-          Feiertagsregion <span className="font-normal text-gray-400">optional — überschreibt global</span>
-        </label>
-        <select id="person-region"
-          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.holiday_state ?? ''}
-          onChange={(e) => {
-            const st = e.target.value || null
-            setForm({ ...form, holiday_state: st, holiday_country: st ? 'DE' : null })
-          }}
-        >
-          <option value="">– global (aus Einstellungen) –</option>
-          {GERMAN_STATES.map(([code, name]) => <option key={code} value={code}>{name} ({code})</option>)}
-        </select>
-      </div>
+      <RegionOverrideSelect
+        country={form.holiday_country}
+        state={form.holiday_state}
+        onChange={(c, s) => setForm({ ...form, holiday_country: c, holiday_state: s })}
+      />
       <div className="flex justify-end gap-2 pt-2">
         <button type="button" onClick={onCancel}
           className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">

@@ -5,7 +5,7 @@ import { ChevronLeft, Pencil, Plus, Trash2 } from 'lucide-react'
 import { persons, projects as projectsApi, type Person, type PersonAbsence, type VacationContingent, type PersonMembershipDetail, type ProjectMembership } from '../api'
 import Modal from '../components/Modal'
 import { TYPE_LABELS, TYPE_BADGE as TYPE_COLORS, STATUS_LABELS } from '../lib/absenceColors'
-import { GERMAN_STATES } from '../lib/holidayRegions'
+import RegionOverrideSelect from '../components/absence/RegionOverrideSelect'
 
 // ─── Edit person form ─────────────────────────────────────────────────────────
 
@@ -50,21 +50,11 @@ function EditPersonForm({
           value={form.default_weekly_hours}
           onChange={(e) => setForm({ ...form, default_weekly_hours: parseFloat(e.target.value) })} />
       </div>
-      <div>
-        <label htmlFor="edit-region" className="block text-xs font-medium text-gray-600 mb-1">
-          Feiertagsregion <span className="font-normal text-gray-400">optional — überschreibt global</span>
-        </label>
-        <select id="edit-region"
-          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.holiday_state ?? ''}
-          onChange={(e) => {
-            const st = e.target.value || null
-            setForm({ ...form, holiday_state: st, holiday_country: st ? 'DE' : null })
-          }}>
-          <option value="">– global (aus Einstellungen) –</option>
-          {GERMAN_STATES.map(([code, name]) => <option key={code} value={code}>{name} ({code})</option>)}
-        </select>
-      </div>
+      <RegionOverrideSelect
+        country={form.holiday_country}
+        state={form.holiday_state}
+        onChange={(c, s) => setForm({ ...form, holiday_country: c, holiday_state: s })}
+      />
       <div className="flex justify-end gap-2 pt-2">
         <button type="button" onClick={onCancel}
           className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>

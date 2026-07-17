@@ -11,6 +11,14 @@ export const GERMAN_STATES: [string, string][] = [
 
 export const STATE_LABEL: Record<string, string> = Object.fromEntries(GERMAN_STATES)
 
+/** Selectable holiday countries. DE uses feiertage-api.de; the rest use Nager.Date. */
+export const COUNTRIES: [string, string][] = [
+  ['DE', 'Deutschland'], ['GR', 'Griechenland'], ['AT', 'Österreich'], ['CH', 'Schweiz'],
+  ['FR', 'Frankreich'], ['IT', 'Italien'], ['ES', 'Spanien'], ['PL', 'Polen'],
+  ['GB', 'Vereinigtes Königreich'], ['RO', 'Rumänien'], ['BG', 'Bulgarien'], ['US', 'USA'],
+]
+export const COUNTRY_LABEL: Record<string, string> = Object.fromEntries(COUNTRIES)
+
 /** Optional local holidays — keys must match EXTRA_HOLIDAY_CATALOG in the backend. */
 export const EXTRA_HOLIDAYS: [string, string][] = [
   ['mariae_himmelfahrt', 'Mariä Himmelfahrt (15.8.)'],
@@ -23,10 +31,11 @@ export function regionKey(country: string, state: string): string {
   return `${country}-${state}`
 }
 
-/** Human label for a region key like "DE-BY". */
+/** Human label for a region key like "DE-BY" (→ Bayern) or "GR-" (→ Griechenland). */
 export function regionLabel(key: string): string {
-  const state = key.split('-')[1] ?? key
-  return STATE_LABEL[state] ?? state
+  const [country, state] = key.split('-')
+  if (state && STATE_LABEL[state]) return STATE_LABEL[state]
+  return COUNTRY_LABEL[country] ?? country
 }
 
 // Warm, similar-but-distinct shades so holidays of different regions read as
