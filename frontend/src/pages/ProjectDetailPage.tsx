@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy, AlertTriangle } from 'lucide-react'
@@ -552,6 +552,178 @@ const STATUS_LABELS: Record<MonthlyInvoice['status'], string> = {
   paid: 'Bezahlt',
 }
 
+interface AssignRow {
+  key: string
+  membershipId: number | null
+  billing_position_id: number | null
+  weekly_capacity_hours: number
+  priority: number
+  billing_rate_per_hour: number
+  vacation_days_taken: number
+}
+
+/** Manage ALL Posten-assignments of one MA in a project as an editable list — each row is
+ *  one ProjectMembership. Saving diffs against the existing memberships (create/update/delete).
+ *  Shared Von/Bis apply to every row (the common case; date ranges per Posten are rare). */
+function MemberAssignmentsModal({
+  projectId, person, memberships, positions, positionMode, onClose, onSaved,
+}: {
+  projectId: number
+  person: { id: number; name: string }
+  memberships: ProjectMembership[]
+  positions: BillingPosition[]
+  positionMode: boolean
+  onClose: () => void
+  onSaved: (warnings: string[]) => void
+}) {
+  const mine = memberships.filter((m) => m.person_id === person.id)
+  const posById = new Map(positions.map((p) => [p.id, p]))
+  const seq = useRef(0)
+  const [fromDate, setFromDate] = useState(mine[0]?.from_date ?? '')
+  const [toDate, setToDate] = useState(mine[0]?.to_date ?? '')
+  const [rows, setRows] = useState<AssignRow[]>(
+    mine.map((m) => ({
+      key: 'm' + m.id, membershipId: m.id, billing_position_id: m.billing_position_id,
+      weekly_capacity_hours: m.weekly_capacity_hours, priority: m.priority,
+      billing_rate_per_hour: m.billing_rate_per_hour, vacation_days_taken: m.vacation_days_taken,
+    })),
+  )
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const rowRate = (r: AssignRow) => {
+    const p = r.billing_position_id != null ? posById.get(r.billing_position_id) : undefined
+    return p && p.billing_rate_per_hour > 0 ? p.billing_rate_per_hour : r.billing_rate_per_hour
+  }
+  const setRow = (key: string, patch: Partial<AssignRow>) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+  const addRow = () => {
+    const used = new Set(rows.map((r) => r.billing_position_id))
+    const free = positions.find((p) => !used.has(p.id))
+    setRows((rs) => [...rs, {
+      key: 'n' + (seq.current++), membershipId: null,
+      billing_position_id: free?.id ?? null, weekly_capacity_hours: 0, priority: 0,
+      billing_rate_per_hour: 0, vacation_days_taken: 0,
+    }])
+  }
+
+  const save = async () => {
+    setErr(null)
+    if (!fromDate || !toDate) return setErr('Von und Bis sind erforderlich.')
+    if (rows.length === 0) return setErr('Mindestens eine Zuweisung erforderlich.')
+    if (positionMode && rows.some((r) => r.billing_position_id == null))
+      return setErr('Im Posten-Modus muss jede Zeile einen Posten haben.')
+    const posIds = rows.map((r) => r.billing_position_id)
+    if (new Set(posIds).size !== posIds.length)
+      return setErr('Jeder Posten darf diesem MA nur einmal zugewiesen sein.')
+    if (rows.some((r) => !(r.weekly_capacity_hours > 0)))
+      return setErr('h/Woche muss größer als 0 sein.')
+    setSaving(true)
+    try {
+      const keptIds = new Set(rows.filter((r) => r.membershipId != null).map((r) => r.membershipId!))
+      for (const m of mine) if (!keptIds.has(m.id)) await projects.deleteMembership(projectId, m.id)
+      const warnings: string[] = []
+      for (const r of rows) {
+        const payload = {
+          from_date: fromDate, to_date: toDate, weekly_capacity_hours: r.weekly_capacity_hours,
+          billing_rate_per_hour: rowRate(r), priority: r.priority,
+          vacation_days_taken: r.vacation_days_taken, billing_position_id: r.billing_position_id,
+        }
+        const res = r.membershipId != null
+          ? await projects.updateMembership(projectId, r.membershipId, payload)
+          : await projects.addMembership(projectId, { person_id: person.id, ...payload })
+        if (res.warnings) warnings.push(...res.warnings)
+      }
+      onSaved(warnings)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={`Posten-Zuweisungen — ${person.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Von</label>
+            <input type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+              value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
+            <input type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+              value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </div>
+        </div>
+        <p className="text-xs text-gray-500">Zeitraum gilt für alle Posten-Zuweisungen dieses MA.</p>
+
+        <div className="border border-gray-200 rounded overflow-hidden">
+          <div className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 bg-gray-50 text-[11px] font-medium text-gray-500">
+            <span>Posten</span><span>h/Woche</span><span>Priorität</span><span></span>
+          </div>
+          {rows.length === 0 && (
+            <div className="px-2 py-3 text-xs text-gray-400">Noch keine Zuweisung — „+ Posten" klicken.</div>
+          )}
+          {rows.map((r) => {
+            const pos = r.billing_position_id != null ? posById.get(r.billing_position_id) : undefined
+            const rateFromPos = pos != null && pos.billing_rate_per_hour > 0
+            return (
+              <div key={r.key} className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 items-center border-t border-gray-100">
+                <div>
+                  <select className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                    value={r.billing_position_id ?? ''}
+                    onChange={(e) => setRow(r.key, { billing_position_id: e.target.value === '' ? null : parseInt(e.target.value) })}>
+                    {!positionMode && <option value="">— kein Posten —</option>}
+                    {positions.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.position_number}{p.description ? ` – ${p.description}` : ''}{p.billing_rate_per_hour > 0 ? ` (${p.billing_rate_per_hour} €)` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {!rateFromPos && (
+                    <input type="number" min={0} step={0.01} placeholder="Satz €/Std."
+                      className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      value={r.billing_rate_per_hour || ''}
+                      onChange={(e) => setRow(r.key, { billing_rate_per_hour: parseFloat(e.target.value) || 0 })} />
+                  )}
+                </div>
+                <input type="number" min={0} step={0.01}
+                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  value={r.weekly_capacity_hours || ''}
+                  onChange={(e) => setRow(r.key, { weekly_capacity_hours: parseFloat(e.target.value) || 0 })} />
+                <input type="number" step={1}
+                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  value={r.priority}
+                  onChange={(e) => setRow(r.key, { priority: parseInt(e.target.value) || 0 })} />
+                <button type="button" title="Zuweisung entfernen"
+                  className="text-gray-400 hover:text-red-600"
+                  onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+        <button type="button" onClick={addRow}
+          className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800">
+          <Plus size={14} /> Posten
+        </button>
+
+        {err && <p className="text-sm text-red-600">{err}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+          <button type="button" onClick={save} disabled={saving}
+            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+            {saving ? 'Speichern…' : 'Speichern'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 type Tab = 'milestones' | 'invoices' | 'members' | 'bookings' | 'settings'
 
 export default function ProjectDetailPage() {
@@ -565,6 +737,7 @@ export default function ProjectDetailPage() {
   const [showAddMember, setShowAddMember] = useState(false)
   const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
   const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
+  const [editAssign, setEditAssign] = useState<{ personId: number; personName: string } | null>(null)  // Posten-Zuweisungs-Liste eines MA
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
@@ -1675,7 +1848,7 @@ export default function ProjectDetailPage() {
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority, vacation_days_taken: m.vacation_days_taken, billing_position_id: m.billing_position_id }); setError(null) }}
+                          onClick={() => { setEditAssign({ personId: m.person_id, personName: personName(m.person_id) }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
@@ -2188,7 +2361,25 @@ export default function ProjectDetailPage() {
         </Modal>
       )}
 
-      {/* Edit membership modal */}
+      {/* Posten-Zuweisungs-Liste eines MA (mehrere Posten je MA) */}
+      {editAssign && (
+        <MemberAssignmentsModal
+          projectId={projectId}
+          person={{ id: editAssign.personId, name: editAssign.personName }}
+          memberships={memberships}
+          positions={billingPositions}
+          positionMode={positionMode}
+          onClose={() => setEditAssign(null)}
+          onSaved={(warnings) => {
+            qc.invalidateQueries({ queryKey: ['memberships', projectId] })
+            invalidateMilestones()
+            setEditAssign(null)
+            if (warnings.length > 0) setMemberWarnings(warnings)
+          }}
+        />
+      )}
+
+      {/* Edit membership modal (legacy single-Posten — nur noch als Fallback) */}
       {editMember && (
         <Modal title="Zuweisung bearbeiten" onClose={() => { setEditMember(null); setError(null) }}>
           <p className="text-xs text-gray-500 mb-3">Person: <strong>{personName(editMember.person_id)}</strong></p>
