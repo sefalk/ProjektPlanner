@@ -371,6 +371,11 @@ export interface PersonAbsence {
   absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
   note: string;
+  // Booking metrics (backend-computed): working days & hours the absence books.
+  booked_working_days?: number;
+  booked_hours?: number;
+  // Vacation only: contingent days consumed after the confirmed-sick (AU) refund.
+  contingent_days?: number | null;
 }
 
 export interface VacationContingent {
@@ -463,6 +468,9 @@ export interface CalendarAbsence {
   end_date: string | null;
   absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
+  booked_working_days?: number;
+  booked_hours?: number;
+  contingent_days?: number | null;
 }
 
 export interface CalendarMembership {

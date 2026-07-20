@@ -217,6 +217,26 @@ function ContingentForm({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+/** "Gebucht" cell: working days + hours an absence books, with the vacation
+ *  contingent (after the AU refund) called out when it differs from the raw days. */
+function renderBooking(a: PersonAbsence) {
+  if (a.booked_working_days == null) return <span className="text-gray-300">–</span>
+  const days = a.booked_working_days
+  const hours = a.booked_hours ?? 0
+  const base = `${days} AT · ${hours} h`
+  const isVacation = a.absence_type === 'vacation'
+  const refunded = isVacation && a.contingent_days != null && a.contingent_days !== days
+  if (refunded) {
+    return (
+      <span title={`${a.contingent_days} Urlaubstag(e) verbraucht — ${days - (a.contingent_days ?? 0)} durch beglaubigte Krankheit (AU) erstattet. Stunden: ${hours} h.`}>
+        {base}
+        <span className="ml-1 text-amber-600">(Kontingent {a.contingent_days})</span>
+      </span>
+    )
+  }
+  return <span title={isVacation ? `${days} Urlaubstag(e) · ${hours} h (ohne Wochenenden/Feiertage/freie Tage)` : `${days} Arbeitstag(e) · ${hours} h`}>{base}</span>
+}
+
 type Tab = 'absences' | 'projects'
 
 // ─── Membership form ──────────────────────────────────────────────────────────
@@ -444,14 +464,23 @@ export default function PersonDetailPage() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Typ', 'Von', 'Bis', 'Status', 'Notiz', ''].map((h) => (
-                      <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
+                    {[
+                      { h: 'Typ', t: undefined },
+                      { h: 'Von', t: undefined },
+                      { h: 'Bis', t: undefined },
+                      { h: 'Status', t: undefined },
+                      { h: 'Gebucht', t: 'Gebuchte Arbeitstage und Stunden dieses Zeitraums — ohne Wochenenden, Feiertage und im Arbeitsmodell freie Tage. Bei Urlaub: Kontingentverbrauch nach Erstattung bei beglaubigter Krankheit (AU).' },
+                      { h: 'Notiz', t: undefined },
+                      { h: '', t: undefined },
+                    ].map(({ h, t }) => (
+                      <th key={h || 'actions'} scope="col" title={t}
+                        className={`px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase ${t ? 'cursor-help' : ''}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {sortedAbsences.length === 0 && (
-                    <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-400">Keine Abwesenheiten eingetragen.</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">Keine Abwesenheiten eingetragen.</td></tr>
                   )}
                   {sortedAbsences.map((a) => (
                     <tr key={a.id}>
@@ -463,6 +492,7 @@ export default function PersonDetailPage() {
                       <td className="px-4 py-3 text-sm text-gray-700">{a.start_date}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{a.end_date ?? <span className="text-gray-400 italic">laufend</span>}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{STATUS_LABELS[a.status]}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{renderBooking(a)}</td>
                       <td className="px-4 py-3 text-sm text-gray-400 max-w-[12rem] truncate">{a.note}</td>
                       <td className="px-4 py-3 text-sm">
                         <div className="flex items-center gap-2">

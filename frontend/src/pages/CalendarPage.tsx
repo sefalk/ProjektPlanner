@@ -61,6 +61,21 @@ function absenceOnDay(absence: CalendarAbsence, dateStr: string): boolean {
   return absence.start_date <= dateStr && end >= dateStr
 }
 
+/** Hover tooltip for an absence: type/status, range and what it books
+ *  (working days & hours, minus weekends/holidays/non-working days; for vacation
+ *  the contingent consumed after the confirmed-sick (AU) refund). */
+function absenceTooltip(a: CalendarAbsence): string {
+  const lines = [`${ABSENCE_NAME[a.absence_type]} (${STATUS_NAME[a.status]})`]
+  lines.push(`${a.start_date} – ${a.end_date ?? 'laufend'}`)
+  if (a.booked_working_days != null) {
+    lines.push(`Bucht: ${a.booked_working_days} Arbeitstag(e) · ${a.booked_hours ?? 0} h`)
+    if (a.absence_type === 'vacation' && a.contingent_days != null && a.contingent_days !== a.booked_working_days) {
+      lines.push(`Urlaubskontingent: ${a.contingent_days} (${a.booked_working_days - a.contingent_days} durch AU erstattet)`)
+    }
+  }
+  return lines.join('\n')
+}
+
 // Clamp membership dates to the visible month, returning 1-based day numbers
 function membershipStartDay(fromDate: string, year: number, month: number): number {
   if (fromDate <= isoDate(year, month, 1)) return 1
@@ -263,7 +278,7 @@ function PersonRow({
             if (!absence) return null
             const bg = ABSENCE_BG[absence.absence_type] ?? 'bg-gray-200'
             const label = ABSENCE_LABEL[absence.absence_type] ?? '?'
-            const title = `${ABSENCE_NAME[absence.absence_type]} (${STATUS_NAME[absence.status]})`
+            const title = absenceTooltip(absence)
             return (
               <div
                 key={day}
