@@ -15,7 +15,7 @@ from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone
 from app.models.person import Person
 from app.models.project import Project
-from app.models.timebooking import ImportBatch, TimeBooking
+from app.models.timebooking import ImportBatch, SagePositionMapping, TimeBooking
 from app.services.line_items import (
     default_new_position_budget,
     position_budget_state,
@@ -326,6 +326,18 @@ def delete_billing_position(project_id: int, bp_id: int, session: SessionDep):
     ).first()
     if invoiced:
         raise HTTPException(409, "Posten hat Abrechnungen und kann nicht gelöscht werden.")
+    # doc 24 IP4: also block while a level→position mapping or a booking references it,
+    # otherwise those would dangle (mapping) / silently unresolve (bookings).
+    mapped = session.exec(
+        select(SagePositionMapping).where(SagePositionMapping.billing_position_id == bp_id)
+    ).first()
+    if mapped:
+        raise HTTPException(409, "Posten ist einer Projektebene zugeordnet (Mapping) und kann nicht gelöscht werden.")
+    booked = session.exec(
+        select(TimeBooking).where(TimeBooking.billing_position_id == bp_id)
+    ).first()
+    if booked:
+        raise HTTPException(409, "Posten hat zugeordnete Buchungen und kann nicht gelöscht werden.")
     session.delete(bp)
     session.commit()
 
@@ -536,6 +548,7 @@ class BookingOut(BaseModel):
     import_batch_id: int
     sage_project_name: str
     sage_project_level: str
+    billing_position_id: int | None  # resolved Posten (doc 24 IP3); None = nicht zugeordnet
     net_hours: float
     duration_raw: str
     break_duration: str
@@ -601,6 +614,7 @@ def list_project_bookings(
             import_batch_id=b.import_batch_id,
             sage_project_name=b.sage_project_name,
             sage_project_level=b.sage_project_level,
+            billing_position_id=b.billing_position_id,
             net_hours=b.net_hours,
             duration_raw=b.duration_raw,
             break_duration=b.break_duration,

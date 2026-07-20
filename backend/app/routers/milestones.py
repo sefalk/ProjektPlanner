@@ -304,15 +304,30 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         # across a person's positions, so they are attributed to that person's PRIMARY row
         # (lowest budget id) — shown exactly once, so the milestone Ist total stays correct.
         booked_pos: dict[tuple[int, int], float] = {}
-        booked_null: dict[int, float] = {}
+        total_booked_by_person: dict[int, float] = {}
         for pid, bpid, h in booked_rows:
-            if bpid is None:
-                booked_null[pid] = booked_null.get(pid, 0.0) + float(h)
-            else:
+            total_booked_by_person[pid] = total_booked_by_person.get(pid, 0.0) + float(h)
+            if bpid is not None:
                 booked_pos[(pid, bpid)] = booked_pos.get((pid, bpid), 0.0) + float(h)
+        # "Matched" = booked hours whose position has a budget row this month. "Leftover" per
+        # person = everything else (NULL-position bookings AND bookings tagged with a position
+        # that has no budget row here — e.g. a closed month whose legacy row is (person, NULL)
+        # while the booking was later backfilled to a posten). Leftover is attributed to the
+        # person's PRIMARY row in simple mode and in closed (locked) months (Ist is history and
+        # must always show); in OPEN position-mode months it is UNRESOLVED (excluded + warned).
+        budget_pos_by_person: dict[int, set[int | None]] = {}
         primary_budget_by_person: dict[int, int] = {}
         for b in sorted(budgets, key=lambda b: b.id):
             primary_budget_by_person.setdefault(b.person_id, b.id)
+            budget_pos_by_person.setdefault(b.person_id, set()).add(b.billing_position_id)
+        matched_by_person: dict[int, float] = {}
+        for (pid, bpid), h in booked_pos.items():
+            if bpid in budget_pos_by_person.get(pid, set()):
+                matched_by_person[pid] = matched_by_person.get(pid, 0.0) + h
+        leftover_by_person: dict[int, float] = {
+            pid: total - matched_by_person.get(pid, 0.0)
+            for pid, total in total_booked_by_person.items()
+        }
         persons_out: list[MilestonePersonDetailOut] = []
         for budget in budgets:
             person = persons_map.get(budget.person_id)
@@ -328,8 +343,8 @@ def list_milestones_detail(project_id: int, session: SessionDep):
             # WP6: a non-override row planned below its available capacity was capped by a
             # budget (capacity itself = available_hours). Name which budget bound it.
             booked_hours = booked_pos.get((person.id, budget.billing_position_id), 0.0)
-            if primary_budget_by_person.get(person.id) == budget.id:
-                booked_hours += booked_null.get(person.id, 0.0)
+            if (not project.position_mode or ms.is_locked) and primary_budget_by_person.get(person.id) == budget.id:
+                booked_hours += leftover_by_person.get(person.id, 0.0)
             cap_reason: str | None = None
             if not ms.is_locked and not budget.is_manual_override and stats.hours - budget.current_hours > 0.05:
                 if project.position_mode and membership.billing_position_id is not None:
@@ -381,6 +396,16 @@ def list_milestones_detail(project_id: int, session: SessionDep):
             warnings.append(
                 "Gesperrter Meilenstein liegt außerhalb des aktuellen Projektzeitraums."
             )
+        # doc 24 IP5: in position mode, bookings without a resolved Posten are unresolved —
+        # excluded from the per-Posten Ist above; flag their existence here. Closed months
+        # are excluded: their Ist is historical and is shown (not treated as unresolved).
+        if project.position_mode and not ms.is_locked:
+            unresolved_h = sum(leftover_by_person.values())
+            if unresolved_h > 0.05:
+                warnings.append(
+                    f"{unresolved_h:.1f} h gebuchte Ist-Stunden ohne Posten-Zuordnung — nicht in "
+                    f"der Posten-Berechnung berücksichtigt. Projektebene→Posten-Mapping prüfen."
+                )
 
         result.append(MilestoneDetailOut(milestone=ms, persons=persons_out, warnings=warnings))
 

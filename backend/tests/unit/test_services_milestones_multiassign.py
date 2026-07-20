@@ -140,9 +140,10 @@ def test_detail_shows_legacy_null_position_budget_row(session):
 
 
 def test_booked_without_position_attributed_to_primary_row(session):
-    """Regression: bookings without a position (NULL — simple-mode / unmapped import) must
-    still show as Ist. They can't be split across a person's positions, so they go to the
-    person's primary budget row exactly once (total preserved, not doubled, not lost)."""
+    """Regression: in SIMPLE mode, bookings without a position (NULL) must still show as Ist.
+    They can't be split across a person's positions, so they go to the person's primary
+    budget row exactly once (total preserved, not doubled, not lost). (In position mode they
+    are instead treated as unresolved — see test_position_mode_unresolved_booking_*.)"""
     from datetime import date as _date
 
     from app.models.timebooking import TimeBooking
@@ -150,6 +151,10 @@ def test_booked_without_position_attributed_to_primary_row(session):
 
     proj, pos_a, pos_b, person = _setup(session, budget_a=1_000_000.0, budget_b=1_000_000.0)
     initialize_milestones(proj.id, session)
+    # Simple mode: NULL-position bookings are attributed (not "unresolved").
+    proj.position_mode = False
+    session.add(proj)
+    session.commit()
     session.add(TimeBooking(
         booking_date=_date(2026, 1, 15), person_id=person.id, project_id=proj.id,
         import_batch_id=1, sage_project_name="X", sage_project_level="Y",
@@ -163,3 +168,61 @@ def test_booked_without_position_attributed_to_primary_row(session):
     assert len(mine) == 2  # one row per position
     assert abs(sum(p.booked_hours for p in mine) - 8.0) < 1e-6  # total preserved
     assert sum(1 for p in mine if p.booked_hours > 0) == 1      # attributed to exactly one row
+
+
+def test_position_mode_unresolved_booking_excluded_and_warned(session):
+    """IP5: in position mode a booking without a Posten is unresolved — it must NOT count
+    toward any posten's Ist and its existence is flagged as a milestone warning."""
+    from datetime import date as _date
+
+    from app.models.timebooking import TimeBooking
+    from app.routers.milestones import list_milestones_detail
+
+    proj, pos_a, pos_b, person = _setup(session, budget_a=1_000_000.0, budget_b=1_000_000.0)
+    assert proj.position_mode is True
+    initialize_milestones(proj.id, session)
+    session.add(TimeBooking(
+        booking_date=_date(2026, 1, 15), person_id=person.id, project_id=proj.id,
+        import_batch_id=1, sage_project_name="X", sage_project_level="Y",
+        billing_position_id=None, net_hours=8.0,
+    ))
+    session.commit()
+
+    detail = list_milestones_detail(proj.id, session)
+    jan = next(m for m in detail if m.milestone.month == 1)
+    # unresolved NULL-position booking not attributed to any posten row
+    assert all(p.booked_hours == 0 for p in jan.persons if p.person_id == person.id)
+    # ...and its existence is flagged
+    assert any("ohne Posten" in w for w in jan.warnings)
+
+
+def test_closed_milestone_shows_ist_in_position_mode(session):
+    """Regression (Feedback): even in position mode, a CLOSED month's Ist is historical and
+    must always show — NULL-position bookings are attributed (not treated as unresolved)."""
+    from datetime import date as _date
+
+    from app.models.timebooking import TimeBooking
+    from app.routers.milestones import list_milestones_detail
+
+    proj, pos_a, pos_b, person = _setup(session, budget_a=1_000_000.0, budget_b=1_000_000.0)
+    assert proj.position_mode is True
+    ms = Milestone(project_id=proj.id, year=2026, month=1, initial_hours=10.0,
+                   current_hours=10.0, is_locked=True)
+    session.add(ms)
+    session.flush()
+    session.add(MilestonePersonBudget(
+        milestone_id=ms.id, person_id=person.id, billing_position_id=pos_a.id,
+        initial_hours=10.0, current_hours=10.0,
+    ))
+    session.add(TimeBooking(
+        booking_date=_date(2026, 1, 10), person_id=person.id, project_id=proj.id,
+        import_batch_id=1, sage_project_name="X", sage_project_level="Y",
+        billing_position_id=None, net_hours=7.0,
+    ))
+    session.commit()
+
+    detail = list_milestones_detail(proj.id, session)
+    jan = next(m for m in detail if m.milestone.month == 1)
+    mine = [p for p in jan.persons if p.person_id == person.id]
+    assert abs(sum(p.booked_hours for p in mine) - 7.0) < 1e-6   # Ist shown despite position mode
+    assert not any("ohne Posten" in w for w in jan.warnings)      # no unresolved warning on closed month
