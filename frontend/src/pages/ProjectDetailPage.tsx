@@ -833,8 +833,6 @@ export default function ProjectDetailPage() {
   const [tab, setTab] = useState<Tab>('milestones')
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
-  const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
-  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
   const [editAssign, setEditAssign] = useState<{ personId: number; personName: string } | null>(null)  // Posten-Zuweisungs-Liste eines MA
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
@@ -985,16 +983,6 @@ export default function ProjectDetailPage() {
       if (result.warnings && result.warnings.length > 0) {
         setMemberWarnings(result.warnings)
       }
-    },
-    onError: (e: Error) => setError(errText(e)),
-  })
-  const updateMember = useMutation({
-    mutationFn: () => projects.updateMembership(projectId, editMember!.id, editMemberForm),
-    onSuccess: (result) => {
-      qc.invalidateQueries({ queryKey: ['memberships', projectId] })
-      setEditMember(null)
-      setError(null)
-      if (result.warnings && result.warnings.length > 0) setMemberWarnings(result.warnings)
     },
     onError: (e: Error) => setError(errText(e)),
   })
@@ -2496,79 +2484,6 @@ export default function ProjectDetailPage() {
         />
       )}
 
-      {/* Edit membership modal (legacy single-Posten — nur noch als Fallback) */}
-      {editMember && (
-        <Modal title="Zuweisung bearbeiten" onClose={() => { setEditMember(null); setError(null) }}>
-          <p className="text-xs text-gray-500 mb-3">Person: <strong>{personName(editMember.person_id)}</strong></p>
-          <form onSubmit={(e) => { e.preventDefault(); updateMember.mutate() }} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Von</label>
-                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.from_date}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, from_date: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
-                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.to_date}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, to_date: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">h/Woche</label>
-                <input required type="number" min={0} max={60} step={0.01}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.weekly_capacity_hours}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
-              </div>
-              {(() => {
-                const pos = editMemberForm.billing_position_id != null ? posById.get(editMemberForm.billing_position_id) : undefined
-                const fromPosition = pos != null && pos.billing_rate_per_hour > 0
-                return (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                    <input required={!fromPosition} type="number" min={0} step={0.01} disabled={fromPosition}
-                      className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
-                      title={fromPosition ? 'Satz kommt vom zugewiesenen Posten' : undefined}
-                      value={fromPosition ? pos!.billing_rate_per_hour : editMemberForm.billing_rate_per_hour}
-                      onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
-                  </div>
-                )
-              })()}
-            </div>
-            <PositionSelect positions={billingPositions} required={positionMode}
-              value={editMemberForm.billing_position_id}
-              onChange={(v) => setEditMemberForm({ ...editMemberForm, billing_position_id: v })} />
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
-              </label>
-              <input type="number" step={1}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                value={editMemberForm.priority}
-                onChange={(e) => setEditMemberForm({ ...editMemberForm, priority: parseInt(e.target.value) || 0 })} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Bereits genommener Urlaub <span className="text-gray-400 font-normal">(Tage, projektbezogen — reduziert die geschätzte Abwesenheit)</span>
-              </label>
-              <input type="number" min={0} step={0.5}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                value={editMemberForm.vacation_days_taken}
-                onChange={(e) => setEditMemberForm({ ...editMemberForm, vacation_days_taken: parseFloat(e.target.value) || 0 })} />
-            </div>
-            {error && <p className="text-xs text-red-600">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => { setEditMember(null); setError(null) }}
-                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-              <button type="submit"
-                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
-            </div>
-          </form>
-        </Modal>
-      )}
     </div>
   )
 }
