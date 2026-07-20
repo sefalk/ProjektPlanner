@@ -495,6 +495,34 @@ function PositionResolver({
   const [sel, setSel] = useState<Record<string, number>>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Inline "create a Posten" (doc 24 IP2) — keyed by the row currently in create mode.
+  const [creatingFor, setCreatingFor] = useState<string | null>(null)
+  const [newPos, setNewPos] = useState({ position_number: '', billing_rate_per_hour: 0, budget_euros: 0 })
+  const [createErr, setCreateErr] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+
+  async function createPosten(p: UnresolvedPosition) {
+    setCreating(true)
+    setCreateErr(null)
+    try {
+      const bp = await projects.addBillingPosition(p.project_id, {
+        position_number: newPos.position_number,
+        billing_rate_per_hour: newPos.billing_rate_per_hour,
+        budget_euros: newPos.budget_euros,
+      })
+      qc.invalidateQueries({ queryKey: ['positions-for-resolve'] })
+      setSel((s) => ({ ...s, [key(p)]: bp.id }))
+      setCreatingFor(null)
+      setNewPos({ position_number: '', billing_rate_per_hour: 0, budget_euros: 0 })
+    } catch (e) {
+      const msg = e instanceof Error && 'body' in e && typeof (e as { body?: unknown }).body === 'object'
+        ? String(((e as { body?: { detail?: unknown } }).body?.detail) ?? (e as Error).message)
+        : (e as Error).message
+      setCreateErr(msg)
+    } finally {
+      setCreating(false)
+    }
+  }
 
   // Pre-select the sole Posten of a project (still requires confirmation via Save) — a level
   // that only appears in this import must not silently persist a mapping (doc 24 IP2).
@@ -549,24 +577,60 @@ function PositionResolver({
       <div className="space-y-2 mb-4">
         {pairs.map((p) => {
           const list = posByProject[p.project_id] ?? []
+          const creatingHere = creatingFor === key(p)
           return (
-            <div key={key(p)} className="flex items-center gap-3">
-              <span className="text-sm text-gray-700 min-w-[16rem] truncate">
-                <span className="font-mono">{projLabel(p.project_id)}</span>
-                <span className="text-gray-400"> · </span>
-                <span className="font-mono">{p.sage_project_level}</span>
-              </span>
-              <span className="text-gray-400">→</span>
-              <select
-                className="flex-1 border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                value={sel[key(p)] ?? 0}
-                onChange={(e) => setSel((s) => ({ ...s, [key(p)]: parseInt(e.target.value) }))}
-              >
-                <option value={0} disabled>— Posten wählen —</option>
-                {list.map((bp) => (
-                  <option key={bp.id} value={bp.id}>{bp.position_number}{bp.description ? ` – ${bp.description}` : ''}</option>
-                ))}
-              </select>
+            <div key={key(p)}>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-700 min-w-[16rem] truncate">
+                  <span className="font-mono">{projLabel(p.project_id)}</span>
+                  <span className="text-gray-400"> · </span>
+                  <span className="font-mono">{p.sage_project_level}</span>
+                </span>
+                <span className="text-gray-400">→</span>
+                <select
+                  className="flex-1 border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  value={sel[key(p)] ?? 0}
+                  onChange={(e) => setSel((s) => ({ ...s, [key(p)]: parseInt(e.target.value) }))}
+                >
+                  <option value={0} disabled>— Posten wählen —</option>
+                  {list.map((bp) => (
+                    <option key={bp.id} value={bp.id}>{bp.position_number}{bp.description ? ` – ${bp.description}` : ''}</option>
+                  ))}
+                </select>
+                <button type="button"
+                  className="text-xs text-blue-600 hover:text-blue-800 whitespace-nowrap"
+                  onClick={() => { setCreateErr(null); setCreatingFor(creatingHere ? null : key(p)) }}>
+                  {creatingHere ? 'Abbrechen' : '＋ neuer Posten'}
+                </button>
+              </div>
+              {creatingHere && (
+                <div className="mt-2 ml-[17rem] flex flex-wrap items-end gap-2 bg-white border border-gray-200 rounded p-2">
+                  <div>
+                    <label className="block text-[10px] text-gray-500">Positionsnr.</label>
+                    <input className="border border-gray-300 rounded px-2 py-1 text-sm w-24" placeholder="z.B. AP1"
+                      value={newPos.position_number}
+                      onChange={(e) => setNewPos((n) => ({ ...n, position_number: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-500">Satz (€/Std.)</label>
+                    <input type="number" min={0} step={0.01} className="border border-gray-300 rounded px-2 py-1 text-sm w-24"
+                      value={newPos.billing_rate_per_hour || ''}
+                      onChange={(e) => setNewPos((n) => ({ ...n, billing_rate_per_hour: parseFloat(e.target.value) || 0 }))} />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-500">Budget (€)</label>
+                    <input type="number" min={0} step={0.01} className="border border-gray-300 rounded px-2 py-1 text-sm w-28"
+                      value={newPos.budget_euros || ''}
+                      onChange={(e) => setNewPos((n) => ({ ...n, budget_euros: parseFloat(e.target.value) || 0 }))} />
+                  </div>
+                  <button type="button" disabled={!newPos.position_number || creating}
+                    onClick={() => void createPosten(p)}
+                    className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                    {creating ? '…' : 'Anlegen'}
+                  </button>
+                  {createErr && <span className="text-xs text-red-600 w-full">{createErr}</span>}
+                </div>
+              )}
             </div>
           )
         })}
