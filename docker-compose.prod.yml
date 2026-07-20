@@ -1,0 +1,41 @@
+# Production stack for the internal Linux host (LAN-only).
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# - backend: FastAPI (uvicorn, 2 workers). Runs DB migrations on start, then serves.
+#   Not published to the host — only reachable inside the compose network via nginx.
+# - frontend: the built SPA served by nginx, which also reverse-proxies /api → backend.
+#   Published on ${WEB_PORT:-8080} on all interfaces (reachable from the firm LAN).
+# - SQLite lives in a named volume (survives restarts/rebuilds).
+services:
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment:
+      # No data_config.json in the container → this URL is used (SQLite in the volume).
+      # Relative to WORKDIR /app → /app/data/projektplanner.db (matches docker-compose.yml).
+      - DATABASE_URL=sqlite:///./data/projektplanner.db
+      - DEFAULT_HOLIDAY_COUNTRY=DE
+      - DEFAULT_HOLIDAY_STATE=BY
+      - DEBUG=false
+    volumes:
+      - backend_data:/app/data
+    # Apply migrations before serving so schema changes land on deploy.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  backend_data:
