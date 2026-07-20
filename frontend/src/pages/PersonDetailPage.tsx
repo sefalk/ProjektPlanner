@@ -237,6 +237,64 @@ function renderBooking(a: PersonAbsence) {
   return <span title={isVacation ? `${days} Urlaubstag(e) · ${hours} h (ohne Wochenenden/Feiertage/freie Tage)` : `${days} Arbeitstag(e) · ${hours} h`}>{base}</span>
 }
 
+/** Absence overview above the table: per-category booked days/hours and, for
+ *  vacation, the contingent split into taken / planned / open. Year selectable. */
+function AbsenceSummaryPanel({ personId }: { personId: number }) {
+  const [year, setYear] = useState(() => new Date().getFullYear())
+  const { data } = useQuery({
+    queryKey: ['absence-summary', personId, year],
+    queryFn: () => persons.absenceSummary(personId, year),
+  })
+  const v = data?.vacation
+  const cats = data?.categories
+  const CATS: [keyof NonNullable<typeof cats>, string, string][] = [
+    ['vacation', 'Urlaub', 'bg-sky-50 text-sky-700 border-sky-200'],
+    ['sick', 'Krank', 'bg-rose-50 text-rose-700 border-rose-200'],
+    ['training', 'Fortbildung', 'bg-violet-50 text-violet-700 border-violet-200'],
+    ['other', 'Sonstiges', 'bg-gray-50 text-gray-600 border-gray-200'],
+  ]
+  const total = v && v.contingent > 0 ? v.contingent : 0
+  const pct = (n: number) => (total > 0 ? Math.min(100, (n / total) * 100) : 0)
+  return (
+    <div className="mb-4 bg-white rounded-lg border border-gray-200 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-gray-700">Abwesenheits-Übersicht {year}</h4>
+        <div className="flex items-center gap-1 text-sm">
+          <button onClick={() => setYear((y) => y - 1)} className="px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50" aria-label="Jahr zurück">‹</button>
+          <span className="w-12 text-center font-medium text-gray-700">{year}</span>
+          <button onClick={() => setYear((y) => y + 1)} className="px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50" aria-label="Jahr vor">›</button>
+        </div>
+      </div>
+
+      {v && (
+        <div className="mb-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <span className="text-gray-600" title="Jahres-Urlaubskontingent">Urlaub: <b className="text-gray-800">{v.contingent}</b> AT</span>
+            <span className="text-emerald-700" title="Bestätigte Urlaubstage">genommen {v.taken}</span>
+            <span className="text-blue-600" title="Vorgemerkte (geplante) Urlaubstage">geplant {v.planned}</span>
+            <span className={v.open <= 0 ? 'text-gray-400' : 'text-amber-600'} title="Verbleibendes Kontingent">offen {v.open}</span>
+          </div>
+          <div className="mt-1.5 h-2 w-full max-w-md rounded bg-gray-100 overflow-hidden flex" title={`genommen ${v.taken} · geplant ${v.planned} · offen ${v.open} von ${v.contingent}`}>
+            <div className="bg-emerald-500 h-full" style={{ width: `${pct(v.taken)}%` }} />
+            <div className="bg-blue-400 h-full" style={{ width: `${pct(v.planned)}%` }} />
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {CATS.map(([k, label, cls]) => {
+          const c = cats?.[k]
+          return (
+            <span key={k} className={`px-2 py-1 rounded border text-xs ${cls}`}>
+              {label}: <b>{c?.days ?? 0}</b> AT · {c?.hours ?? 0} h
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 type Tab = 'absences' | 'projects'
 
 // ─── Membership form ──────────────────────────────────────────────────────────
@@ -460,6 +518,7 @@ export default function PersonDetailPage() {
                 <Plus size={14} /> Neue Abwesenheit
               </button>
             </div>
+            <AbsenceSummaryPanel personId={personId} />
             <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
