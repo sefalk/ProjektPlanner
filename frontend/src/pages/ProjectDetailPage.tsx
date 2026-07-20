@@ -735,8 +735,10 @@ function MemberAssignmentsModal({
         <p className="text-xs text-gray-500">Zeitraum gilt für alle Posten-Zuweisungen dieses MA.</p>
 
         <div className="border border-gray-200 rounded overflow-hidden">
-          <div className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 bg-gray-50 text-[11px] font-medium text-gray-500">
-            <span>Posten</span><span>h/Woche</span><span>Priorität</span><span></span>
+          <div className="grid grid-cols-[1fr_5rem_5rem_5rem_2rem] gap-2 px-2 py-1.5 bg-gray-50 text-[11px] font-medium text-gray-500">
+            <span>Posten</span><span>h/Woche</span><span>Priorität</span>
+            <span title="Bereits genommener Urlaub für dieses Projekt (Tage) — reduziert die Rest-Urlaubsschätzung.">Url. gen.</span>
+            <span></span>
           </div>
           {rows.length === 0 && (
             <div className="px-2 py-3 text-xs text-gray-400">Noch keine Zuweisung — „+ Posten" klicken.</div>
@@ -745,7 +747,7 @@ function MemberAssignmentsModal({
             const pos = r.billing_position_id != null ? posById.get(r.billing_position_id) : undefined
             const rateFromPos = pos != null && pos.billing_rate_per_hour > 0
             return (
-              <div key={r.key} className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 items-center border-t border-gray-100">
+              <div key={r.key} className="grid grid-cols-[1fr_5rem_5rem_5rem_2rem] gap-2 px-2 py-1.5 items-center border-t border-gray-100">
                 <div>
                   <select className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
                     value={r.billing_position_id ?? ''}
@@ -772,6 +774,10 @@ function MemberAssignmentsModal({
                   className="border border-gray-300 rounded px-2 py-1 text-sm"
                   value={r.priority}
                   onChange={(e) => setRow(r.key, { priority: parseInt(e.target.value) || 0 })} />
+                <input type="number" min={0} step={0.5} title="Bereits genommener Urlaub (Tage) für dieses Projekt"
+                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  value={r.vacation_days_taken || ''}
+                  onChange={(e) => setRow(r.key, { vacation_days_taken: parseFloat(e.target.value) || 0 })} />
                 <button type="button" title="Zuweisung entfernen"
                   className="text-gray-400 hover:text-red-600"
                   onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}>
