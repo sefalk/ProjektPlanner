@@ -123,6 +123,53 @@ docs/
 
 ---
 
+## Deployment (Linux, firm LAN)
+
+The production stack runs via Docker Compose: a FastAPI backend (uvicorn, migrations
+applied on start) reachable only inside the compose network, plus the built SPA served
+by nginx which reverse-proxies `/api` to the backend. SQLite lives in a named volume.
+
+**Prerequisites on the host:** Docker Engine + the Compose plugin, and network access
+to the public holiday APIs (feiertage-api.de / openholidays / nager.at).
+
+```bash
+# 1) Get the code (GitHub is the source of truth)
+git clone https://github.com/sefalk/ProjektPlanner.git
+cd ProjektPlanner
+
+# 2) Build & start (published on port 8080 by default; override with WEB_PORT)
+WEB_PORT=8080 docker compose -f docker-compose.prod.yml up -d --build
+
+# 3) Open from inside the LAN
+#    http://<host-ip>:8080     (e.g. http://192.168.100.141:8080)
+```
+
+**Update to a new version:**
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml up -d --build   # migrations run automatically
+```
+
+**Operations:**
+
+```bash
+docker compose -f docker-compose.prod.yml ps        # status
+docker compose -f docker-compose.prod.yml logs -f   # follow logs
+docker compose -f docker-compose.prod.yml down      # stop (data volume is kept)
+```
+
+Notes:
+- LAN-only: the host is not internet-exposed; only the nginx port (`WEB_PORT`) is
+  published. The backend is not published to the host.
+- The SQLite database persists in the `backend_data` volume. Back it up with
+  `docker run --rm -v projektplanner_backend_data:/data -v "$PWD":/backup alpine \
+   tar czf /backup/pp-db-backup.tgz -C /data .`.
+- Automated deploy (ADO self-hosted agent) is a follow-up; until then use the
+  `git pull … up -d --build` step above.
+
+---
+
 ## Privacy
 
 All person names, project numbers, billing rates, and time bookings are stored in the local SQLite database only — never sent to any server.
