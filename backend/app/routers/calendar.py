@@ -18,6 +18,7 @@ from app.models.person import Person, PersonAbsence
 from app.models.project import Project
 from app.models.timebooking import TimeBooking
 from app.services.holiday import HolidayFetchError, get_holidays_in_range
+from app.services.planning import absence_booking
 from app.services.holiday_region import (
     extra_holiday_dates,
     get_active_extra_keys,
@@ -44,6 +45,11 @@ class AbsenceOut(BaseModel):
     end_date: date | None
     absence_type: str
     status: str
+    # What the absence books for the person (working days / hours over its whole range).
+    booked_working_days: int = 0
+    booked_hours: float = 0.0
+    # For vacation only: contingent days consumed after the confirmed-sick (AU) refund.
+    contingent_days: float | None = None
 
 
 class MembershipOut(BaseModel):
@@ -160,9 +166,12 @@ def get_calendar(
         )
     ).all()
 
+    persons_by_id = {p.id: p for p in persons_raw}
     absences_by_person: dict[int, list[AbsenceOut]] = {pid: [] for pid in person_ids}
     for a in absences_raw:
         if a.person_id in absences_by_person and a.id is not None:
+            # Booking metrics use the person's own effective region (honors per-person override).
+            booking = absence_booking(persons_by_id[a.person_id], a, session)
             absences_by_person[a.person_id].append(
                 AbsenceOut(
                     id=a.id,
@@ -170,6 +179,9 @@ def get_calendar(
                     end_date=a.end_date,
                     absence_type=a.absence_type.value,
                     status=a.status.value,
+                    booked_working_days=booking["working_days"],
+                    booked_hours=booking["hours"],
+                    contingent_days=booking.get("contingent_days"),
                 )
             )
 
@@ -363,9 +375,12 @@ def get_calendar_year(
         )
     ).all()
 
+    persons_by_id = {p.id: p for p in persons_raw}
     absences_by_person: dict[int, list[AbsenceOut]] = {pid: [] for pid in person_ids}
     for a in absences_raw:
         if a.person_id in absences_by_person and a.id is not None:
+            # Booking metrics use the person's own effective region (honors per-person override).
+            booking = absence_booking(persons_by_id[a.person_id], a, session)
             absences_by_person[a.person_id].append(
                 AbsenceOut(
                     id=a.id,
@@ -373,6 +388,9 @@ def get_calendar_year(
                     end_date=a.end_date,
                     absence_type=a.absence_type.value,
                     status=a.status.value,
+                    booked_working_days=booking["working_days"],
+                    booked_hours=booking["hours"],
+                    contingent_days=booking.get("contingent_days"),
                 )
             )
 

@@ -13,6 +13,7 @@ from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
 from app.models.membership import ProjectMembership
 from app.services.planning import (
+    absence_booking,
     absence_days_in_range,
     available_days,
     capacity_hours,
@@ -457,6 +458,57 @@ def test_estimated_vacation_refunded_days_return_to_contingent(mem_session):
         p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session, 0.0, "DE", "BY", _empty_client()
     )
     assert result > 0.0  # refund left contingent to distribute
+
+
+# ---------------------------------------------------------------------------
+# absence_booking (per-absence UI metrics)
+# ---------------------------------------------------------------------------
+
+def test_absence_booking_days_and_hours(mem_session):
+    p = _make_person(mem_session)  # 40h/week → 8h/working day
+    a = _make_absence(mem_session, p.id, date(2026, 6, 1), date(2026, 6, 10))  # vacation
+    result = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 8
+    assert result["hours"] == 64.0  # 8 days × 8h
+    assert result["contingent_days"] == 8
+
+
+def test_absence_booking_uses_pattern_hours(mem_session):
+    p = _make_person(mem_session)
+    p.work_week_pattern = "8,8,8,8,0"  # 4-day week
+    mem_session.add(p)
+    mem_session.commit()
+    a = _make_absence(mem_session, p.id, date(2026, 4, 20), date(2026, 4, 24))  # Mon–Fri
+    result = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 4  # Fri excluded by pattern
+    assert result["hours"] == 32.0
+    assert result["contingent_days"] == 4
+
+
+def test_absence_booking_vacation_refunds_confirmed_sick(mem_session):
+    p = _make_person(mem_session)
+    vac = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 3), date(2026, 6, 5),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    result = absence_booking(p, vac, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 5   # the vacation still spans 5 working days …
+    assert result["contingent_days"] == 2  # … but only Mon+Tue draw down the contingent
+
+
+def test_absence_booking_non_vacation_has_no_contingent(mem_session):
+    p = _make_person(mem_session)
+    a = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 3),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    result = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 3
+    assert "contingent_days" not in result
 
 
 # ---------------------------------------------------------------------------

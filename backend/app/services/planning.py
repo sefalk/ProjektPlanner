@@ -193,6 +193,56 @@ def vacation_days_consumed_in_year(
     return float(consumed)
 
 
+def _person_daily_hours(person: Person | None, weekday: int, pattern: list[float] | None) -> float:
+    """Absolute hours the person works on a given weekday (Mon=0 … Fri=4)."""
+    if weekday >= 5:
+        return 0.0
+    if pattern is not None:
+        return pattern[weekday]
+    if person is None:
+        return 0.0
+    return person.default_weekly_hours / 5.0
+
+
+def absence_booking(
+    person: Person,
+    absence: PersonAbsence,
+    session: Session,
+    country: str | None = None,
+    state: str | None = None,
+    client: httpx.Client | None = None,
+) -> dict:
+    """What a single absence books for the person.
+
+    Returns ``working_days`` (Mon–Fri ∩ no holiday ∩ pattern>0 within the absence
+    range) and ``hours`` (person's daily hours summed over those days). For a
+    vacation absence it also returns ``contingent_days`` = working days that
+    actually draw down the vacation contingent, i.e. after refunding days topped
+    by a confirmed sick absence (AU). Region defaults to the person's own.
+    """
+    if country is None:
+        country, state = resolve_holiday_region(session, person)
+    pattern = parse_work_week_pattern_or_none(person)
+    a_end = absence.end_date if absence.end_date is not None else date.today()
+    if a_end < absence.start_date:
+        return {"working_days": 0, "hours": 0.0}
+    workdates = effective_working_dates(
+        absence.start_date, a_end, session, country, state or "", pattern, client
+    )
+    days = len(workdates)
+    hours = sum(_person_daily_hours(person, d.weekday(), pattern) for d in workdates)
+    result: dict = {"working_days": days, "hours": round(hours, 2)}
+    if absence.absence_type == AbsenceType.vacation:
+        sick_confirmed = [
+            a for a in _overlapping_absences(person.id, absence.start_date, a_end, session)
+            if _is_confirmed_sick(a)
+        ]
+        result["contingent_days"] = sum(
+            1 for d in workdates if not any(_covers(s, d) for s in sick_confirmed)
+        )
+    return result
+
+
 def estimated_vacation_days(
     person_id: int,
     start: date,
