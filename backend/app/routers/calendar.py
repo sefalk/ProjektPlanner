@@ -45,8 +45,10 @@ class AbsenceOut(BaseModel):
     end_date: date | None
     absence_type: str
     status: str
+    start_segment: str = "full"
+    end_segment: str = "full"
     # What the absence books for the person (working days / hours over its whole range).
-    booked_working_days: int = 0
+    booked_working_days: float = 0.0
     booked_hours: float = 0.0
     # For vacation only: contingent days consumed after the confirmed-sick (AU) refund.
     contingent_days: float | None = None
@@ -179,6 +181,8 @@ def get_calendar(
                     end_date=a.end_date,
                     absence_type=a.absence_type.value,
                     status=a.status.value,
+                    start_segment=a.start_segment.value,
+                    end_segment=a.end_segment.value,
                     booked_working_days=booking["working_days"],
                     booked_hours=booking["hours"],
                     contingent_days=booking.get("contingent_days"),
@@ -388,6 +392,8 @@ def get_calendar_year(
                     end_date=a.end_date,
                     absence_type=a.absence_type.value,
                     status=a.status.value,
+                    start_segment=a.start_segment.value,
+                    end_segment=a.end_segment.value,
                     booked_working_days=booking["working_days"],
                     booked_hours=booking["hours"],
                     contingent_days=booking.get("contingent_days"),

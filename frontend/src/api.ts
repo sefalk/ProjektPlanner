@@ -371,6 +371,9 @@ export interface PersonAbsence {
   absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
   note: string;
+  // Half-day segments: which part of the start/end day the absence covers.
+  start_segment?: 'full' | 'morning' | 'afternoon';
+  end_segment?: 'full' | 'morning' | 'afternoon';
   // Booking metrics (backend-computed): working days & hours the absence books.
   booked_working_days?: number;
   booked_hours?: number;
@@ -478,6 +481,8 @@ export interface CalendarAbsence {
   end_date: string | null;
   absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
+  start_segment?: 'full' | 'morning' | 'afternoon';
+  end_segment?: 'full' | 'morning' | 'afternoon';
   booked_working_days?: number;
   booked_hours?: number;
   contingent_days?: number | null;

@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.db import get_session
-from app.models.enums import AbsenceStatus, AbsenceType
+from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.membership import ProjectMembership
 from app.models.project import Project
@@ -28,6 +28,8 @@ class AbsenceCreate(SQLModel):
     absence_type: AbsenceType
     status: AbsenceStatus
     note: str = ""
+    start_segment: AbsenceDaySegment = AbsenceDaySegment.full
+    end_segment: AbsenceDaySegment = AbsenceDaySegment.full
 
 
 class AbsenceWithBooking(SQLModel):
@@ -45,7 +47,9 @@ class AbsenceWithBooking(SQLModel):
     absence_type: AbsenceType
     status: AbsenceStatus
     note: str
-    booked_working_days: int
+    start_segment: AbsenceDaySegment
+    end_segment: AbsenceDaySegment
+    booked_working_days: float
     booked_hours: float
     contingent_days: float | None = None
 
@@ -247,6 +251,7 @@ def list_absences(person_id: int, session: SessionDep):
         out.append(AbsenceWithBooking(
             id=a.id, start_date=a.start_date, end_date=a.end_date,
             absence_type=a.absence_type, status=a.status, note=a.note,
+            start_segment=a.start_segment, end_segment=a.end_segment,
             booked_working_days=booking["working_days"],
             booked_hours=booking["hours"],
             contingent_days=booking.get("contingent_days"),
@@ -266,6 +271,8 @@ def create_absence(person_id: int, body: AbsenceCreate, session: SessionDep):
             absence_type=body.absence_type,
             status=body.status,
             note=body.note,
+            start_segment=body.start_segment,
+            end_segment=body.end_segment,
         )
     except Exception as exc:
         raise HTTPException(422, str(exc)) from exc
