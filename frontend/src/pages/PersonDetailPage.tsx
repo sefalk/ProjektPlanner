@@ -412,39 +412,55 @@ export default function PersonDetailPage() {
     queryFn: () => persons.memberships(personId),
   })
 
+  // Absence/contingent/region changes here also feed the year calendar, the
+  // absence summary panel and the persons-table vacation column — invalidate them
+  // all so those views don't show stale data until a reload.
+  const invalidateDerived = () => {
+    qc.invalidateQueries({ queryKey: ['absences', personId] })
+    qc.invalidateQueries({ queryKey: ['absence-summary'] })
+    qc.invalidateQueries({ queryKey: ['absence-summary-batch'] })
+    qc.invalidateQueries({ queryKey: ['calendar-year'] })
+  }
+
   const updatePerson = useMutation({
     mutationFn: (d: Omit<Person, 'id'>) => persons.update(personId, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['person', personId] }); setShowEdit(false); setError(null) },
+    onSuccess: () => {
+      // A holiday-region override changes the calendar's resolved region and the
+      // working-day-based summary, so refresh those too.
+      qc.invalidateQueries({ queryKey: ['person', personId] })
+      invalidateDerived()
+      setShowEdit(false); setError(null)
+    },
     onError: (e: Error) => setError(e.message),
   })
   const addAbsence = useMutation({
     mutationFn: (d: Omit<PersonAbsence, 'id' | 'person_id'>) => persons.addAbsence(personId, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['absences', personId] }); setShowAddAbsence(false); setError(null) },
+    onSuccess: () => { invalidateDerived(); setShowAddAbsence(false); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const updateAbsence = useMutation({
     mutationFn: (d: Omit<PersonAbsence, 'id' | 'person_id'>) => persons.updateAbsence(personId, editingAbsence!.id, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['absences', personId] }); setEditingAbsence(null); setError(null) },
+    onSuccess: () => { invalidateDerived(); setEditingAbsence(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const deleteAbsence = useMutation({
     mutationFn: (absenceId: number) => persons.deleteAbsence(personId, absenceId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['absences', personId] }),
+    onSuccess: () => invalidateDerived(),
   })
   const addContingent = useMutation({
     mutationFn: (d: { year: number; total_days: number }) => persons.addVacationContingent(personId, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setShowAddContingent(false); setError(null) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setShowAddContingent(false); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const updateContingent = useMutation({
     mutationFn: ({ id, d }: { id: number; d: { year: number; total_days: number } }) =>
       persons.updateVacationContingent(personId, id, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setEditingContingent(null); setError(null) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setEditingContingent(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const deleteContingent = useMutation({
     mutationFn: (contingentId: number) => persons.deleteVacationContingent(personId, contingentId),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setConfirmDeleteContingent(null) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setConfirmDeleteContingent(null) },
   })
   const addMembership = useMutation({
     mutationFn: (d: Omit<ProjectMembership, 'id' | 'project_id'>) =>
