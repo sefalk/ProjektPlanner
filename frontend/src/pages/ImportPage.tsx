@@ -12,6 +12,7 @@ interface ImportResultOut {
   batch_ids: number[]
   inserted: number
   skipped: number
+  mismatches?: string[]
 }
 
 interface ParseErrorRow {
@@ -637,6 +638,18 @@ export default function ImportPage() {
                   <p className="text-xs text-green-700 mt-0.5">
                     {state.result.inserted} Buchungen importiert · {state.result.skipped} bereits vorhanden (übersprungen)
                   </p>
+                  {state.result.mismatches && state.result.mismatches.length > 0 && (
+                    <div className="mt-2 border-t border-green-200 pt-2">
+                      <p className="text-xs font-medium text-amber-700">
+                        {state.result.mismatches.length} Posten-Zuordnung(en) prüfen:
+                      </p>
+                      <ul className="mt-1 list-disc list-inside space-y-0.5">
+                        {state.result.mismatches.map((m, i) => (
+                          <li key={i} className="text-xs text-amber-700">{m}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

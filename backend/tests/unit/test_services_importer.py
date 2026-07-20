@@ -6,6 +6,7 @@ from hypothesis import given, settings as h_settings
 from hypothesis import strategies as st
 
 from app.models.billing import BillingPosition
+from app.models.membership import ProjectMembership
 from app.models.person import Person
 from app.models.project import Project
 from app.models.timebooking import SagePositionMapping, SageProjectMapping, TimeBooking
@@ -357,6 +358,44 @@ def test_import_links_booking_to_position(session):
     assert result.inserted == 1
     booking = session.exec(__import__("sqlmodel").select(TimeBooking)).first()
     assert booking.billing_position_id == bp.id
+
+
+def test_import_flags_booking_on_unassigned_position(session):
+    """WP4: MA books on a position they are not assigned to → mismatch flagged."""
+    _make_person(session)
+    proj = _make_project(session)
+    proj.position_mode = True
+    _make_mapping(session, "P00001 Analytics", proj.id)
+    bp = _priced_position(session, proj.id)
+    _position_mapping(session, proj.id, "Development", bp.id)
+    session.commit()  # no membership on bp
+
+    result = import_bookings(_csv([_ROW]), session)
+    assert result.inserted == 1
+    assert len(result.mismatches) == 1
+    assert "Max Mustermann" in result.mismatches[0]
+    assert bp.position_number in result.mismatches[0]
+
+
+def test_import_no_mismatch_when_assigned(session):
+    """WP4: no flag when the MA is assigned to the booked position."""
+    person = _make_person(session)
+    proj = _make_project(session)
+    proj.position_mode = True
+    _make_mapping(session, "P00001 Analytics", proj.id)
+    bp = _priced_position(session, proj.id)
+    _position_mapping(session, proj.id, "Development", bp.id)
+    session.add(ProjectMembership(
+        project_id=proj.id, person_id=person.id,
+        from_date=date(2026, 1, 1), to_date=date(2026, 12, 31),
+        weekly_capacity_hours=20.0, billing_rate_per_hour=0.0,
+        billing_position_id=bp.id,
+    ))
+    session.commit()
+
+    result = import_bookings(_csv([_ROW]), session)
+    assert result.inserted == 1
+    assert result.mismatches == []
 
 
 def test_import_position_mode_missing_mapping_raises(session):

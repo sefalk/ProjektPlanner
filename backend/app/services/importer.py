@@ -32,6 +32,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 from thefuzz import process as fuzz_process
 
+from app.models.billing import BillingPosition
+from app.models.membership import ProjectMembership
 from app.models.person import Person
 from app.models.timebooking import (
     ImportBatch,
@@ -98,6 +100,8 @@ class ImportResult:
     batch_ids: list[int] = field(default_factory=list)
     inserted: int = 0
     skipped: int = 0
+    # doc 23 WP4: human-readable flags for bookings on a position the MA is not assigned to.
+    mismatches: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +402,48 @@ def resolve_position_mappings(
     return result
 
 
+def detect_position_mismatches(batch_ids: list[int], session: Session) -> list[str]:
+    """Flag bookings whose (person, position) has no matching ProjectMembership (doc 23 WP4).
+
+    Only bookings with a resolved billing_position_id (i.e. position-mode projects) are
+    checked. A mismatch means a MA booked on a Projektposten they are not assigned to —
+    e.g. the plan needs the assignment added, or the booking's level mapping is wrong.
+    """
+    if not batch_ids:
+        return []
+    rows = session.exec(
+        select(TimeBooking).where(
+            TimeBooking.import_batch_id.in_(batch_ids),  # type: ignore[attr-defined]
+            TimeBooking.billing_position_id.is_not(None),  # type: ignore[union-attr]
+        )
+    ).all()
+    warnings: list[str] = []
+    seen: set[tuple[int, int, int]] = set()
+    for tb in rows:
+        key = (tb.project_id, tb.person_id, tb.billing_position_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        assigned = session.exec(
+            select(ProjectMembership).where(
+                ProjectMembership.project_id == tb.project_id,
+                ProjectMembership.person_id == tb.person_id,
+                ProjectMembership.billing_position_id == tb.billing_position_id,
+            )
+        ).first()
+        if assigned is not None:
+            continue
+        person = session.get(Person, tb.person_id)
+        pos = session.get(BillingPosition, tb.billing_position_id)
+        person_name = person.name if person else f"Person {tb.person_id}"
+        pos_label = pos.position_number if pos else f"Posten {tb.billing_position_id}"
+        warnings.append(
+            f"{person_name} hat auf Posten '{pos_label}' gebucht, "
+            f"ist ihm dort aber nicht zugewiesen."
+        )
+    return sorted(warnings)
+
+
 # ---------------------------------------------------------------------------
 # Main import entry point
 # ---------------------------------------------------------------------------
@@ -482,4 +528,5 @@ def import_bookings(
             result.skipped += 1
 
     session.commit()
+    result.mismatches = detect_position_mismatches(result.batch_ids, session)
     return result

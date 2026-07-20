@@ -41,19 +41,31 @@ class Milestone(ValidatedSQLModel, table=True):
 
 
 class MilestonePersonBudget(ValidatedSQLModel, table=True):
-    """Per-person hour split within a milestone.
+    """Per-(person, position) hour split within a milestone.
 
     Must sum to the parent Milestone.current_hours (invariant enforced by service).
+
+    Multi-Assignment (doc 23, WP1): the row is keyed by (milestone, person,
+    billing_position_id). billing_position_id is NULL in simple mode (one row
+    per person, as before); in position mode a person assigned to several
+    positions gets one budget row per position.
     """
 
     __tablename__ = "milestone_person_budget"
     __table_args__ = (
-        UniqueConstraint("milestone_id", "person_id", name="uq_mpb_milestone_person"),
+        UniqueConstraint(
+            "milestone_id", "person_id", "billing_position_id",
+            name="uq_mpb_milestone_person_position",
+        ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     milestone_id: int = Field(foreign_key="milestone.id", index=True)
     person_id: int = Field(foreign_key="person.id", index=True)
+    # Line item this budget row belongs to (doc 23). None = simple mode / unassigned.
+    billing_position_id: int | None = Field(
+        default=None, foreign_key="billing_position.id", index=True
+    )
     initial_hours: float = Field(ge=0)
     current_hours: float = Field(ge=0)
     # V5/B6: when True, this row's hours are locked — manually set and preserved by

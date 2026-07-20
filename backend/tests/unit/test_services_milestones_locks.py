@@ -66,16 +66,16 @@ def test_estimated_absence_override_changes_availability(session):
     m = _membership(session, proj.id, a.id)
     session.commit()
     initialize_milestones(proj.id, session)
-    ms, _ = _ms_and_budget(session, proj.id, a.id)
+    ms, b = _ms_and_budget(session, proj.id, a.id)
 
     before = _person_available_hours(a, m, proj, ms.year, ms.month, session)
-    set_estimated_absence(ms.id, a.id, 10.0, session)
+    set_estimated_absence(ms.id, b.id, 10.0, session)
     after = _person_available_hours(a, m, proj, ms.year, ms.month, session)
 
     assert after.estimated_absence_days == pytest.approx(10.0)
     assert after.hours < before.hours  # more absence → less available
 
-    set_estimated_absence(ms.id, a.id, None, session)  # clear → back to auto
+    set_estimated_absence(ms.id, b.id, None, session)  # clear → back to auto
     reset = _person_available_hours(a, m, proj, ms.year, ms.month, session)
     assert reset.hours == pytest.approx(before.hours)
 
@@ -86,9 +86,9 @@ def test_estimated_absence_negative_raises(session):
     _membership(session, proj.id, a.id)
     session.commit()
     initialize_milestones(proj.id, session)
-    ms, _ = _ms_and_budget(session, proj.id, a.id)
+    ms, b = _ms_and_budget(session, proj.id, a.id)
     with pytest.raises(ValueError):
-        set_estimated_absence(ms.id, a.id, -1.0, session)
+        set_estimated_absence(ms.id, b.id, -1.0, session)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ def test_hours_lock_preserved_unlock_recomputed(session):
     assert b.is_manual_override is True
 
     # Unlock → value stays until recompute, then resync recomputes it.
-    set_budget_hours_lock(ms.id, a.id, False, session)
+    set_budget_hours_lock(ms.id, b.id, False, session)
     session.refresh(b)
     assert b.is_manual_override is False
     assert b.current_hours == pytest.approx(3.0)  # unchanged until an action runs

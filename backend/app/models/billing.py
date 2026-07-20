@@ -18,3 +18,10 @@ class BillingPosition(ValidatedSQLModel, table=True):
     # and the effective rate comes from here; hours = budget_euros / billing_rate_per_hour.
     billing_rate_per_hour: float = Field(default=0.0, ge=0)
     # SUM(budget_euros) across all positions = effective total € budget for the project
+    #
+    # Asymmetric overrun (doc 23, WP3): False = hard cap (teuer, darf nicht überschritten
+    # werden — the automatic distribution never plans past budget_euros). True = überschreitbar
+    # (günstig, darf über Budget) — the distribution funds this position to full assignment
+    # capacity even beyond its budget, so cheaper hours can absorb what expensive positions
+    # cannot. Default False keeps the pre-WP3 behavior (every position hard-capped).
+    overrunnable: bool = Field(default=False)

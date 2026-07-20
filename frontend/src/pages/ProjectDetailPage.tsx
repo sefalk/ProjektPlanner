@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy } from 'lucide-react'
+import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy, AlertTriangle } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason, type BillingPosition,
@@ -273,6 +273,7 @@ interface PositionFormValue {
   description: string
   billing_rate_per_hour: number
   budget_euros: number
+  overrunnable: boolean
 }
 
 /** Inline form used both for adding and editing a line item. Shows the derived
@@ -313,6 +314,12 @@ function PositionFields({
           value={value.budget_euros || ''}
           onChange={(e) => onChange({ ...value, budget_euros: parseFloat(e.target.value) || 0 })} />
       </div>
+      <label className="flex items-center gap-1.5 text-xs text-gray-600 pb-1.5" title="Günstiger Posten: darf bei der Neuberechnung über sein Budget hinaus geplant werden (teure Posten bleiben hart begrenzt).">
+        <input type="checkbox"
+          checked={value.overrunnable}
+          onChange={(e) => onChange({ ...value, overrunnable: e.target.checked })} />
+        überschreitbar
+      </label>
     </div>
   )
 }
@@ -377,7 +384,7 @@ function BillingPositionsSection({
   const EPS = 1e-6
   const isOver = allocated > totalBudget + EPS
   const isComplete = Math.abs(open) <= EPS
-  const startAdd = () => setAdding({ position_number: '', description: '', billing_rate_per_hour: 0, budget_euros: Math.max(0, open) })
+  const startAdd = () => setAdding({ position_number: '', description: '', billing_rate_per_hour: 0, budget_euros: Math.max(0, open), overrunnable: false })
 
   return (
     <div className="mt-8 pt-6 border-t border-gray-200">
@@ -427,6 +434,12 @@ function BillingPositionsSection({
                 <div className="min-w-0">
                   <span className="font-medium text-gray-700">{bp.position_number}</span>
                   {bp.description && <><span className="mx-1.5 text-gray-300">·</span><span className="text-gray-600">{bp.description}</span></>}
+                  {bp.overrunnable && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700"
+                      title="Überschreitbar: darf bei der Neuberechnung über sein Budget hinaus geplant werden.">
+                      überschreitbar
+                    </span>
+                  )}
                   <span className="ml-2 text-xs text-gray-400">
                     {EUR2(bp.budget_euros)}
                     {bp.billing_rate_per_hour > 0 && <> · {EUR2(bp.billing_rate_per_hour)}/Std.{hours != null && <> · {hours.toFixed(1)} Std.</>}</>}
@@ -434,7 +447,7 @@ function BillingPositionsSection({
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
-                    onClick={() => { setAdding(null); setErr(null); setEditing({ id: bp.id, value: { position_number: bp.position_number, description: bp.description, billing_rate_per_hour: bp.billing_rate_per_hour, budget_euros: bp.budget_euros } }) }}
+                    onClick={() => { setAdding(null); setErr(null); setEditing({ id: bp.id, value: { position_number: bp.position_number, description: bp.description, billing_rate_per_hour: bp.billing_rate_per_hour, budget_euros: bp.budget_euros, overrunnable: bp.overrunnable } }) }}
                     title="Bearbeiten"
                     className="p-1 text-gray-300 hover:text-blue-500 transition-colors"><Pencil size={13} /></button>
                   <button
@@ -539,6 +552,178 @@ const STATUS_LABELS: Record<MonthlyInvoice['status'], string> = {
   paid: 'Bezahlt',
 }
 
+interface AssignRow {
+  key: string
+  membershipId: number | null
+  billing_position_id: number | null
+  weekly_capacity_hours: number
+  priority: number
+  billing_rate_per_hour: number
+  vacation_days_taken: number
+}
+
+/** Manage ALL Posten-assignments of one MA in a project as an editable list — each row is
+ *  one ProjectMembership. Saving diffs against the existing memberships (create/update/delete).
+ *  Shared Von/Bis apply to every row (the common case; date ranges per Posten are rare). */
+function MemberAssignmentsModal({
+  projectId, person, memberships, positions, positionMode, onClose, onSaved,
+}: {
+  projectId: number
+  person: { id: number; name: string }
+  memberships: ProjectMembership[]
+  positions: BillingPosition[]
+  positionMode: boolean
+  onClose: () => void
+  onSaved: (warnings: string[]) => void
+}) {
+  const mine = memberships.filter((m) => m.person_id === person.id)
+  const posById = new Map(positions.map((p) => [p.id, p]))
+  const seq = useRef(0)
+  const [fromDate, setFromDate] = useState(mine[0]?.from_date ?? '')
+  const [toDate, setToDate] = useState(mine[0]?.to_date ?? '')
+  const [rows, setRows] = useState<AssignRow[]>(
+    mine.map((m) => ({
+      key: 'm' + m.id, membershipId: m.id, billing_position_id: m.billing_position_id,
+      weekly_capacity_hours: m.weekly_capacity_hours, priority: m.priority,
+      billing_rate_per_hour: m.billing_rate_per_hour, vacation_days_taken: m.vacation_days_taken,
+    })),
+  )
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const rowRate = (r: AssignRow) => {
+    const p = r.billing_position_id != null ? posById.get(r.billing_position_id) : undefined
+    return p && p.billing_rate_per_hour > 0 ? p.billing_rate_per_hour : r.billing_rate_per_hour
+  }
+  const setRow = (key: string, patch: Partial<AssignRow>) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+  const addRow = () => {
+    const used = new Set(rows.map((r) => r.billing_position_id))
+    const free = positions.find((p) => !used.has(p.id))
+    setRows((rs) => [...rs, {
+      key: 'n' + (seq.current++), membershipId: null,
+      billing_position_id: free?.id ?? null, weekly_capacity_hours: 0, priority: 0,
+      billing_rate_per_hour: 0, vacation_days_taken: 0,
+    }])
+  }
+
+  const save = async () => {
+    setErr(null)
+    if (!fromDate || !toDate) return setErr('Von und Bis sind erforderlich.')
+    if (rows.length === 0) return setErr('Mindestens eine Zuweisung erforderlich.')
+    if (positionMode && rows.some((r) => r.billing_position_id == null))
+      return setErr('Im Posten-Modus muss jede Zeile einen Posten haben.')
+    const posIds = rows.map((r) => r.billing_position_id)
+    if (new Set(posIds).size !== posIds.length)
+      return setErr('Jeder Posten darf diesem MA nur einmal zugewiesen sein.')
+    if (rows.some((r) => !(r.weekly_capacity_hours > 0)))
+      return setErr('h/Woche muss größer als 0 sein.')
+    setSaving(true)
+    try {
+      const keptIds = new Set(rows.filter((r) => r.membershipId != null).map((r) => r.membershipId!))
+      for (const m of mine) if (!keptIds.has(m.id)) await projects.deleteMembership(projectId, m.id)
+      const warnings: string[] = []
+      for (const r of rows) {
+        const payload = {
+          from_date: fromDate, to_date: toDate, weekly_capacity_hours: r.weekly_capacity_hours,
+          billing_rate_per_hour: rowRate(r), priority: r.priority,
+          vacation_days_taken: r.vacation_days_taken, billing_position_id: r.billing_position_id,
+        }
+        const res = r.membershipId != null
+          ? await projects.updateMembership(projectId, r.membershipId, payload)
+          : await projects.addMembership(projectId, { person_id: person.id, ...payload })
+        if (res.warnings) warnings.push(...res.warnings)
+      }
+      onSaved(warnings)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={`Posten-Zuweisungen — ${person.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Von</label>
+            <input type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+              value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
+            <input type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
+              value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </div>
+        </div>
+        <p className="text-xs text-gray-500">Zeitraum gilt für alle Posten-Zuweisungen dieses MA.</p>
+
+        <div className="border border-gray-200 rounded overflow-hidden">
+          <div className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 bg-gray-50 text-[11px] font-medium text-gray-500">
+            <span>Posten</span><span>h/Woche</span><span>Priorität</span><span></span>
+          </div>
+          {rows.length === 0 && (
+            <div className="px-2 py-3 text-xs text-gray-400">Noch keine Zuweisung — „+ Posten" klicken.</div>
+          )}
+          {rows.map((r) => {
+            const pos = r.billing_position_id != null ? posById.get(r.billing_position_id) : undefined
+            const rateFromPos = pos != null && pos.billing_rate_per_hour > 0
+            return (
+              <div key={r.key} className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 items-center border-t border-gray-100">
+                <div>
+                  <select className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
+                    value={r.billing_position_id ?? ''}
+                    onChange={(e) => setRow(r.key, { billing_position_id: e.target.value === '' ? null : parseInt(e.target.value) })}>
+                    {!positionMode && <option value="">— kein Posten —</option>}
+                    {positions.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.position_number}{p.description ? ` – ${p.description}` : ''}{p.billing_rate_per_hour > 0 ? ` (${p.billing_rate_per_hour} €)` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {!rateFromPos && (
+                    <input type="number" min={0} step={0.01} placeholder="Satz €/Std."
+                      className="mt-1 w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                      value={r.billing_rate_per_hour || ''}
+                      onChange={(e) => setRow(r.key, { billing_rate_per_hour: parseFloat(e.target.value) || 0 })} />
+                  )}
+                </div>
+                <input type="number" min={0} step={0.01}
+                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  value={r.weekly_capacity_hours || ''}
+                  onChange={(e) => setRow(r.key, { weekly_capacity_hours: parseFloat(e.target.value) || 0 })} />
+                <input type="number" step={1}
+                  className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  value={r.priority}
+                  onChange={(e) => setRow(r.key, { priority: parseInt(e.target.value) || 0 })} />
+                <button type="button" title="Zuweisung entfernen"
+                  className="text-gray-400 hover:text-red-600"
+                  onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+        <button type="button" onClick={addRow}
+          className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800">
+          <Plus size={14} /> Posten
+        </button>
+
+        {err && <p className="text-sm text-red-600">{err}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+          <button type="button" onClick={save} disabled={saving}
+            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+            {saving ? 'Speichern…' : 'Speichern'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 type Tab = 'milestones' | 'invoices' | 'members' | 'bookings' | 'settings'
 
 export default function ProjectDetailPage() {
@@ -552,17 +737,18 @@ export default function ProjectDetailPage() {
   const [showAddMember, setShowAddMember] = useState(false)
   const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
   const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
+  const [editAssign, setEditAssign] = useState<{ personId: number; personName: string } | null>(null)  // Posten-Zuweisungs-Liste eines MA
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
   const [expandedMilestones, setExpandedMilestones] = useState<Set<number>>(new Set())
-  const [editBudget, setEditBudget] = useState<{ milestoneId: number; personId: number; personName: string; currentHours: number } | null>(null)
+  const [editBudget, setEditBudget] = useState<{ milestoneId: number; budgetId: number; personName: string; currentHours: number } | null>(null)
   const [editHours, setEditHours] = useState(0)
   const [budgetWarnings, setBudgetWarnings] = useState<string[]>([])   // manual-edit warnings (V6)
   const [budgetNeedsConfirm, setBudgetNeedsConfirm] = useState(false)  // budget overrun awaiting confirm
   const [editTarget, setEditTarget] = useState<{ milestoneId: number; year: number; month: number } | null>(null)  // edit monthly € target
   const [editTargetAmount, setEditTargetAmount] = useState(0)
   const [targetWarnings, setTargetWarnings] = useState<string[]>([])
-  const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; personId: number; personName: string } | null>(null)  // edit estimated absence
+  const [editAbsence, setEditAbsence] = useState<{ milestoneId: number; budgetId: number; personName: string } | null>(null)  // edit estimated absence
   const [editAbsenceDays, setEditAbsenceDays] = useState(0)
   const [closeForm, setCloseForm] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() + 1, billing_position_id: 0 })
   const [addMemberForm, setAddMemberForm] = useState({ person_id: 0, from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
@@ -613,8 +799,8 @@ export default function ProjectDetailPage() {
   })
 
   const updatePersonBudget = useMutation({
-    mutationFn: ({ milestoneId, personId, hours, confirm }: { milestoneId: number; personId: number; hours: number; confirm?: boolean }) =>
-      projects.updatePersonBudget(projectId, milestoneId, personId, hours, confirm),
+    mutationFn: ({ milestoneId, budgetId, hours, confirm }: { milestoneId: number; budgetId: number; hours: number; confirm?: boolean }) =>
+      projects.updatePersonBudget(projectId, milestoneId, budgetId, hours, confirm),
     onSuccess: () => {
       invalidateMilestones()
       setEditBudget(null)
@@ -653,14 +839,14 @@ export default function ProjectDetailPage() {
     onError: (e: Error) => setError(e.message),
   })
   const toggleHoursLock = useMutation({
-    mutationFn: ({ milestoneId, personId, locked }: { milestoneId: number; personId: number; locked: boolean }) =>
-      projects.setHoursLock(projectId, milestoneId, personId, locked),
+    mutationFn: ({ milestoneId, budgetId, locked }: { milestoneId: number; budgetId: number; locked: boolean }) =>
+      projects.setHoursLock(projectId, milestoneId, budgetId, locked),
     onSuccess: () => { invalidateMilestones(); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const setEstAbsence = useMutation({
-    mutationFn: ({ milestoneId, personId, days }: { milestoneId: number; personId: number; days: number | null }) =>
-      projects.setEstimatedAbsence(projectId, milestoneId, personId, days),
+    mutationFn: ({ milestoneId, budgetId, days }: { milestoneId: number; budgetId: number; days: number | null }) =>
+      projects.setEstimatedAbsence(projectId, milestoneId, budgetId, days),
     onSuccess: () => { invalidateMilestones(); setEditAbsence(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
@@ -988,7 +1174,8 @@ export default function ProjectDetailPage() {
                       const eurBarColor = eurPct > 100 ? 'bg-red-500' : eurPct >= 80 ? 'bg-orange-400' : 'bg-blue-500'
                       const sug = suggestionByMs.get(ms.id)
                       const rebalDelta = sug ? sug.suggested_total_hours - ms.current_hours : 0
-                      const sugByPid = sug ? new Map(sug.budgets.map((b) => [b.person_id, b.suggested_hours])) : null
+                      // Keyed by budget_id (WP5): a person may have several rows (one per Posten).
+                      const sugByBudget = sug ? new Map(sug.budgets.map((b) => [b.budget_id, b.suggested_hours])) : null
                       const rebalSuggestedEuros = sug ? sug.budgets.reduce((s, b) => s + b.suggested_hours * (rateByPid.get(b.person_id) ?? 0), 0) : 0
                       const rebalDeltaEuros = sug ? rebalSuggestedEuros - plannedEuros : 0
                       const showRebal = sug && !ms.is_locked && !ms.is_planning_locked && Math.abs(rebalDelta) > 0.1
@@ -1149,7 +1336,7 @@ export default function ProjectDetailPage() {
                                     const editable = ms.status === 'open' && !ms.is_locked
                                     const absOverride = p.estimated_absence_days_override
                                     // Per-member rebalance hint (share of the "Neu berechnen" preview for this person).
-                                    const pSug = sugByPid ? sugByPid.get(p.person_id) : undefined
+                                    const pSug = sugByBudget ? sugByBudget.get(p.budget_id) : undefined
                                     const pRebalDelta = pSug != null ? pSug - cur : 0
                                     const showPRebal = showRebal && pSug != null && Math.abs(pRebalDelta) > 0.1
                                     // PWS gauge: target vs effective (Ist) as vertical markers, delta as a segment.
@@ -1158,15 +1345,26 @@ export default function ProjectDetailPage() {
                                     const iPos = effPws !== null ? Math.min(100, effPws / pwsMax * 100) : null
                                     const deltaColor = deltaPws === null ? '' : deltaPws > 0.05 ? 'text-orange-600' : deltaPws < -0.05 ? 'text-blue-600' : 'text-green-600'
                                     return (
-                                    <tr key={p.person_id} className="text-sm border-b border-slate-100 last:border-0">
+                                    <tr key={p.budget_id} className="text-sm border-b border-slate-100 last:border-0">
                                       <td className="pl-12 pr-4 py-2 text-gray-700 whitespace-nowrap">
                                         {p.person_name}
+                                        {p.billing_position_id != null && (
+                                          <span className="ml-1.5 text-[11px] text-gray-400">
+                                            ({posById.get(p.billing_position_id)?.position_number ?? '?'})
+                                          </span>
+                                        )}
                                       </td>
                                       <td className="px-4 py-2 text-gray-400 whitespace-nowrap">
                                         {avail !== null ? fmtH(avail) : <span className="text-gray-300">–</span>}
                                         {showPRebal && (
                                           <div className="text-[11px] text-indigo-600" title="Vorschlag aus „Neu berechnen“ für diese Person.">
                                             → {fmtH(pSug!)} ({pRebalDelta > 0 ? '+' : ''}{pRebalDelta.toFixed(2)})
+                                          </div>
+                                        )}
+                                        {p.cap_reason && (
+                                          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-600 whitespace-normal max-w-[12rem]" title={p.cap_reason}>
+                                            <AlertTriangle size={11} className="shrink-0" />
+                                            <span>{p.cap_reason}</span>
                                           </div>
                                         )}
                                       </td>
@@ -1176,7 +1374,7 @@ export default function ProjectDetailPage() {
                                             <span>{fmtH(cur)} <span className="text-[10px] text-gray-400">(Soll)</span></span>
                                             {editable && (
                                               <button
-                                                onClick={() => { setEditBudget({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
+                                                onClick={() => { setEditBudget({ milestoneId: ms.id, budgetId: p.budget_id, personName: p.person_name, currentHours: p.current_hours }); setEditHours(p.current_hours) }}
                                                 title="Soll-Stunden dieser Person anpassen"
                                                 className="p-0.5 text-gray-400 hover:text-blue-600">
                                                 <Pencil size={11} />
@@ -1184,7 +1382,7 @@ export default function ProjectDetailPage() {
                                             )}
                                             {editable && (
                                               <button
-                                                onClick={() => toggleHoursLock.mutate({ milestoneId: ms.id, personId: p.person_id, locked: !p.is_manual_override })}
+                                                onClick={() => toggleHoursLock.mutate({ milestoneId: ms.id, budgetId: p.budget_id, locked: !p.is_manual_override })}
                                                 title={p.is_manual_override ? 'Stunden gesperrt — bleiben bei Neuberechnung erhalten. Klicken zum Entsperren.' : 'Stunden entsperrt — Neuberechnung darf anpassen. Klicken zum Sperren.'}
                                                 className={`p-0.5 ${p.is_manual_override ? 'text-purple-500 hover:text-purple-700' : 'text-gray-300 hover:text-gray-500'}`}>
                                                 {p.is_manual_override ? <Lock size={11} /> : <Unlock size={11} />}
@@ -1232,7 +1430,7 @@ export default function ProjectDetailPage() {
                                           </span>
                                           {editable && (
                                             <button
-                                              onClick={() => { setEditAbsence({ milestoneId: ms.id, personId: p.person_id, personName: p.person_name }); setEditAbsenceDays(Math.round(estAbs * 10) / 10) }}
+                                              onClick={() => { setEditAbsence({ milestoneId: ms.id, budgetId: p.budget_id, personName: p.person_name }); setEditAbsenceDays(Math.round(estAbs * 10) / 10) }}
                                               title="Geschätzte Abwesenheit (Tage) manuell setzen"
                                               className="p-0.5 text-gray-400 hover:text-blue-600">
                                               <Pencil size={11} />
@@ -1240,7 +1438,7 @@ export default function ProjectDetailPage() {
                                           )}
                                           {editable && absOverride != null && (
                                             <button
-                                              onClick={() => setEstAbsence.mutate({ milestoneId: ms.id, personId: p.person_id, days: null })}
+                                              onClick={() => setEstAbsence.mutate({ milestoneId: ms.id, budgetId: p.budget_id, days: null })}
                                               title="Geschätzte Abwesenheit gesperrt (manuell) — klicken zum Entsperren (zurück auf automatische Schätzung)"
                                               className="p-0.5 text-purple-500 hover:text-purple-700">
                                               <Lock size={11} />
@@ -1650,7 +1848,7 @@ export default function ProjectDetailPage() {
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => { setEditMember(m); setEditMemberForm({ from_date: m.from_date, to_date: m.to_date, weekly_capacity_hours: m.weekly_capacity_hours, billing_rate_per_hour: m.billing_rate_per_hour, priority: m.priority, vacation_days_taken: m.vacation_days_taken, billing_position_id: m.billing_position_id }); setError(null) }}
+                          onClick={() => { setEditAssign({ personId: m.person_id, personName: personName(m.person_id) }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
@@ -1920,7 +2118,7 @@ export default function ProjectDetailPage() {
         const closeEdit = () => { setEditBudget(null); setBudgetWarnings([]); setBudgetNeedsConfirm(false) }
         return (
         <Modal title={`Stunden anpassen — ${editBudget.personName}`} onClose={closeEdit}>
-          <form onSubmit={(e) => { e.preventDefault(); updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours }) }} className="space-y-3">
+          <form onSubmit={(e) => { e.preventDefault(); updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, budgetId: editBudget.budgetId, hours: editHours }) }} className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Aktuelle Stunden</label>
               <input
@@ -1945,7 +2143,7 @@ export default function ProjectDetailPage() {
                 className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
               {budgetNeedsConfirm ? (
                 <button type="button"
-                  onClick={() => updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, personId: editBudget.personId, hours: editHours, confirm: true })}
+                  onClick={() => updatePersonBudget.mutate({ milestoneId: editBudget.milestoneId, budgetId: editBudget.budgetId, hours: editHours, confirm: true })}
                   className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700">Trotzdem speichern</button>
               ) : (
                 <button type="submit"
@@ -2001,7 +2199,7 @@ export default function ProjectDetailPage() {
       {/* Edit estimated absence (days) — manual override */}
       {editAbsence && (
         <Modal title={`Geschätzte Abwesenheit — ${editAbsence.personName}`} onClose={() => setEditAbsence(null)}>
-          <form onSubmit={(e) => { e.preventDefault(); setEstAbsence.mutate({ milestoneId: editAbsence.milestoneId, personId: editAbsence.personId, days: editAbsenceDays }) }} className="space-y-3">
+          <form onSubmit={(e) => { e.preventDefault(); setEstAbsence.mutate({ milestoneId: editAbsence.milestoneId, budgetId: editAbsence.budgetId, days: editAbsenceDays }) }} className="space-y-3">
             <p className="text-xs text-gray-500">
               Manuell angenommene Abwesenheitstage (nicht verplanter Resturlaub, pauschal Krank/Fortbildung).
               Ein gesetzter Wert ersetzt die automatische Schätzung, ist gesperrt und fließt in die Verfügbarkeit ein.
@@ -2163,7 +2361,25 @@ export default function ProjectDetailPage() {
         </Modal>
       )}
 
-      {/* Edit membership modal */}
+      {/* Posten-Zuweisungs-Liste eines MA (mehrere Posten je MA) */}
+      {editAssign && (
+        <MemberAssignmentsModal
+          projectId={projectId}
+          person={{ id: editAssign.personId, name: editAssign.personName }}
+          memberships={memberships}
+          positions={billingPositions}
+          positionMode={positionMode}
+          onClose={() => setEditAssign(null)}
+          onSaved={(warnings) => {
+            qc.invalidateQueries({ queryKey: ['memberships', projectId] })
+            invalidateMilestones()
+            setEditAssign(null)
+            if (warnings.length > 0) setMemberWarnings(warnings)
+          }}
+        />
+      )}
+
+      {/* Edit membership modal (legacy single-Posten — nur noch als Fallback) */}
       {editMember && (
         <Modal title="Zuweisung bearbeiten" onClose={() => { setEditMember(null); setError(null) }}>
           <p className="text-xs text-gray-500 mb-3">Person: <strong>{personName(editMember.person_id)}</strong></p>

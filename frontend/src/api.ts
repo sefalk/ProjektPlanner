@@ -106,6 +106,8 @@ export interface BillingPosition {
   budget_euros: number;
   /** Hourly rate of the line item (Projektposten). 0 = no rate (simple invoicing position). */
   billing_rate_per_hour: number;
+  /** WP3: false = hard cap (never planned past budget); true = cheap position, may exceed budget. */
+  overrunnable: boolean;
 }
 
 /** Aggregate €-budget state across a project's line items (doc 21 §P3). */
@@ -177,6 +179,7 @@ export interface MilestonePersonDetail {
   booked_hours: number;
   is_manual_override: boolean;
   estimated_absence_days_override: number | null;
+  cap_reason?: string | null;
 }
 
 export interface MilestoneDetail {
@@ -190,6 +193,7 @@ export interface BudgetSuggestion {
   person_id: number;
   current_hours: number;
   suggested_hours: number;
+  billing_position_id: number | null;
 }
 
 export interface MilestoneSuggestion {
@@ -314,12 +318,12 @@ export const projects = {
     req<BillingPositionBudgetState>('GET', `/projects/${id}/billing-positions/budget-state`),
   addBillingPosition: (
     id: number,
-    d: { position_number: string; description?: string; budget_euros?: number | null; billing_rate_per_hour?: number },
+    d: { position_number: string; description?: string; budget_euros?: number | null; billing_rate_per_hour?: number; overrunnable?: boolean },
   ) => req<BillingPosition>('POST', `/projects/${id}/billing-positions`, d),
   updateBillingPosition: (
     projectId: number,
     bpId: number,
-    d: { position_number: string; description?: string; budget_euros: number; billing_rate_per_hour?: number },
+    d: { position_number: string; description?: string; budget_euros: number; billing_rate_per_hour?: number; overrunnable?: boolean },
   ) => req<BillingPosition>('PUT', `/projects/${projectId}/billing-positions/${bpId}`, d),
   deleteBillingPosition: (projectId: number, bpId: number) =>
     req<void>('DELETE', `/projects/${projectId}/billing-positions/${bpId}`),
@@ -335,12 +339,12 @@ export const projects = {
     req<MilestoneTargetResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/target-budget`, { target_euros: targetEuros }),
   clearMilestoneTargetBudget: (projectId: number, milestoneId: number) =>
     req<Milestone>('DELETE', `/projects/${projectId}/milestones/${milestoneId}/target-budget`),
-  setHoursLock: (projectId: number, milestoneId: number, personId: number, locked: boolean) =>
-    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/lock`, { locked }),
-  setEstimatedAbsence: (projectId: number, milestoneId: number, personId: number, days: number | null) =>
-    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}/estimated-absence`, { days }),
-  updatePersonBudget: (projectId: number, milestoneId: number, personId: number, hours: number, confirm?: boolean) =>
-    req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/persons/${personId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
+  setHoursLock: (projectId: number, milestoneId: number, budgetId: number, locked: boolean) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/budgets/${budgetId}/lock`, { locked }),
+  setEstimatedAbsence: (projectId: number, milestoneId: number, budgetId: number, days: number | null) =>
+    req<MilestonePersonBudget>('PUT', `/projects/${projectId}/milestones/${milestoneId}/budgets/${budgetId}/estimated-absence`, { days }),
+  updatePersonBudget: (projectId: number, milestoneId: number, budgetId: number, hours: number, confirm?: boolean) =>
+    req<BudgetUpdateResult>('PUT', `/projects/${projectId}/milestones/${milestoneId}/budgets/${budgetId}${confirm ? '?confirm=true' : ''}`, { current_hours: hours }),
   recommendations: (id: number) => req<UtilizationRecommendation[]>('GET', `/projects/${id}/milestones/recommendations`),
   recalcPreview: (id: number) => req<MilestoneSuggestion[]>('GET', `/projects/${id}/milestones/recalc-preview`),
   setPlanningLock: (projectId: number, milestoneId: number, locked: boolean) =>
@@ -364,7 +368,7 @@ export interface PersonAbsence {
   person_id: number;
   start_date: string;
   end_date: string | null;
-  absence_type: 'vacation' | 'sick' | 'training';
+  absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
   note: string;
 }
@@ -457,7 +461,7 @@ export interface CalendarAbsence {
   id: number;
   start_date: string;
   end_date: string | null;
-  absence_type: 'vacation' | 'sick' | 'training';
+  absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
 }
 

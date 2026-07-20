@@ -11,8 +11,8 @@ import { personColor, TYPE_LABELS, TYPE_SHORT } from '../lib/absenceColors'
 import { regionKey, regionLabel, regionShade } from '../lib/holidayRegions'
 import RegionOverrideSelect from '../components/absence/RegionOverrideSelect'
 
-type AbsenceType = 'vacation' | 'sick' | 'training'
-const ALL_TYPES: AbsenceType[] = ['vacation', 'training', 'sick']
+type AbsenceType = 'vacation' | 'sick' | 'training' | 'other'
+const ALL_TYPES: AbsenceType[] = ['vacation', 'training', 'sick', 'other']
 
 const WORK_WEEK_PRESETS = [
   { label: '40 h (5×8)', value: '8,8,8,8,8' },

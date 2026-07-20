@@ -40,6 +40,7 @@ class ImportResultOut(SQLModel):
     batch_ids: list[int]
     inserted: int
     skipped: int
+    mismatches: list[str] = []  # doc 23 WP4: MA booked on an unassigned Posten
 
 
 class MappingCreate(SQLModel):
@@ -104,6 +105,7 @@ async def post_import(file: UploadFile, session: SessionDep):
         batch_ids=result.batch_ids,
         inserted=result.inserted,
         skipped=result.skipped,
+        mismatches=result.mismatches,
     )
 
 

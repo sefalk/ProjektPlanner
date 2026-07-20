@@ -4,10 +4,10 @@ import { persons as personsApi } from '../../api'
 import Modal from '../Modal'
 import { TYPE_LABELS, STATUS_LABELS } from '../../lib/absenceColors'
 
-type AbsenceType = 'vacation' | 'sick' | 'training'
+type AbsenceType = 'vacation' | 'sick' | 'training' | 'other'
 type AbsenceStatus = 'planned' | 'confirmed' | 'ongoing'
 
-const TYPES: AbsenceType[] = ['vacation', 'training', 'sick']
+const TYPES: AbsenceType[] = ['vacation', 'training', 'sick', 'other']
 
 function allowedStatuses(type: AbsenceType): AbsenceStatus[] {
   return type === 'sick' ? ['confirmed', 'ongoing'] : ['planned', 'confirmed']

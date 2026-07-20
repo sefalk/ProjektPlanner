@@ -68,6 +68,8 @@ def test_vacation_contingent_rejects_year_below_2000() -> None:
     (AbsenceType.vacation, AbsenceStatus.confirmed),
     (AbsenceType.training, AbsenceStatus.planned),
     (AbsenceType.training, AbsenceStatus.confirmed),
+    (AbsenceType.other, AbsenceStatus.planned),
+    (AbsenceType.other, AbsenceStatus.confirmed),
     (AbsenceType.sick, AbsenceStatus.ongoing),
     (AbsenceType.sick, AbsenceStatus.confirmed),
 ])
@@ -89,7 +91,7 @@ def test_person_absence_valid_type_status_combinations(
 # PersonAbsence — invalid combinations
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("absence_type", [AbsenceType.vacation, AbsenceType.training])
+@pytest.mark.parametrize("absence_type", [AbsenceType.vacation, AbsenceType.training, AbsenceType.other])
 def test_person_absence_ongoing_invalid_for_non_sick(absence_type: AbsenceType) -> None:
     with pytest.raises(ValidationError, match="ongoing"):
         PersonAbsence(
@@ -112,7 +114,7 @@ def test_person_absence_planned_invalid_for_sick() -> None:
         )
 
 
-@pytest.mark.parametrize("absence_type", [AbsenceType.vacation, AbsenceType.training])
+@pytest.mark.parametrize("absence_type", [AbsenceType.vacation, AbsenceType.training, AbsenceType.other])
 def test_person_absence_non_sick_requires_end_date(absence_type: AbsenceType) -> None:
     with pytest.raises(ValidationError, match="end_date"):
         PersonAbsence(

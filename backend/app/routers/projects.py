@@ -46,6 +46,7 @@ class BillingPositionCreate(SQLModel):
     # None → default to the open (unallocated) difference (P3).
     budget_euros: float | None = Field(default=None, ge=0)
     billing_rate_per_hour: float = Field(default=0.0, ge=0)
+    overrunnable: bool = False  # doc 23 WP3: cheap position may exceed its budget
 
 
 class BillingPositionUpdate(SQLModel):
@@ -53,6 +54,7 @@ class BillingPositionUpdate(SQLModel):
     description: str = ""
     budget_euros: float = Field(ge=0)
     billing_rate_per_hour: float = Field(default=0.0, ge=0)
+    overrunnable: bool = False
 
 
 class BillingPositionBudgetState(SQLModel):
@@ -272,6 +274,7 @@ def create_billing_position(project_id: int, body: BillingPositionCreate, sessio
         description=body.description,
         budget_euros=budget,
         billing_rate_per_hour=body.billing_rate_per_hour,
+        overrunnable=body.overrunnable,
     )
     session.add(bp)
     session.commit()
@@ -300,6 +303,7 @@ def update_billing_position(
     bp.description = body.description
     bp.budget_euros = body.budget_euros
     bp.billing_rate_per_hour = body.billing_rate_per_hour
+    bp.overrunnable = body.overrunnable
     session.add(bp)
     session.commit()
     session.refresh(bp)
@@ -445,7 +449,11 @@ def create_membership(project_id: int, body: MembershipCreate, session: SessionD
         session.refresh(membership)
     except IntegrityError:
         session.rollback()
-        raise HTTPException(409, "Membership already exists for this person and project.")
+        # Unique key is (project, person, billing_position): a person may be assigned to
+        # several positions, but not to the same position twice (doc 23, WP1).
+        raise HTTPException(
+            409, "Diese Person ist diesem Posten in diesem Projekt bereits zugewiesen."
+        )
     warnings = _membership_overbooking_warnings(membership, session)
     return MembershipWithWarnings(
         id=membership.id,
@@ -481,7 +489,9 @@ def update_membership(project_id: int, membership_id: int, body: MembershipUpdat
     # Referential action (V11): drop this member's budgets from open milestones that no
     # longer overlap the (possibly shrunk) membership range. Recomputing changed weekly
     # hours into remaining months is the resync path (WP4/WP5), not done here.
-    prune_member_budgets_to_range(project_id, m.person_id, m.from_date, m.to_date, session)
+    prune_member_budgets_to_range(
+        project_id, m.person_id, m.from_date, m.to_date, m.billing_position_id, session
+    )
     session.commit()
     warnings = _membership_overbooking_warnings(m, session)
     return MembershipWithWarnings(

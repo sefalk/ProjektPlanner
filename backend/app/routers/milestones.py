@@ -72,6 +72,8 @@ class MilestonePersonDetailOut(SQLModel):
     booked_hours: float = 0.0
     is_manual_override: bool = False
     estimated_absence_days_override: float | None = None
+    # WP6 diagnostics: why this row is planned below its available capacity (else None).
+    cap_reason: str | None = None
 
 
 class MilestoneDetailOut(SQLModel):
@@ -194,16 +196,16 @@ def clear_target_budget(project_id: int, milestone_id: int, session: SessionDep)
 
 
 @router.put(
-    "/{project_id}/milestones/{milestone_id}/persons/{person_id}/lock",
+    "/{project_id}/milestones/{milestone_id}/budgets/{budget_id}/lock",
     response_model=MilestonePersonBudget,
 )
-def put_hours_lock(project_id: int, milestone_id: int, person_id: int, body: LockUpdate, session: SessionDep):
-    """Lock/unlock a person's Soll-hours for the month (locked = preserved by resync/rebalancing)."""
+def put_hours_lock(project_id: int, milestone_id: int, budget_id: int, body: LockUpdate, session: SessionDep):
+    """Lock/unlock one budget row's Soll-hours for the month (locked = preserved by resync)."""
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        return set_budget_hours_lock(milestone_id, person_id, body.locked, session)
+        return set_budget_hours_lock(milestone_id, budget_id, body.locked, session)
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:
@@ -211,16 +213,16 @@ def put_hours_lock(project_id: int, milestone_id: int, person_id: int, body: Loc
 
 
 @router.put(
-    "/{project_id}/milestones/{milestone_id}/persons/{person_id}/estimated-absence",
+    "/{project_id}/milestones/{milestone_id}/budgets/{budget_id}/estimated-absence",
     response_model=MilestonePersonBudget,
 )
-def put_estimated_absence(project_id: int, milestone_id: int, person_id: int, body: EstimatedAbsenceUpdate, session: SessionDep):
-    """Set (or clear, days=null) the manual estimated-absence override for a person/month."""
+def put_estimated_absence(project_id: int, milestone_id: int, budget_id: int, body: EstimatedAbsenceUpdate, session: SessionDep):
+    """Set (or clear, days=null) the manual estimated-absence override for one budget row."""
     milestone = session.get(Milestone, milestone_id)
     if not milestone or milestone.project_id != project_id:
         raise HTTPException(404, "Milestone not found.")
     try:
-        return set_estimated_absence(milestone_id, person_id, body.days, session)
+        return set_estimated_absence(milestone_id, budget_id, body.days, session)
     except MilestoneLocked as exc:
         raise HTTPException(409, str(exc)) from exc
     except (MilestoneNotFound, BudgetNotFound) as exc:
@@ -260,7 +262,17 @@ def list_milestones_detail(project_id: int, session: SessionDep):
     memberships = session.exec(
         select(ProjectMembership).where(ProjectMembership.project_id == project_id)
     ).all()
-    membership_map: dict[int, ProjectMembership] = {m.person_id: m for m in memberships}
+    # Keyed by assignment (person, position) so a multi-assigned person resolves the
+    # right membership per budget row (WP2).
+    membership_map: dict[tuple[int, int | None], ProjectMembership] = {
+        (m.person_id, m.billing_position_id): m for m in memberships
+    }
+    # Fallback for LEGACY budget rows created before WP1 (billing_position_id = NULL) whose
+    # membership now carries a position: resolve by person so the row is still displayed
+    # instead of silently dropped (regression fix). First membership per person wins.
+    membership_by_person: dict[int, ProjectMembership] = {}
+    for m in memberships:
+        membership_by_person.setdefault(m.person_id, m)
     positions_by_id = project_positions(project_id, session)
 
     persons_map: dict[int, Person] = {}
@@ -277,25 +289,61 @@ def list_milestones_detail(project_id: int, session: SessionDep):
         month_start = date(ms.year, ms.month, 1)
         month_end = date(ms.year, ms.month, _monthrange(ms.year, ms.month)[1])
         booked_rows = session.exec(
-            select(TimeBooking.person_id, func.sum(TimeBooking.net_hours))
+            select(TimeBooking.person_id, TimeBooking.billing_position_id, func.sum(TimeBooking.net_hours))
             .where(
                 TimeBooking.project_id == project_id,
                 TimeBooking.booking_date >= month_start,
                 TimeBooking.booking_date <= month_end,
                 TimeBooking.is_excluded == False,  # noqa: E712
             )
-            .group_by(TimeBooking.person_id)
+            .group_by(TimeBooking.person_id, TimeBooking.billing_position_id)
         ).all()
-        booked_map: dict[int, float] = {pid: float(h) for pid, h in booked_rows}
+        # Attribute booked hours to the per-(person, position) budget rows. Bookings that
+        # carry a position map to the matching row; bookings WITHOUT a position (NULL — e.g.
+        # imported in simple mode / before a level→position mapping existed) cannot be split
+        # across a person's positions, so they are attributed to that person's PRIMARY row
+        # (lowest budget id) — shown exactly once, so the milestone Ist total stays correct.
+        booked_pos: dict[tuple[int, int], float] = {}
+        booked_null: dict[int, float] = {}
+        for pid, bpid, h in booked_rows:
+            if bpid is None:
+                booked_null[pid] = booked_null.get(pid, 0.0) + float(h)
+            else:
+                booked_pos[(pid, bpid)] = booked_pos.get((pid, bpid), 0.0) + float(h)
+        primary_budget_by_person: dict[int, int] = {}
+        for b in sorted(budgets, key=lambda b: b.id):
+            primary_budget_by_person.setdefault(b.person_id, b.id)
         persons_out: list[MilestonePersonDetailOut] = []
         for budget in budgets:
             person = persons_map.get(budget.person_id)
-            membership = membership_map.get(budget.person_id)
+            membership = (
+                membership_map.get((budget.person_id, budget.billing_position_id))
+                or membership_by_person.get(budget.person_id)
+            )
             if person is None or membership is None:
                 continue
             stats = _person_available_hours(person, membership, project, ms.year, ms.month, session)
             pattern = _parse_work_week_pattern(person.work_week_pattern) if person.work_week_pattern else None
             days_per_week = float(sum(1 for h in pattern if h > 0)) if pattern else 5.0
+            # WP6: a non-override row planned below its available capacity was capped by a
+            # budget (capacity itself = available_hours). Name which budget bound it.
+            booked_hours = booked_pos.get((person.id, budget.billing_position_id), 0.0)
+            if primary_budget_by_person.get(person.id) == budget.id:
+                booked_hours += booked_null.get(person.id, 0.0)
+            cap_reason: str | None = None
+            if not ms.is_locked and not budget.is_manual_override and stats.hours - budget.current_hours > 0.05:
+                if project.position_mode and membership.billing_position_id is not None:
+                    pos = positions_by_id.get(membership.billing_position_id)
+                    posnum = pos.position_number if pos else "?"
+                    cap_reason = (
+                        f"Nur {budget.current_hours:.1f} von {stats.hours:.1f} h verplant — "
+                        f"Budget von Posten '{posnum}' ausgeschöpft."
+                    )
+                else:
+                    cap_reason = (
+                        f"Nur {budget.current_hours:.1f} von {stats.hours:.1f} h verplant — "
+                        f"Projektbudget ausgeschöpft."
+                    )
             persons_out.append(MilestonePersonDetailOut(
                 person_id=person.id,
                 person_name=person.name,
@@ -313,9 +361,10 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 holiday_days=stats.holiday_days,
                 billing_rate_per_hour=effective_rate(membership, positions_by_id),
                 billing_position_id=membership.billing_position_id,
-                booked_hours=booked_map.get(person.id, 0.0),
+                booked_hours=booked_hours,
                 is_manual_override=budget.is_manual_override,
                 estimated_absence_days_override=budget.estimated_absence_days_override,
+                cap_reason=cap_reason,
             ))
 
         # Milestone-level warnings (§8.1 / V11)

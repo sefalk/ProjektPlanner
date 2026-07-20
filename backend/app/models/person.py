@@ -41,8 +41,8 @@ class PersonAbsence(ValidatedSQLModel, table=True):
     """A date-range absence record for a person.
 
     Status rules (enforced by model_validator):
-      vacation / training → planned | confirmed  (end_date required)
-      sick                → ongoing | confirmed  (end_date optional when ongoing)
+      vacation / training / other → planned | confirmed  (end_date required)
+      sick                        → ongoing | confirmed  (end_date optional when ongoing)
     """
 
     __tablename__ = "person_absence"
