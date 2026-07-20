@@ -208,11 +208,20 @@ export default function PersonsPage() {
   const { data: programList = [] } = useQuery({ queryKey: ['programs'], queryFn: programs.list })
   const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list })
 
+  // Person changes (esp. the holiday-region override) affect the year calendar's
+  // resolved regions/holidays and the vacation summary — invalidate those too, else
+  // the calendar keeps showing a person's old region until a hard reload.
+  const invalidatePersonData = () => {
+    qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
+    qc.invalidateQueries({ queryKey: ['persons'] })
+    qc.invalidateQueries({ queryKey: ['calendar-year'] })
+    qc.invalidateQueries({ queryKey: ['absence-summary-batch'] })
+  }
+
   const create = useMutation({
     mutationFn: persons.create,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
-      qc.invalidateQueries({ queryKey: ['persons'] })
+      invalidatePersonData()
       setShowCreate(false)
       setError(null)
     },
@@ -222,8 +231,7 @@ export default function PersonsPage() {
   const update = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Omit<Person, 'id'> }) => persons.update(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
-      qc.invalidateQueries({ queryKey: ['persons'] })
+      invalidatePersonData()
       setEditPerson(null)
       setError(null)
     },
@@ -233,8 +241,7 @@ export default function PersonsPage() {
   const remove = useMutation({
     mutationFn: (id: number) => persons.delete(id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
-      qc.invalidateQueries({ queryKey: ['persons'] })
+      invalidatePersonData()
       setConfirmDelete(null)
     },
     onError: (e: Error) => setError(e.message),
