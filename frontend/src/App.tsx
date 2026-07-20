@@ -65,7 +65,7 @@ export default function App() {
             <Settings size={15} />
             Einstellungen
           </NavLink>
-          <p className="text-xs text-slate-400 px-3 pt-2">v0.2.0</p>
+          <p className="text-xs text-slate-400 px-3 pt-2">v{__APP_VERSION__}</p>
         </div>
       </aside>
 
