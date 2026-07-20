@@ -444,6 +444,44 @@ def detect_position_mismatches(batch_ids: list[int], session: Session) -> list[s
     return sorted(warnings)
 
 
+def backfill_bookings_for_level(
+    project_id: int, sage_project_level: str, billing_position_id: int | None, session: Session
+) -> int:
+    """Re-assign existing bookings of a (project, Projektebene) to a Posten (doc 24 IP4).
+
+    Needed because a re-import would NOT update existing rows (billing_position_id is not part
+    of the dedup key), so a mapping created/changed after import must be applied explicitly.
+    Pass billing_position_id=None to clear (e.g. mapping deleted). Returns the number of rows
+    changed. Commits.
+    """
+    rows = session.exec(
+        select(TimeBooking).where(
+            TimeBooking.project_id == project_id,
+            TimeBooking.sage_project_level == sage_project_level,
+        )
+    ).all()
+    changed = 0
+    for tb in rows:
+        if tb.billing_position_id != billing_position_id:
+            tb.billing_position_id = billing_position_id
+            session.add(tb)
+            changed += 1
+    if changed:
+        session.commit()
+    return changed
+
+
+def backfill_bookings_from_mappings(project_id: int, session: Session) -> int:
+    """Apply ALL of a project's Ebene→Posten mappings to its existing bookings (doc 24 IP4).
+    Used when enabling position mode so previously-imported bookings get their Posten."""
+    total = 0
+    for m in session.exec(
+        select(SagePositionMapping).where(SagePositionMapping.project_id == project_id)
+    ).all():
+        total += backfill_bookings_for_level(project_id, m.sage_project_level, m.billing_position_id, session)
+    return total
+
+
 # ---------------------------------------------------------------------------
 # Main import entry point
 # ---------------------------------------------------------------------------

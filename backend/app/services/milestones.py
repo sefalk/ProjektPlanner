@@ -504,6 +504,11 @@ def set_position_mode(project_id: int, enabled: bool, session: Session) -> Proje
     session.add(project)
     session.commit()
     session.refresh(project)
+    if enabled:
+        # doc 24 IP4: apply existing Ebene→Posten mappings to already-imported bookings so the
+        # switch is seamless. Unmapped levels stay NULL (unresolved) and are flagged (IP5).
+        from app.services.importer import backfill_bookings_from_mappings
+        backfill_bookings_from_mappings(project_id, session)
     return project
 
 
