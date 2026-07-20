@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Pencil, Trash2, ChevronDown, Search, ArrowUpRight } from 'lucide-react'
-import { persons, calendar, programs, projects as projectsApi, type Person, type YearCalendarPerson } from '../api'
+import { persons, calendar, programs, projects as projectsApi, type Person, type YearCalendarPerson, type PersonAbsence } from '../api'
 import PageHeader from '../components/PageHeader'
 import Modal from '../components/Modal'
 import YearCalendar from '../components/absence/YearCalendar'
@@ -138,6 +138,19 @@ export default function PersonsPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [quickCreate, setQuickCreate] = useState<{ personId: number | null; start: string; end: string } | null>(null)
+  const [editAbsence, setEditAbsence] = useState<PersonAbsence | null>(null)
+
+  // Click on a calendar bar → load the full absence and open it for editing.
+  async function handleAbsenceClick(personId: number, absenceId: number) {
+    const list = await persons.absences(personId)
+    const a = list.find((x) => x.id === absenceId)
+    if (a) {
+      setEditAbsence({
+        id: a.id, person_id: personId, start_date: a.start_date, end_date: a.end_date,
+        absence_type: a.absence_type, status: a.status, note: a.note,
+      })
+    }
+  }
 
   // Vertical scroll spans several years; the calendar centres on the current month.
   const currentYear = new Date().getFullYear()
@@ -155,6 +168,12 @@ export default function PersonsPage() {
   const { data = [], isLoading } = useQuery({
     queryKey: ['persons-with-projects'],
     queryFn: persons.withProjects,
+  })
+
+  // Vacation overview per person for the current year (persons-table column).
+  const { data: vacByPerson = {} } = useQuery({
+    queryKey: ['absence-summary-batch', currentYear],
+    queryFn: () => persons.absenceSummaryBatch(currentYear),
   })
 
   const yearQueries = useQueries({
@@ -189,11 +208,20 @@ export default function PersonsPage() {
   const { data: programList = [] } = useQuery({ queryKey: ['programs'], queryFn: programs.list })
   const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list })
 
+  // Person changes (esp. the holiday-region override) affect the year calendar's
+  // resolved regions/holidays and the vacation summary — invalidate those too, else
+  // the calendar keeps showing a person's old region until a hard reload.
+  const invalidatePersonData = () => {
+    qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
+    qc.invalidateQueries({ queryKey: ['persons'] })
+    qc.invalidateQueries({ queryKey: ['calendar-year'] })
+    qc.invalidateQueries({ queryKey: ['absence-summary-batch'] })
+  }
+
   const create = useMutation({
     mutationFn: persons.create,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
-      qc.invalidateQueries({ queryKey: ['persons'] })
+      invalidatePersonData()
       setShowCreate(false)
       setError(null)
     },
@@ -203,8 +231,7 @@ export default function PersonsPage() {
   const update = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Omit<Person, 'id'> }) => persons.update(id, data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
-      qc.invalidateQueries({ queryKey: ['persons'] })
+      invalidatePersonData()
       setEditPerson(null)
       setError(null)
     },
@@ -214,8 +241,7 @@ export default function PersonsPage() {
   const remove = useMutation({
     mutationFn: (id: number) => persons.delete(id),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['persons-with-projects'] })
-      qc.invalidateQueries({ queryKey: ['persons'] })
+      invalidatePersonData()
       setConfirmDelete(null)
     },
     onError: (e: Error) => setError(e.message),
@@ -397,6 +423,7 @@ export default function PersonsPage() {
               persons={calendarPersons}
               displayedRegions={displayedRegions}
               onRangeSelect={(personId, start, end) => setQuickCreate({ personId, start, end })}
+              onAbsenceClick={handleAbsenceClick}
             />
           )}
           <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-600" aria-label="Legende">
@@ -445,13 +472,17 @@ export default function PersonsPage() {
                       <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Name</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Sage-Name</th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Wochenstunden</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider cursor-help"
+                        title={`Urlaub ${currentYear} (Arbeitstage): genommen (bestätigt) · geplant (vorgemerkt) · offen (Rest des Jahreskontingents). Krankheit mit AU während des Urlaubs wird erstattet.`}>
+                        Urlaub {currentYear}
+                      </th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Projekte</th>
                       <th className="px-4 py-2" />
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
                     {filteredRows.length === 0 && (
-                      <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-400">Keine MA gefunden.</td></tr>
+                      <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">Keine MA gefunden.</td></tr>
                     )}
                     {filteredRows.map((p) => {
                       const sel = isSelected(p.id)
@@ -480,6 +511,22 @@ export default function PersonsPage() {
                           </td>
                           <td className={`px-4 py-2 text-sm ${sel ? 'text-gray-700' : 'text-gray-400'}`}>{p.sage_employee_name}</td>
                           <td className={`px-4 py-2 text-sm ${sel ? 'text-gray-700' : 'text-gray-400'}`}>{p.default_weekly_hours} h</td>
+                          <td className="px-4 py-2 text-sm whitespace-nowrap">
+                            {(() => {
+                              const v = vacByPerson[p.id]?.vacation
+                              if (!v) return <span className="text-gray-300 text-xs">–</span>
+                              return (
+                                <span title={`Kontingent ${v.contingent} AT · genommen ${v.taken} · geplant ${v.planned} · offen ${v.open}`}>
+                                  <span className="text-emerald-700 font-medium">{v.taken}</span>
+                                  <span className="text-gray-300"> / </span>
+                                  <span className="text-blue-600 font-medium">{v.planned}</span>
+                                  <span className="text-gray-300"> / </span>
+                                  <span className={`font-medium ${v.open <= 0 ? 'text-gray-400' : 'text-amber-600'}`}>{v.open}</span>
+                                  <span className="text-gray-400 text-xs"> von {v.contingent}</span>
+                                </span>
+                              )
+                            })()}
+                          </td>
                           <td className="px-4 py-2">
                             {(!p.project_numbers || p.project_numbers.length === 0)
                               ? <span className="text-xs text-gray-400">–</span>
@@ -533,6 +580,18 @@ export default function PersonsPage() {
           endDate={quickCreate.end}
           onClose={() => setQuickCreate(null)}
           onCreated={() => setQuickCreate(null)}
+        />
+      )}
+
+      {editAbsence && (
+        <AbsenceQuickCreateModal
+          persons={(mergedPersons.length ? mergedPersons : data).map((p) => ({ id: p.id, name: p.name }))}
+          initialPersonId={editAbsence.person_id}
+          startDate={editAbsence.start_date}
+          endDate={editAbsence.end_date ?? editAbsence.start_date}
+          editAbsence={editAbsence}
+          onClose={() => setEditAbsence(null)}
+          onCreated={() => setEditAbsence(null)}
         />
       )}
 

@@ -6,11 +6,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
 from app.db import get_session
-from app.models.enums import AbsenceStatus, AbsenceType
+from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.membership import ProjectMembership
 from app.models.project import Project
 from app.models.setting import Setting
+from app.services.planning import absence_booking, absence_summary
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
@@ -27,6 +28,30 @@ class AbsenceCreate(SQLModel):
     absence_type: AbsenceType
     status: AbsenceStatus
     note: str = ""
+    start_segment: AbsenceDaySegment = AbsenceDaySegment.full
+    end_segment: AbsenceDaySegment = AbsenceDaySegment.full
+
+
+class AbsenceWithBooking(SQLModel):
+    """A PersonAbsence plus what it actually books (working days / hours).
+
+    booked_working_days / booked_hours: working days (Mon–Fri ∩ no holiday ∩
+    pattern>0) in the absence range and the person's hours over them.
+    contingent_days: for vacation only — days that draw down the contingent after
+    the confirmed-sick (AU) refund; None for non-vacation types.
+    """
+
+    id: int
+    start_date: date
+    end_date: date | None
+    absence_type: AbsenceType
+    status: AbsenceStatus
+    note: str
+    start_segment: AbsenceDaySegment
+    end_segment: AbsenceDaySegment
+    booked_working_days: float
+    booked_hours: float
+    contingent_days: float | None = None
 
 
 class ContingentCreate(SQLModel):
@@ -75,6 +100,19 @@ def list_persons_with_projects(session: SessionDep):
         )
         for p in all_persons
     ]
+
+
+@router.get("/absence-summary")
+def batch_absence_summary(session: SessionDep, year: int | None = None):
+    """Per-person absence overview for a year (defaults to the current year).
+
+    Keyed by person_id. Used by the persons table's vacation column. Declared
+    before /{person_id} so the literal path wins the route match.
+    """
+    from datetime import date as _date
+    yr = year or _date.today().year
+    persons_all = session.exec(select(Person)).all()
+    return {p.id: absence_summary(p, yr, session) for p in persons_all if p.id is not None}
 
 
 @router.post("", response_model=Person, status_code=201)
@@ -189,13 +227,36 @@ def list_person_memberships(person_id: int, session: SessionDep):
 # Absences
 # ---------------------------------------------------------------------------
 
-@router.get("/{person_id}/absences", response_model=list[PersonAbsence])
-def list_absences(person_id: int, session: SessionDep):
-    if not session.get(Person, person_id):
+@router.get("/{person_id}/absence-summary")
+def person_absence_summary(person_id: int, session: SessionDep, year: int | None = None):
+    """Absence overview (categories + vacation taken/planned/open) for one person/year."""
+    from datetime import date as _date
+    person = session.get(Person, person_id)
+    if not person:
         raise HTTPException(404, "Person not found.")
-    return session.exec(
+    return absence_summary(person, year or _date.today().year, session)
+
+
+@router.get("/{person_id}/absences", response_model=list[AbsenceWithBooking])
+def list_absences(person_id: int, session: SessionDep):
+    person = session.get(Person, person_id)
+    if not person:
+        raise HTTPException(404, "Person not found.")
+    rows = session.exec(
         select(PersonAbsence).where(PersonAbsence.person_id == person_id)
     ).all()
+    out: list[AbsenceWithBooking] = []
+    for a in rows:
+        booking = absence_booking(person, a, session)
+        out.append(AbsenceWithBooking(
+            id=a.id, start_date=a.start_date, end_date=a.end_date,
+            absence_type=a.absence_type, status=a.status, note=a.note,
+            start_segment=a.start_segment, end_segment=a.end_segment,
+            booked_working_days=booking["working_days"],
+            booked_hours=booking["hours"],
+            contingent_days=booking.get("contingent_days"),
+        ))
+    return out
 
 
 @router.post("/{person_id}/absences", response_model=PersonAbsence, status_code=201)
@@ -210,6 +271,8 @@ def create_absence(person_id: int, body: AbsenceCreate, session: SessionDep):
             absence_type=body.absence_type,
             status=body.status,
             note=body.note,
+            start_segment=body.start_segment,
+            end_segment=body.end_segment,
         )
     except Exception as exc:
         raise HTTPException(422, str(exc)) from exc

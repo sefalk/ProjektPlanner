@@ -23,6 +23,10 @@ export interface AbsenceSegment {
   /** full absence range for tooltips (ISO, end null = ongoing) */
   absStart: string
   absEnd: string | null
+  /** backend-computed booking metrics (see planning.absence_booking) */
+  bookedWorkingDays: number | null
+  bookedHours: number | null
+  contingentDays: number | null
 }
 
 interface YMD {
@@ -87,6 +91,9 @@ export function computeAbsenceSegments(
           openEnd: m < lastMonth || extendsAfterYear,
           absStart: a.start_date,
           absEnd: a.end_date,
+          bookedWorkingDays: a.booked_working_days ?? null,
+          bookedHours: a.booked_hours ?? null,
+          contingentDays: a.contingent_days ?? null,
         })
       }
     }

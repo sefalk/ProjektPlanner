@@ -371,6 +371,20 @@ export interface PersonAbsence {
   absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
   note: string;
+  // Half-day segments: which part of the start/end day the absence covers.
+  start_segment?: 'full' | 'morning' | 'afternoon';
+  end_segment?: 'full' | 'morning' | 'afternoon';
+  // Booking metrics (backend-computed): working days & hours the absence books.
+  booked_working_days?: number;
+  booked_hours?: number;
+  // Vacation only: contingent days consumed after the confirmed-sick (AU) refund.
+  contingent_days?: number | null;
+}
+
+export interface AbsenceSummary {
+  year: number;
+  categories: Record<'vacation' | 'sick' | 'training' | 'other', { days: number; hours: number }>;
+  vacation: { contingent: number; taken: number; planned: number; open: number };
 }
 
 export interface VacationContingent {
@@ -408,6 +422,10 @@ export const persons = {
     req<PersonAbsence>('PUT', `/persons/${personId}/absences/${absenceId}`, d),
   deleteAbsence: (personId: number, absenceId: number) =>
     req<void>('DELETE', `/persons/${personId}/absences/${absenceId}`),
+  absenceSummary: (id: number, year?: number) =>
+    req<AbsenceSummary>('GET', `/persons/${id}/absence-summary${year ? `?year=${year}` : ''}`),
+  absenceSummaryBatch: (year?: number) =>
+    req<Record<number, AbsenceSummary>>('GET', `/persons/absence-summary${year ? `?year=${year}` : ''}`),
   vacationContingents: (id: number) => req<VacationContingent[]>('GET', `/persons/${id}/vacation-contingents`),
   addVacationContingent: (id: number, d: Omit<VacationContingent, 'id' | 'person_id'>) =>
     req<VacationContingent>('POST', `/persons/${id}/vacation-contingents`, d),
@@ -463,6 +481,11 @@ export interface CalendarAbsence {
   end_date: string | null;
   absence_type: 'vacation' | 'sick' | 'training' | 'other';
   status: 'planned' | 'confirmed' | 'ongoing';
+  start_segment?: 'full' | 'morning' | 'afternoon';
+  end_segment?: 'full' | 'morning' | 'afternoon';
+  booked_working_days?: number;
+  booked_hours?: number;
+  contingent_days?: number | null;
 }
 
 export interface CalendarMembership {

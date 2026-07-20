@@ -8,15 +8,18 @@ from hypothesis import strategies as st
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.models.enums import AbsenceStatus, AbsenceType
+from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
 from app.models.membership import ProjectMembership
 from app.services.planning import (
+    absence_booking,
+    absence_summary,
     absence_days_in_range,
     available_days,
     capacity_hours,
     estimated_vacation_days,
+    vacation_days_consumed_in_year,
     working_days,
 )
 
@@ -93,6 +96,8 @@ def _make_absence(
     end: date | None,
     absence_type: AbsenceType = AbsenceType.vacation,
     status: AbsenceStatus = AbsenceStatus.planned,
+    start_segment: AbsenceDaySegment = AbsenceDaySegment.full,
+    end_segment: AbsenceDaySegment = AbsenceDaySegment.full,
 ) -> PersonAbsence:
     a = PersonAbsence(
         person_id=person_id,
@@ -100,11 +105,26 @@ def _make_absence(
         end_date=end,
         absence_type=absence_type,
         status=status,
+        start_segment=start_segment,
+        end_segment=end_segment,
     )
     session.add(a)
     session.commit()
     session.refresh(a)
     return a
+
+
+def _empty_client():
+    """httpx client whose holiday API always returns no holidays (deterministic)."""
+    import httpx
+    return httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+
+
+def _holiday_client(mapping: dict[str, str]):
+    """httpx client returning fixed holidays. mapping: {name: 'YYYY-MM-DD'}."""
+    import httpx
+    payload = {name: {"datum": d, "hinweis": ""} for name, d in mapping.items()}
+    return httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload)))
 
 
 # ---------------------------------------------------------------------------
@@ -171,57 +191,110 @@ def test_working_days_never_exceeds_calendar_days(start_offset, length):
 
 def test_absence_days_no_absences(mem_session):
     p = _make_person(mem_session)
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
     assert result == 0
 
 
-def test_absence_days_full_overlap(mem_session):
+def test_absence_days_counts_working_days_only(mem_session):
+    """A Mon–next-Wed absence (10 calendar days) counts only its 8 working days."""
     p = _make_person(mem_session)
     _make_absence(mem_session, p.id, date(2026, 6, 1), date(2026, 6, 10))
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 10), mem_session)
-    assert result == 10
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 10), mem_session, "DE", "BY", _empty_client()
+    )
+    assert result == 8  # 01–05 (Mon–Fri) + 08–10 (Mon–Wed); 06/07 weekend excluded
 
 
-def test_absence_days_partial_overlap_before(mem_session):
+def test_absence_days_excludes_weekend_only_absence(mem_session):
+    """An absence that falls entirely on a weekend books zero days."""
     p = _make_person(mem_session)
-    # Absence starts before the period
-    _make_absence(mem_session, p.id, date(2026, 5, 25), date(2026, 6, 5))
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
-    assert result == 5  # 6-01 to 6-05
+    _make_absence(mem_session, p.id, date(2026, 6, 6), date(2026, 6, 7))  # Sat+Sun
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
+    assert result == 0
+
+
+def test_absence_days_excludes_holiday(mem_session):
+    """A public holiday inside the absence range does not count as an absence day."""
+    p = _make_person(mem_session)
+    _make_absence(mem_session, p.id, date(2026, 1, 5), date(2026, 1, 9))  # Mon–Fri = 5
+    # Tuesday 2026-01-06 is a holiday → only 4 working days remain
+    client = _holiday_client({"Heilige Drei Könige": "2026-01-06"})
+    result = absence_days_in_range(
+        p.id, date(2026, 1, 5), date(2026, 1, 9), mem_session, "DE", "BY", client
+    )
+    assert result == 4
+
+
+def test_absence_days_excludes_non_working_pattern_day(mem_session):
+    """A 4-day-week person (no Friday) does not book a vacation day on Fridays."""
+    p = _make_person(mem_session)
+    p.work_week_pattern = "8,8,8,8,0"
+    mem_session.add(p)
+    mem_session.commit()
+    _make_absence(mem_session, p.id, date(2026, 4, 20), date(2026, 4, 24))  # Mon–Fri
+    result = absence_days_in_range(
+        p.id, date(2026, 4, 20), date(2026, 4, 24), mem_session, "DE", "BY", _empty_client()
+    )
+    assert result == 4  # Fri excluded by pattern
 
 
 def test_absence_days_partial_overlap_after(mem_session):
     p = _make_person(mem_session)
-    # Absence ends after the period
+    # Absence ends after the period; overlap 06-25..06-30 has 4 working days (Thu,Fri,Mon,Tue)
     _make_absence(mem_session, p.id, date(2026, 6, 25), date(2026, 7, 5))
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
-    assert result == 6  # 6-25 to 6-30
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
+    assert result == 4
 
 
 def test_absence_days_no_overlap(mem_session):
     p = _make_person(mem_session)
     _make_absence(mem_session, p.id, date(2026, 7, 1), date(2026, 7, 10))
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
     assert result == 0
+
+
+def test_absence_days_overlapping_absences_counted_once(mem_session):
+    """Overlapping vacation + sick on the same days must not double-count."""
+    p = _make_person(mem_session)
+    _make_absence(mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5))  # vacation Mon–Fri
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 3), date(2026, 6, 5),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )  # sick overlaps Wed–Fri
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
+    assert result == 5  # union of covered working days, not 5+3
 
 
 def test_absence_days_ongoing_sick_uses_today(mem_session):
     p = _make_person(mem_session)
-    # Ongoing sick starting "today" — should count at least 1 day
-    today = date.today()
+    # Ongoing sick (null end) runs until today; a fixed past Monday is deterministically counted.
     _make_absence(
-        mem_session, p.id, today, None,
+        mem_session, p.id, date(2026, 1, 5), None,
         absence_type=AbsenceType.sick, status=AbsenceStatus.ongoing,
     )
-    result = absence_days_in_range(p.id, today, today, mem_session)
+    result = absence_days_in_range(
+        p.id, date(2026, 1, 5), date(2026, 1, 5), mem_session, "DE", "BY", _empty_client()
+    )
     assert result == 1
 
 
 def test_absence_days_multiple_absences(mem_session):
     p = _make_person(mem_session)
-    _make_absence(mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5))   # 5 days
-    _make_absence(mem_session, p.id, date(2026, 6, 10), date(2026, 6, 12)) # 3 days
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
+    _make_absence(mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5))   # 5 working days
+    _make_absence(mem_session, p.id, date(2026, 6, 10), date(2026, 6, 12)) # 3 working days
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
     assert result == 8
 
 
@@ -231,7 +304,9 @@ def test_absence_days_sick_confirmed_counts(mem_session):
         mem_session, p.id, date(2026, 6, 1), date(2026, 6, 3),
         absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
     )
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
     assert result == 3
 
 
@@ -242,7 +317,9 @@ def test_absence_days_other_counts_like_any_absence(mem_session):
         mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),
         absence_type=AbsenceType.other, status=AbsenceStatus.confirmed,
     )
-    result = absence_days_in_range(p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session)
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
     assert result == 5
 
 
@@ -252,21 +329,25 @@ def test_absence_days_other_counts_like_any_absence(mem_session):
 
 def test_estimated_vacation_no_contingent(mem_session):
     p = _make_person(mem_session)
-    result = estimated_vacation_days(p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session)
+    result = estimated_vacation_days(
+        p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session, 0.0, "DE", "BY", _empty_client()
+    )
     assert result == 0.0
 
 
 def test_estimated_vacation_all_used(mem_session):
     p = _make_person(mem_session)
-    # Contingent = 20 days, all already planned
+    # Contingent = 20 days, fully consumed by a 20-working-day vacation (Jan 5 – Jan 30).
     vc = VacationContingent(person_id=p.id, year=2026, total_days=20.0)
     mem_session.add(vc)
     mem_session.commit()
     _make_absence(
-        mem_session, p.id, date(2026, 1, 5), date(2026, 1, 24),
+        mem_session, p.id, date(2026, 1, 5), date(2026, 1, 30),
         absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
-    )  # 20 calendar days
-    result = estimated_vacation_days(p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session)
+    )  # 4 full weeks = 20 working days
+    result = estimated_vacation_days(
+        p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session, 0.0, "DE", "BY", _empty_client()
+    )
     assert result == 0.0
 
 
@@ -278,7 +359,9 @@ def test_estimated_vacation_proportional(mem_session):
     vc = VacationContingent(person_id=p.id, year=2026, total_days=20.0)
     mem_session.add(vc)
     mem_session.commit()
-    result = estimated_vacation_days(p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session)
+    result = estimated_vacation_days(
+        p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session, 0.0, "DE", "BY", _empty_client()
+    )
     expected = 20.0 * (31 / 184)
     assert abs(result - expected) < 0.01
 
@@ -291,8 +374,10 @@ def test_estimated_vacation_already_has_concrete_absence(mem_session):
     mem_session.commit()
     # Concrete vacation already planned in the period
     _make_absence(mem_session, p.id, date(2026, 7, 1), date(2026, 7, 10))
-    result = estimated_vacation_days(p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session)
-    # The 10 planned days reduce the remaining contingent;
+    result = estimated_vacation_days(
+        p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session, 0.0, "DE", "BY", _empty_client()
+    )
+    # The planned days reduce the remaining contingent;
     # estimate applies only to remaining days without concrete absences.
     assert result >= 0.0
 
@@ -309,9 +394,228 @@ def test_estimated_vacation_ignores_other_type(mem_session):
         mem_session, p.id, date(2026, 1, 5), date(2026, 3, 31),
         absence_type=AbsenceType.other, status=AbsenceStatus.confirmed,
     )
-    result = estimated_vacation_days(p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session)
+    result = estimated_vacation_days(
+        p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session, 0.0, "DE", "BY", _empty_client()
+    )
     expected = 20.0 * (31 / 184)  # identical to test_estimated_vacation_proportional
     assert abs(result - expected) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# vacation_days_consumed_in_year (working days + AU refund)
+# ---------------------------------------------------------------------------
+
+def test_vacation_consumed_working_days_only(mem_session):
+    p = _make_person(mem_session)
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 10),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    result = vacation_days_consumed_in_year(p.id, 2026, mem_session, "DE", "BY", _empty_client())
+    assert result == 8  # 10 calendar → 8 working days
+
+
+def test_vacation_consumed_confirmed_sick_refunds(mem_session):
+    """Confirmed sick during vacation tops the vacation → those days are refunded."""
+    p = _make_person(mem_session)
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )  # 5 working days
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 3), date(2026, 6, 5),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )  # AU covers Wed–Fri (3 working days)
+    result = vacation_days_consumed_in_year(p.id, 2026, mem_session, "DE", "BY", _empty_client())
+    assert result == 2  # only Mon+Tue consume vacation; Wed–Fri refunded
+
+
+def test_vacation_consumed_ongoing_sick_does_not_refund(mem_session):
+    """Sick without AU (ongoing) does NOT refund vacation days."""
+    p = _make_person(mem_session)
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 3), None,
+        absence_type=AbsenceType.sick, status=AbsenceStatus.ongoing,
+    )
+    result = vacation_days_consumed_in_year(p.id, 2026, mem_session, "DE", "BY", _empty_client())
+    assert result == 5  # ongoing sick doesn't refund → all 5 vacation days stand
+
+
+def test_estimated_vacation_refunded_days_return_to_contingent(mem_session):
+    """A confirmed sick spell inside a booked vacation frees contingent for the estimate."""
+    p = _make_person(mem_session)
+    vc = VacationContingent(person_id=p.id, year=2026, total_days=20.0)
+    mem_session.add(vc)
+    mem_session.commit()
+    _make_absence(
+        mem_session, p.id, date(2026, 1, 5), date(2026, 1, 30),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )  # would consume all 20 working days …
+    _make_absence(
+        mem_session, p.id, date(2026, 1, 5), date(2026, 1, 9),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )  # … but a confirmed sick week (5 wd) is refunded → 15 consumed, 5 remain
+    result = estimated_vacation_days(
+        p.id, date(2026, 7, 1), date(2026, 7, 31), mem_session, 0.0, "DE", "BY", _empty_client()
+    )
+    assert result > 0.0  # refund left contingent to distribute
+
+
+# ---------------------------------------------------------------------------
+# absence_booking (per-absence UI metrics)
+# ---------------------------------------------------------------------------
+
+def test_absence_booking_days_and_hours(mem_session):
+    p = _make_person(mem_session)  # 40h/week → 8h/working day
+    a = _make_absence(mem_session, p.id, date(2026, 6, 1), date(2026, 6, 10))  # vacation
+    result = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 8
+    assert result["hours"] == 64.0  # 8 days × 8h
+    assert result["contingent_days"] == 8
+
+
+def test_absence_booking_uses_pattern_hours(mem_session):
+    p = _make_person(mem_session)
+    p.work_week_pattern = "8,8,8,8,0"  # 4-day week
+    mem_session.add(p)
+    mem_session.commit()
+    a = _make_absence(mem_session, p.id, date(2026, 4, 20), date(2026, 4, 24))  # Mon–Fri
+    result = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 4  # Fri excluded by pattern
+    assert result["hours"] == 32.0
+    assert result["contingent_days"] == 4
+
+
+def test_absence_booking_vacation_refunds_confirmed_sick(mem_session):
+    p = _make_person(mem_session)
+    vac = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 3), date(2026, 6, 5),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    result = absence_booking(p, vac, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 5   # the vacation still spans 5 working days …
+    assert result["contingent_days"] == 2  # … but only Mon+Tue draw down the contingent
+
+
+def test_absence_booking_non_vacation_has_no_contingent(mem_session):
+    p = _make_person(mem_session)
+    a = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 3),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    result = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert result["working_days"] == 3
+    assert "contingent_days" not in result
+
+
+# ---------------------------------------------------------------------------
+# absence_summary (per-year overview)
+# ---------------------------------------------------------------------------
+
+def test_absence_summary_vacation_split_and_open(mem_session):
+    p = _make_person(mem_session)
+    mem_session.add(VacationContingent(person_id=p.id, year=2026, total_days=30.0))
+    mem_session.commit()
+    _make_absence(  # confirmed = genommen, 5 working days
+        mem_session, p.id, date(2026, 3, 2), date(2026, 3, 6),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    _make_absence(  # planned = geplant, 3 working days
+        mem_session, p.id, date(2026, 9, 21), date(2026, 9, 23),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.planned,
+    )
+    _make_absence(  # sick, own category
+        mem_session, p.id, date(2026, 4, 1), date(2026, 4, 2),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    s = absence_summary(p, 2026, mem_session, "DE", "BY", _empty_client())
+    assert s["vacation"] == {"contingent": 30.0, "taken": 5.0, "planned": 3.0, "open": 22.0}
+    assert s["categories"]["vacation"]["days"] == 8
+    assert s["categories"]["sick"]["days"] == 2
+    assert s["categories"]["training"]["days"] == 0
+
+
+def test_absence_summary_confirmed_sick_refunds_vacation(mem_session):
+    p = _make_person(mem_session)
+    mem_session.add(VacationContingent(person_id=p.id, year=2026, total_days=30.0))
+    mem_session.commit()
+    _make_absence(
+        mem_session, p.id, date(2026, 3, 2), date(2026, 3, 6),  # 5 wd vacation confirmed
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    _make_absence(
+        mem_session, p.id, date(2026, 3, 4), date(2026, 3, 6),  # 3 wd confirmed sick (AU)
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    s = absence_summary(p, 2026, mem_session, "DE", "BY", _empty_client())
+    # Only Mon+Tue draw vacation; Wed–Fri refunded by AU
+    assert s["vacation"]["taken"] == 2.0
+    assert s["vacation"]["open"] == 28.0
+
+
+# ---------------------------------------------------------------------------
+# Half-day absences (segments)
+# ---------------------------------------------------------------------------
+
+def test_half_day_single_counts_half(mem_session):
+    p = _make_person(mem_session)  # 40h/week → 8h/day
+    a = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 1),  # Monday, single day
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+        start_segment=AbsenceDaySegment.afternoon,
+    )
+    b = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert b["working_days"] == 0.5
+    assert b["hours"] == 4.0
+    assert b["contingent_days"] == 0.5
+
+
+def test_half_day_range_start_and_end(mem_session):
+    """Mon–Fri with a half start and half end day → 4.0 working days."""
+    p = _make_person(mem_session)
+    a = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),  # Mon–Fri = 5 full
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+        start_segment=AbsenceDaySegment.afternoon, end_segment=AbsenceDaySegment.morning,
+    )
+    b = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert b["working_days"] == 4.0  # 0.5 + 1 + 1 + 1 + 0.5
+    assert b["hours"] == 32.0
+
+
+def test_half_day_absence_days_in_range(mem_session):
+    p = _make_person(mem_session)
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 1),
+        start_segment=AbsenceDaySegment.morning,
+    )
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
+    assert result == 0.5
+
+
+def test_half_day_summary_taken(mem_session):
+    p = _make_person(mem_session)
+    mem_session.add(VacationContingent(person_id=p.id, year=2026, total_days=30.0))
+    mem_session.commit()
+    _make_absence(
+        mem_session, p.id, date(2026, 3, 2), date(2026, 3, 2),  # single half day
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+        start_segment=AbsenceDaySegment.morning,
+    )
+    s = absence_summary(p, 2026, mem_session, "DE", "BY", _empty_client())
+    assert s["vacation"]["taken"] == 0.5
+    assert s["vacation"]["open"] == 29.5
+    assert s["categories"]["vacation"]["days"] == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -370,17 +674,17 @@ def test_available_days_subtracts_absences(mem_session):
     assert result == 2.0  # 5 working days − 3 absence days
 
 
-def test_available_days_can_be_negative(mem_session):
-    """absence_days counts calendar days, so a full Mon–Sun absence beats 5 working days."""
+def test_available_days_full_week_absence_is_zero(mem_session):
+    """A full Mon–Sun absence covers exactly the 5 working days → availability 0 (not negative)."""
     p = _make_person(mem_session)
     import httpx
     client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
-    # Period Mon–Sun (5 working days), absence covers all 7 calendar days → 5 - 7 = -2
+    # Period Mon–Sun (5 working days); absence covers the whole week → 5 - 5 = 0
     _make_absence(mem_session, p.id, date(2026, 1, 5), date(2026, 1, 11))
     result = available_days(
         p.id, date(2026, 1, 5), date(2026, 1, 11), "DE", "BY", mem_session, client
     )
-    assert result < 0
+    assert result == 0.0
 
 
 # ---------------------------------------------------------------------------

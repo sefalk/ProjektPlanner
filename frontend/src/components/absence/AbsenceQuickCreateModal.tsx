@@ -1,13 +1,20 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { persons as personsApi } from '../../api'
+import { Trash2 } from 'lucide-react'
+import { persons as personsApi, type PersonAbsence } from '../../api'
 import Modal from '../Modal'
 import { TYPE_LABELS, STATUS_LABELS } from '../../lib/absenceColors'
 
 type AbsenceType = 'vacation' | 'sick' | 'training' | 'other'
 type AbsenceStatus = 'planned' | 'confirmed' | 'ongoing'
+type DaySegment = 'full' | 'morning' | 'afternoon'
 
 const TYPES: AbsenceType[] = ['vacation', 'training', 'sick', 'other']
+const SEGMENTS: [DaySegment, string][] = [
+  ['full', 'Voller Tag'],
+  ['morning', 'Vormittag (½)'],
+  ['afternoon', 'Nachmittag (½)'],
+]
 
 function allowedStatuses(type: AbsenceType): AbsenceStatus[] {
   return type === 'sick' ? ['confirmed', 'ongoing'] : ['planned', 'confirmed']
@@ -23,6 +30,7 @@ export default function AbsenceQuickCreateModal({
   initialPersonId,
   startDate,
   endDate,
+  editAbsence,
   onClose,
   onCreated,
 }: {
@@ -30,34 +38,58 @@ export default function AbsenceQuickCreateModal({
   initialPersonId: number | null
   startDate: string
   endDate: string
+  /** When set, the modal edits this existing absence instead of creating one. */
+  editAbsence?: PersonAbsence | null
   onClose: () => void
   onCreated: () => void
 }) {
   const qc = useQueryClient()
-  const [personId, setPersonId] = useState<number | null>(initialPersonId)
-  const [type, setType] = useState<AbsenceType>('vacation')
-  const [status, setStatus] = useState<AbsenceStatus>('confirmed')
-  const [start, setStart] = useState(startDate)
-  const [end, setEnd] = useState(endDate)
-  const [note, setNote] = useState('')
+  const isEdit = !!editAbsence
+  const [personId, setPersonId] = useState<number | null>(editAbsence?.person_id ?? initialPersonId)
+  const [type, setType] = useState<AbsenceType>(editAbsence?.absence_type ?? 'vacation')
+  const [status, setStatus] = useState<AbsenceStatus>(editAbsence?.status ?? 'confirmed')
+  const [start, setStart] = useState(editAbsence?.start_date ?? startDate)
+  const [end, setEnd] = useState(editAbsence?.end_date ?? endDate)
+  const [note, setNote] = useState(editAbsence?.note ?? '')
+  const [startSegment, setStartSegment] = useState<DaySegment>(editAbsence?.start_segment ?? 'full')
+  const [endSegment, setEndSegment] = useState<DaySegment>(editAbsence?.end_segment ?? 'full')
   const [error, setError] = useState<string | null>(null)
 
   const isOngoing = type === 'sick' && status === 'ongoing'
+  // Single-day (or ongoing) uses one segment; multi-day uses a start- and end-day segment.
+  const singleDay = isOngoing || start === end
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['calendar-year'] })
+    qc.invalidateQueries({ queryKey: ['absence-summary'] })
+    qc.invalidateQueries({ queryKey: ['absence-summary-batch'] })
+    qc.invalidateQueries({ queryKey: ['absences', personId] })
+    qc.invalidateQueries({ queryKey: ['persons', personId, 'absences'] })
+  }
 
   const create = useMutation({
-    mutationFn: () =>
-      personsApi.addAbsence(personId as number, {
+    mutationFn: () => {
+      const payload = {
         start_date: start,
         end_date: isOngoing ? null : end,
         absence_type: type,
         status,
         note,
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['calendar-year'] })
-      qc.invalidateQueries({ queryKey: ['persons', personId, 'absences'] })
-      onCreated()
+        start_segment: startSegment,
+        // On a single-day/ongoing absence only the start segment is meaningful.
+        end_segment: singleDay ? 'full' as DaySegment : endSegment,
+      }
+      return isEdit
+        ? personsApi.updateAbsence(editAbsence!.person_id, editAbsence!.id, payload)
+        : personsApi.addAbsence(personId as number, payload)
     },
+    onSuccess: () => { invalidate(); onCreated() },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const remove = useMutation({
+    mutationFn: () => personsApi.deleteAbsence(editAbsence!.person_id, editAbsence!.id),
+    onSuccess: () => { invalidate(); onCreated() },
     onError: (e: Error) => setError(e.message),
   })
 
@@ -75,12 +107,12 @@ export default function AbsenceQuickCreateModal({
   }
 
   return (
-    <Modal title="Neue Abwesenheit" onClose={onClose}>
+    <Modal title={isEdit ? 'Abwesenheit bearbeiten' : 'Neue Abwesenheit'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3">
         <div>
           <label htmlFor="qc-person" className="block text-xs font-medium text-gray-600 mb-1">Mitarbeiter</label>
-          <select id="qc-person" required
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          <select id="qc-person" required disabled={isEdit}
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:text-gray-500"
             value={personId ?? ''}
             onChange={(e) => setPersonId(e.target.value ? parseInt(e.target.value) : null)}
           >
@@ -133,6 +165,45 @@ export default function AbsenceQuickCreateModal({
           </div>
         </div>
 
+        {/* Half-day segments. One dropdown for a single day (or ongoing), two for a range. */}
+        {singleDay ? (
+          <div>
+            <label htmlFor="qc-seg" className="block text-xs font-medium text-gray-600 mb-1">
+              Tag <span className="font-normal text-gray-400">— voller oder halber Tag</span>
+            </label>
+            <select id="qc-seg"
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={startSegment}
+              onChange={(e) => setStartSegment(e.target.value as DaySegment)}
+            >
+              {SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="qc-seg-start" className="block text-xs font-medium text-gray-600 mb-1">Erster Tag</label>
+              <select id="qc-seg-start"
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={startSegment}
+                onChange={(e) => setStartSegment(e.target.value as DaySegment)}
+              >
+                {SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="qc-seg-end" className="block text-xs font-medium text-gray-600 mb-1">Letzter Tag</label>
+              <select id="qc-seg-end"
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={endSegment}
+                onChange={(e) => setEndSegment(e.target.value as DaySegment)}
+              >
+                {SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
         <div>
           <label htmlFor="qc-note" className="block text-xs font-medium text-gray-600 mb-1">Notiz <span className="font-normal text-gray-400">optional</span></label>
           <input id="qc-note"
@@ -142,14 +213,28 @@ export default function AbsenceQuickCreateModal({
           />
         </div>
 
+        {isEdit && status === 'planned' && (end || start) < new Date().toISOString().slice(0, 10) && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+            Dieser geplante Zeitraum liegt in der Vergangenheit — bitte auf „Bestätigt" umstellen, falls er tatsächlich stattgefunden hat.
+          </p>
+        )}
+
         {error && <p className="text-sm text-red-600">{error}</p>}
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-          <button type="submit" disabled={create.isPending}
-            className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
-            Speichern
-          </button>
+        <div className="flex items-center gap-2 pt-2">
+          {isEdit && (
+            <button type="button" onClick={() => remove.mutate()} disabled={remove.isPending}
+              className="flex items-center gap-1 px-2 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded disabled:opacity-50" aria-label="Abwesenheit löschen">
+              <Trash2 size={14} /> Löschen
+            </button>
+          )}
+          <div className="ml-auto flex gap-2">
+            <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+            <button type="submit" disabled={create.isPending}
+              className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+              Speichern
+            </button>
+          </div>
         </div>
       </form>
     </Modal>

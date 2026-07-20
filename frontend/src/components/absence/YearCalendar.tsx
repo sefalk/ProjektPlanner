@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, LocateFixed } from 'lucide-react'
 import type { YearHoliday, YearCalendarPerson } from '../../api'
 import { TYPE_SHORT, TYPE_LABELS, STATUS_LABELS, personColor } from '../../lib/absenceColors'
-import { computeAbsenceSegments } from '../../lib/absenceSegments'
+import { computeAbsenceSegments, type AbsenceSegment } from '../../lib/absenceSegments'
 import { regionKey, regionShade } from '../../lib/holidayRegions'
 
 // ─── Layout constants ─────────────────────────────────────────────────────────
@@ -48,6 +48,32 @@ function fmtDe(iso: string | null): string {
   return `${d}.${m}.${y}`
 }
 
+/** A planned absence whose period already lies in the past should be confirmed. */
+function needsConfirmation(status: string, absEnd: string | null, absStart: string, todayStr: string): boolean {
+  if (status !== 'planned') return false
+  return (absEnd ?? absStart) < todayStr
+}
+
+/** Multi-line hover tooltip for an absence bar: who/type/status, range, booked
+ *  working days & hours, vacation contingent (after AU refund) and a hint when a
+ *  past-dated planned absence still needs confirmation. */
+function barTooltip(s: AbsenceSegment, todayStr: string): string {
+  const lines = [
+    `${s.personName} · ${TYPE_LABELS[s.type]} (${STATUS_LABELS[s.status]})`,
+    `${fmtDe(s.absStart)} – ${fmtDe(s.absEnd)}`,
+  ]
+  if (s.bookedWorkingDays != null) {
+    lines.push(`Bucht: ${s.bookedWorkingDays} Arbeitstag(e) · ${s.bookedHours ?? 0} h`)
+    if (s.type === 'vacation' && s.contingentDays != null && s.contingentDays !== s.bookedWorkingDays) {
+      lines.push(`Urlaubskontingent: ${s.contingentDays} (${s.bookedWorkingDays - s.contingentDays} durch AU erstattet)`)
+    }
+  }
+  if (needsConfirmation(s.status, s.absEnd, s.absStart, todayStr)) {
+    lines.push('⚠ Geplant und in der Vergangenheit — bitte bestätigen (Klick zum Bearbeiten).')
+  }
+  return lines.join('\n')
+}
+
 interface DragState {
   year: number
   monthIdx: number
@@ -64,12 +90,15 @@ export default function YearCalendar({
   persons,
   displayedRegions,
   onRangeSelect,
+  onAbsenceClick,
 }: {
   years: number[]
   holidaysByYear: Record<number, YearHoliday[]>
   persons: YearCalendarPerson[]
   displayedRegions?: Set<string>
   onRangeSelect?: (personId: number | null, startISO: string, endISO: string) => void
+  /** Click on an existing absence bar → edit it (fixes the lost edit affordance). */
+  onAbsenceClick?: (personId: number, absenceId: number) => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentRowRef = useRef<HTMLDivElement>(null)
@@ -235,24 +264,35 @@ export default function YearCalendar({
             const hovered = hoveredPersonId === s.personId
             const span = s.endDay - s.startDay + 1
             const roundCls = (s.openStart ? 'rounded-l-none border-l-0 ' : '') + (s.openEnd ? 'rounded-r-none border-r-0 ' : '')
+            const mustConfirm = needsConfirmation(s.status, s.absEnd, s.absStart, todayStr)
+            const clickable = !!onAbsenceClick
             return (
               <div
                 key={`${s.personId}-${s.absenceId}-${i}`}
                 className={`absolute flex items-center justify-center overflow-hidden rounded-sm border ${c.bar} ${c.border} ${roundCls} ${
                   hovered ? `ring-2 ${c.ring} z-20 brightness-105 scale-[1.08]` : 'z-10'
-                } transition-transform`}
+                } transition-transform ${clickable ? 'cursor-pointer' : ''}`}
                 style={{
                   left: `calc(${s.startDay - 1} * ${CELL_W})`,
                   width: `calc(${span} * ${CELL_W})`,
                   top: `calc(${lane * laneHpct}% + 1px)`,
                   height: `calc(${laneHpct}% - 2px)`,
                 }}
-                title={`${s.personName} · ${TYPE_LABELS[s.type]} (${STATUS_LABELS[s.status]}) · ${fmtDe(s.absStart)} – ${fmtDe(s.absEnd)}`}
+                title={barTooltip(s, todayStr)}
                 onMouseEnter={() => setHoveredPersonId(s.personId)}
                 onMouseLeave={() => setHoveredPersonId(null)}
+                // Stop the mousedown so a click on a bar edits it instead of starting a drag-create.
+                onMouseDown={clickable ? (e) => e.stopPropagation() : undefined}
+                onClick={clickable ? (e) => { e.stopPropagation(); onAbsenceClick!(s.personId, s.absenceId) } : undefined}
               >
                 {showLabels && span >= 2 && (
                   <span className="text-[9px] font-semibold leading-none text-gray-700 select-none pointer-events-none">{TYPE_SHORT[s.type]}</span>
+                )}
+                {mustConfirm && (
+                  <span
+                    className="absolute top-0 right-0 h-1.5 w-1.5 rounded-full bg-amber-500 ring-1 ring-white pointer-events-none"
+                    aria-label="Bitte bestätigen"
+                  />
                 )}
               </div>
             )

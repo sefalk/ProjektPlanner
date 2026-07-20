@@ -7,7 +7,7 @@ from sqlalchemy import UniqueConstraint
 from sqlmodel import Field
 
 from app.models.base import ValidatedSQLModel
-from app.models.enums import AbsenceStatus, AbsenceType
+from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 
 
 class Person(ValidatedSQLModel, table=True):
@@ -54,6 +54,11 @@ class PersonAbsence(ValidatedSQLModel, table=True):
     absence_type: AbsenceType
     status: AbsenceStatus
     note: str = ""
+    # Half-day support: which part of the start/end day the absence covers.
+    # full = whole day (default); morning/afternoon = half day (0.5). For a single-day
+    # absence only start_segment is meaningful (end_segment stays full).
+    start_segment: AbsenceDaySegment = Field(default=AbsenceDaySegment.full)
+    end_segment: AbsenceDaySegment = Field(default=AbsenceDaySegment.full)
 
     @model_validator(mode="after")
     def validate_type_status_and_dates(self) -> "PersonAbsence":

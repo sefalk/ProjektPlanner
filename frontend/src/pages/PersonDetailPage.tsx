@@ -84,10 +84,17 @@ function AbsenceForm({
     start_date: initial?.start_date ?? '',
     end_date: initial?.end_date ?? '',
     note: initial?.note ?? '',
+    start_segment: initial?.start_segment ?? 'full',
+    end_segment: initial?.end_segment ?? 'full',
   })
 
   const isSick = form.absence_type === 'sick'
   const isOngoing = form.status === 'ongoing'
+  // One segment dropdown for a single day / ongoing; two for a multi-day range.
+  const singleDay = isOngoing || !form.end_date || form.end_date === form.start_date
+  const SEGS: [NonNullable<AbsenceFormData['start_segment']>, string][] = [
+    ['full', 'Voller Tag'], ['morning', 'Vormittag (½)'], ['afternoon', 'Nachmittag (½)'],
+  ]
 
   // Adjust status when type changes
   function setType(t: PersonAbsence['absence_type']) {
@@ -101,7 +108,7 @@ function AbsenceForm({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    onSave({ ...form, end_date: form.end_date || null })
+    onSave({ ...form, end_date: form.end_date || null, end_segment: singleDay ? 'full' : form.end_segment })
   }
 
   const allowedStatuses: PersonAbsence['status'][] = isSick
@@ -155,6 +162,40 @@ function AbsenceForm({
             onChange={(e) => setForm((f) => ({ ...f, end_date: e.target.value || null }))} />
         </div>
       </div>
+      {singleDay ? (
+        <div>
+          <label htmlFor="abs-seg" className="block text-xs font-medium text-gray-600 mb-1">
+            Tag <span className="font-normal text-gray-400">— voller oder halber Tag</span>
+          </label>
+          <select id="abs-seg"
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={form.start_segment ?? 'full'}
+            onChange={(e) => setForm((f) => ({ ...f, start_segment: e.target.value as AbsenceFormData['start_segment'] }))}>
+            {SEGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="abs-seg-start" className="block text-xs font-medium text-gray-600 mb-1">Erster Tag</label>
+            <select id="abs-seg-start"
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={form.start_segment ?? 'full'}
+              onChange={(e) => setForm((f) => ({ ...f, start_segment: e.target.value as AbsenceFormData['start_segment'] }))}>
+              {SEGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="abs-seg-end" className="block text-xs font-medium text-gray-600 mb-1">Letzter Tag</label>
+            <select id="abs-seg-end"
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={form.end_segment ?? 'full'}
+              onChange={(e) => setForm((f) => ({ ...f, end_segment: e.target.value as AbsenceFormData['end_segment'] }))}>
+              {SEGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
       <div>
         <label htmlFor="abs-note" className="block text-xs font-medium text-gray-600 mb-1">Notiz</label>
         <input id="abs-note" type="text"
@@ -216,6 +257,89 @@ function ContingentForm({
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
+
+/** "Gebucht" cell: working days + hours an absence books, with the vacation
+ *  contingent (after the AU refund) called out when it differs from the raw days. */
+/** Short half-day marker for a day cell (Vm = Vormittag, Nm = Nachmittag). */
+function segShort(seg?: string): string {
+  return seg === 'morning' ? ' · ½ Vm' : seg === 'afternoon' ? ' · ½ Nm' : ''
+}
+
+function renderBooking(a: PersonAbsence) {
+  if (a.booked_working_days == null) return <span className="text-gray-300">–</span>
+  const days = a.booked_working_days
+  const hours = a.booked_hours ?? 0
+  const base = `${days} AT · ${hours} h`
+  const isVacation = a.absence_type === 'vacation'
+  const refunded = isVacation && a.contingent_days != null && a.contingent_days !== days
+  if (refunded) {
+    return (
+      <span title={`${a.contingent_days} Urlaubstag(e) verbraucht — ${days - (a.contingent_days ?? 0)} durch beglaubigte Krankheit (AU) erstattet. Stunden: ${hours} h.`}>
+        {base}
+        <span className="ml-1 text-amber-600">(Kontingent {a.contingent_days})</span>
+      </span>
+    )
+  }
+  return <span title={isVacation ? `${days} Urlaubstag(e) · ${hours} h (ohne Wochenenden/Feiertage/freie Tage)` : `${days} Arbeitstag(e) · ${hours} h`}>{base}</span>
+}
+
+/** Absence overview above the table: per-category booked days/hours and, for
+ *  vacation, the contingent split into taken / planned / open. Year selectable. */
+function AbsenceSummaryPanel({ personId }: { personId: number }) {
+  const [year, setYear] = useState(() => new Date().getFullYear())
+  const { data } = useQuery({
+    queryKey: ['absence-summary', personId, year],
+    queryFn: () => persons.absenceSummary(personId, year),
+  })
+  const v = data?.vacation
+  const cats = data?.categories
+  const CATS: [keyof NonNullable<typeof cats>, string, string][] = [
+    ['vacation', 'Urlaub', 'bg-sky-50 text-sky-700 border-sky-200'],
+    ['sick', 'Krank', 'bg-rose-50 text-rose-700 border-rose-200'],
+    ['training', 'Fortbildung', 'bg-violet-50 text-violet-700 border-violet-200'],
+    ['other', 'Sonstiges', 'bg-gray-50 text-gray-600 border-gray-200'],
+  ]
+  const total = v && v.contingent > 0 ? v.contingent : 0
+  const pct = (n: number) => (total > 0 ? Math.min(100, (n / total) * 100) : 0)
+  return (
+    <div className="mb-4 bg-white rounded-lg border border-gray-200 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-semibold text-gray-700">Abwesenheits-Übersicht {year}</h4>
+        <div className="flex items-center gap-1 text-sm">
+          <button onClick={() => setYear((y) => y - 1)} className="px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50" aria-label="Jahr zurück">‹</button>
+          <span className="w-12 text-center font-medium text-gray-700">{year}</span>
+          <button onClick={() => setYear((y) => y + 1)} className="px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-50" aria-label="Jahr vor">›</button>
+        </div>
+      </div>
+
+      {v && (
+        <div className="mb-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <span className="text-gray-600" title="Jahres-Urlaubskontingent">Urlaub: <b className="text-gray-800">{v.contingent}</b> AT</span>
+            <span className="text-emerald-700" title="Bestätigte Urlaubstage">genommen {v.taken}</span>
+            <span className="text-blue-600" title="Vorgemerkte (geplante) Urlaubstage">geplant {v.planned}</span>
+            <span className={v.open <= 0 ? 'text-gray-400' : 'text-amber-600'} title="Verbleibendes Kontingent">offen {v.open}</span>
+          </div>
+          <div className="mt-1.5 h-2 w-full max-w-md rounded bg-gray-100 overflow-hidden flex" title={`genommen ${v.taken} · geplant ${v.planned} · offen ${v.open} von ${v.contingent}`}>
+            <div className="bg-emerald-500 h-full" style={{ width: `${pct(v.taken)}%` }} />
+            <div className="bg-blue-400 h-full" style={{ width: `${pct(v.planned)}%` }} />
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        {CATS.map(([k, label, cls]) => {
+          const c = cats?.[k]
+          return (
+            <span key={k} className={`px-2 py-1 rounded border text-xs ${cls}`}>
+              {label}: <b>{c?.days ?? 0}</b> AT · {c?.hours ?? 0} h
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 type Tab = 'absences' | 'projects'
 
@@ -334,39 +458,55 @@ export default function PersonDetailPage() {
     queryFn: () => persons.memberships(personId),
   })
 
+  // Absence/contingent/region changes here also feed the year calendar, the
+  // absence summary panel and the persons-table vacation column — invalidate them
+  // all so those views don't show stale data until a reload.
+  const invalidateDerived = () => {
+    qc.invalidateQueries({ queryKey: ['absences', personId] })
+    qc.invalidateQueries({ queryKey: ['absence-summary'] })
+    qc.invalidateQueries({ queryKey: ['absence-summary-batch'] })
+    qc.invalidateQueries({ queryKey: ['calendar-year'] })
+  }
+
   const updatePerson = useMutation({
     mutationFn: (d: Omit<Person, 'id'>) => persons.update(personId, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['person', personId] }); setShowEdit(false); setError(null) },
+    onSuccess: () => {
+      // A holiday-region override changes the calendar's resolved region and the
+      // working-day-based summary, so refresh those too.
+      qc.invalidateQueries({ queryKey: ['person', personId] })
+      invalidateDerived()
+      setShowEdit(false); setError(null)
+    },
     onError: (e: Error) => setError(e.message),
   })
   const addAbsence = useMutation({
     mutationFn: (d: Omit<PersonAbsence, 'id' | 'person_id'>) => persons.addAbsence(personId, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['absences', personId] }); setShowAddAbsence(false); setError(null) },
+    onSuccess: () => { invalidateDerived(); setShowAddAbsence(false); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const updateAbsence = useMutation({
     mutationFn: (d: Omit<PersonAbsence, 'id' | 'person_id'>) => persons.updateAbsence(personId, editingAbsence!.id, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['absences', personId] }); setEditingAbsence(null); setError(null) },
+    onSuccess: () => { invalidateDerived(); setEditingAbsence(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const deleteAbsence = useMutation({
     mutationFn: (absenceId: number) => persons.deleteAbsence(personId, absenceId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['absences', personId] }),
+    onSuccess: () => invalidateDerived(),
   })
   const addContingent = useMutation({
     mutationFn: (d: { year: number; total_days: number }) => persons.addVacationContingent(personId, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setShowAddContingent(false); setError(null) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setShowAddContingent(false); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const updateContingent = useMutation({
     mutationFn: ({ id, d }: { id: number; d: { year: number; total_days: number } }) =>
       persons.updateVacationContingent(personId, id, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setEditingContingent(null); setError(null) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setEditingContingent(null); setError(null) },
     onError: (e: Error) => setError(e.message),
   })
   const deleteContingent = useMutation({
     mutationFn: (contingentId: number) => persons.deleteVacationContingent(personId, contingentId),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); setConfirmDeleteContingent(null) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setConfirmDeleteContingent(null) },
   })
   const addMembership = useMutation({
     mutationFn: (d: Omit<ProjectMembership, 'id' | 'project_id'>) =>
@@ -440,18 +580,28 @@ export default function PersonDetailPage() {
                 <Plus size={14} /> Neue Abwesenheit
               </button>
             </div>
+            <AbsenceSummaryPanel personId={personId} />
             <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    {['Typ', 'Von', 'Bis', 'Status', 'Notiz', ''].map((h) => (
-                      <th key={h} scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
+                    {[
+                      { h: 'Typ', t: undefined },
+                      { h: 'Von', t: undefined },
+                      { h: 'Bis', t: undefined },
+                      { h: 'Status', t: undefined },
+                      { h: 'Gebucht', t: 'Gebuchte Arbeitstage und Stunden dieses Zeitraums — ohne Wochenenden, Feiertage und im Arbeitsmodell freie Tage. Bei Urlaub: Kontingentverbrauch nach Erstattung bei beglaubigter Krankheit (AU).' },
+                      { h: 'Notiz', t: undefined },
+                      { h: '', t: undefined },
+                    ].map(({ h, t }) => (
+                      <th key={h || 'actions'} scope="col" title={t}
+                        className={`px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase ${t ? 'cursor-help' : ''}`}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {sortedAbsences.length === 0 && (
-                    <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-400">Keine Abwesenheiten eingetragen.</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">Keine Abwesenheiten eingetragen.</td></tr>
                   )}
                   {sortedAbsences.map((a) => (
                     <tr key={a.id}>
@@ -460,9 +610,10 @@ export default function PersonDetailPage() {
                           {TYPE_LABELS[a.absence_type]}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{a.start_date}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{a.end_date ?? <span className="text-gray-400 italic">laufend</span>}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{a.start_date}<span className="text-amber-600 text-xs">{segShort(a.start_segment)}</span></td>
+                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{a.end_date ? <>{a.end_date}{a.end_date !== a.start_date && <span className="text-amber-600 text-xs">{segShort(a.end_segment)}</span>}</> : <span className="text-gray-400 italic">laufend</span>}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{STATUS_LABELS[a.status]}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{renderBooking(a)}</td>
                       <td className="px-4 py-3 text-sm text-gray-400 max-w-[12rem] truncate">{a.note}</td>
                       <td className="px-4 py-3 text-sm">
                         <div className="flex items-center gap-2">
