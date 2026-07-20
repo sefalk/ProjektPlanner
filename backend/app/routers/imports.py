@@ -21,6 +21,7 @@ from app.services.importer import (
     UnmatchedPersonsError,
     UnresolvedPositionsError,
     UnresolvedProjectsError,
+    backfill_bookings_for_level,
     import_bookings,
 )
 
@@ -60,16 +61,18 @@ class PositionMappingCreate(SQLModel):
 
 
 @router.post("/imports", response_model=ImportResultOut, status_code=201)
-async def post_import(file: UploadFile, session: SessionDep):
+async def post_import(file: UploadFile, session: SessionDep, force: bool = False):
     """Upload a Sage ERP CSV export and persist the time bookings.
 
-    Returns 422 with `detail` + `unresolved_projects` / `unmatched_persons` lists
-    when the file references unknown project names or unmatched persons.
+    Returns 422 with `detail` + `unresolved_projects` / `unmatched_persons` /
+    `unresolved_positions` lists when the file references unknown project names, unmatched
+    persons, or unmapped position-mode Projektebenen. Pass `?force=true` to import despite
+    unmapped Projektebenen (those bookings stay unresolved and are flagged — doc 24 IP2).
     """
     content = await file.read()
     try:
         result: ImportResult = import_bookings(
-            content, session, source_filename=file.filename
+            content, session, source_filename=file.filename, force=force
         )
     except ParseError as exc:
         if exc.details:
@@ -322,6 +325,8 @@ def create_position_mapping(body: PositionMappingCreate, session: SessionDep):
     except IntegrityError:
         session.rollback()
         raise HTTPException(409, "Mapping for this project and level already exists.")
+    # doc 24 IP4: apply the new mapping to already-imported bookings of this level.
+    backfill_bookings_for_level(mapping.project_id, mapping.sage_project_level, mapping.billing_position_id, session)
     return mapping
 
 
@@ -330,6 +335,7 @@ def update_position_mapping(mapping_id: int, body: PositionMappingCreate, sessio
     mapping = session.get(SagePositionMapping, mapping_id)
     if not mapping:
         raise HTTPException(404, "Mapping not found.")
+    old_level = mapping.sage_project_level
     mapping.project_id = body.project_id
     mapping.sage_project_level = body.sage_project_level
     mapping.billing_position_id = body.billing_position_id
@@ -340,6 +346,10 @@ def update_position_mapping(mapping_id: int, body: PositionMappingCreate, sessio
     except IntegrityError:
         session.rollback()
         raise HTTPException(409, "Mapping for this project and level already exists.")
+    # doc 24 IP4: re-resolve bookings. If the level was renamed, clear the old level's bookings.
+    if old_level != mapping.sage_project_level:
+        backfill_bookings_for_level(mapping.project_id, old_level, None, session)
+    backfill_bookings_for_level(mapping.project_id, mapping.sage_project_level, mapping.billing_position_id, session)
     return mapping
 
 
@@ -348,5 +358,8 @@ def delete_position_mapping(mapping_id: int, session: SessionDep):
     mapping = session.get(SagePositionMapping, mapping_id)
     if not mapping:
         raise HTTPException(404, "Mapping not found.")
+    project_id, level = mapping.project_id, mapping.sage_project_level
     session.delete(mapping)
     session.commit()
+    # doc 24 IP4: bookings of this level become unresolved again.
+    backfill_bookings_for_level(project_id, level, None, session)

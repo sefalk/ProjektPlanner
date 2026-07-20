@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy, AlertTriangle } from 'lucide-react'
 import {
-  projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, ApiError,
+  projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, positionMappings, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason, type BillingPosition,
 } from '../api'
 import Modal from '../components/Modal'
@@ -104,7 +104,67 @@ function FlagCell({ booking, queryKey }: { booking: TimeBooking; queryKey: unkno
 
 type SortKey = 'booking_date' | 'person_name' | 'net_hours' | 'sage_project_level'
 
+/** Inline editor for the project's Projektebene→Posten mappings, shown above the bookings
+ *  table (doc 24 IP3/IP4). Changing a mapping backfills existing bookings server-side. */
+function LevelMappingEditor({ projectId, positions, onChanged }: {
+  projectId: number; positions: BillingPosition[]; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const { data: levels = [] } = useQuery({ queryKey: ['sage-levels', projectId], queryFn: () => projects.sageLevels(projectId) })
+  const { data: maps = [] } = useQuery({ queryKey: ['sage-position-mappings', projectId], queryFn: () => positionMappings.list(projectId) })
+  const [err, setErr] = useState<string | null>(null)
+  const mapByLevel = new Map(maps.map((m) => [m.sage_project_level, m]))
+
+  const setMapping = useMutation({
+    mutationFn: async ({ level, posId }: { level: string; posId: number | null }) => {
+      const existing = mapByLevel.get(level)
+      if (posId == null) {
+        if (existing) await positionMappings.delete(existing.id)
+        return
+      }
+      if (existing) {
+        if (existing.billing_position_id !== posId)
+          await positionMappings.update(existing.id, { project_id: projectId, sage_project_level: level, billing_position_id: posId })
+      } else {
+        await positionMappings.create({ project_id: projectId, sage_project_level: level, billing_position_id: posId })
+      }
+    },
+    onSuccess: () => { setErr(null); qc.invalidateQueries({ queryKey: ['sage-position-mappings', projectId] }); onChanged() },
+    onError: (e: Error) => setErr(errText(e)),
+  })
+
+  if (positions.length === 0 || levels.length === 0) return null
+  return (
+    <div className="mb-4 bg-white rounded-lg border border-gray-200 p-3">
+      <div className="text-xs font-medium text-gray-600 mb-2">Projektebene → Posten Zuordnung</div>
+      <div className="space-y-1.5">
+        {levels.map((level) => {
+          const m = mapByLevel.get(level)
+          return (
+            <div key={level} className="flex items-center gap-2 text-sm">
+              <span className="w-56 truncate text-gray-700" title={level}>{level}</span>
+              <span className="text-gray-300">→</span>
+              <select className="border border-gray-300 rounded px-2 py-1 text-sm min-w-[12rem]"
+                value={m?.billing_position_id ?? ''}
+                onChange={(e) => setMapping.mutate({ level, posId: e.target.value === '' ? null : parseInt(e.target.value) })}>
+                <option value="">— nicht zugeordnet —</option>
+                {positions.map((p) => (
+                  <option key={p.id} value={p.id}>{p.position_number}{p.description ? ` – ${p.description}` : ''}</option>
+                ))}
+              </select>
+              {!m && <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700">offen</span>}
+            </div>
+          )
+        })}
+      </div>
+      {err && <p className="mt-2 text-sm text-red-600">{err}</p>}
+      <p className="mt-2 text-[11px] text-gray-400">Änderungen wirken sofort auf bestehende Buchungen dieser Ebene.</p>
+    </div>
+  )
+}
+
 function BookingsTab({ projectId, memberships }: { projectId: number; memberships: ProjectMembership[] }) {
+  const qc = useQueryClient()
   const [filterPerson, setFilterPerson] = useState(0)
   const [filterYear, setFilterYear] = useState(new Date().getFullYear())
   const [filterMonth, setFilterMonth] = useState(0)   // 0 = all months
@@ -112,6 +172,9 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
   const [sortKey, setSortKey] = useState<SortKey>('booking_date')
   const [sortAsc, setSortAsc] = useState(false)
   const { data: allPersons = [] } = useQuery({ queryKey: ['persons'], queryFn: persons.list })
+  const { data: positions = [] } = useQuery({ queryKey: ['billingPositions', projectId], queryFn: () => projects.billingPositions(projectId) })
+  const posById = new Map(positions.map((p) => [p.id, p]))
+  const hasPositions = positions.length > 0
 
   const filters = {
     ...(filterPerson > 0 && { person_id: filterPerson }),
@@ -211,6 +274,10 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
         </div>
       </div>
 
+      {/* Projektebene → Posten mapping editor (doc 24 IP3/IP4) */}
+      <LevelMappingEditor projectId={projectId} positions={positions}
+        onChanged={() => qc.invalidateQueries({ queryKey: ['project-bookings', projectId] })} />
+
       {/* Table */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         <table className="min-w-full divide-y divide-gray-200">
@@ -219,6 +286,7 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
               <SortTh k="booking_date" label="Datum" />
               <SortTh k="person_name" label="Person" />
               <SortTh k="sage_project_level" label="Projektebene" title="Sage-Projektebene 1" />
+              {hasPositions && <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aufgelöster Projektposten (aus dem Projektebene→Posten-Mapping)">Posten</th>}
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Dauer (roh)</th>
               <SortTh k="net_hours" label="Std." />
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bemerkung</th>
@@ -227,13 +295,20 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
           </thead>
           <tbody className="divide-y divide-gray-100">
             {!isLoading && sorted.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">Keine Buchungen für diesen Filter.</td></tr>
+              <tr><td colSpan={hasPositions ? 8 : 7} className="px-4 py-8 text-center text-sm text-gray-400">Keine Buchungen für diesen Filter.</td></tr>
             )}
             {sorted.map(b => (
               <tr key={b.id} className={b.is_excluded ? 'bg-red-50' : 'hover:bg-gray-50'}>
                 <td className={`px-4 py-2.5 text-sm font-mono ${b.is_excluded ? 'text-red-400 line-through' : 'text-gray-700'}`}>{b.booking_date}</td>
                 <td className={`px-4 py-2.5 text-sm ${b.is_excluded ? 'text-red-400 line-through' : 'text-gray-700'}`}>{b.person_name}</td>
                 <td className={`px-4 py-2.5 text-sm ${b.is_excluded ? 'text-red-300 line-through' : 'text-gray-600'}`}>{b.sage_project_level}</td>
+                {hasPositions && (
+                  <td className="px-4 py-2.5 text-sm">
+                    {b.billing_position_id != null
+                      ? <span className="text-gray-700">{posById.get(b.billing_position_id)?.position_number ?? `#${b.billing_position_id}`}</span>
+                      : <span className="px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-700" title="Keinem Posten zugeordnet – Projektebene→Posten-Mapping prüfen">nicht zugeordnet</span>}
+                  </td>
+                )}
                 <td className={`px-4 py-2.5 text-sm font-mono ${b.is_excluded ? 'text-red-300 line-through' : 'text-gray-500'}`}>{b.duration_raw || '–'}</td>
                 <td className={`px-4 py-2.5 text-sm font-mono text-right ${b.is_excluded ? 'text-red-400 line-through' : 'text-gray-800'}`}>{b.net_hours.toFixed(2)}</td>
                 <td className="px-4 py-2.5 text-xs text-gray-400 max-w-[8rem] truncate">{b.note || ''}</td>
@@ -244,7 +319,7 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
           {sorted.length > 0 && (
             <tfoot className="bg-gray-50 font-medium text-gray-700">
               <tr>
-                <td colSpan={4} className="px-4 py-2.5 text-sm">Gesamt (aktiv)</td>
+                <td colSpan={hasPositions ? 5 : 4} className="px-4 py-2.5 text-sm">Gesamt (aktiv)</td>
                 <td className="px-4 py-2.5 text-sm font-mono text-right">{totalHours.toFixed(2)}</td>
                 <td colSpan={2} />
               </tr>

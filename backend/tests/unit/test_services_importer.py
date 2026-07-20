@@ -411,6 +411,24 @@ def test_import_position_mode_missing_mapping_raises(session):
     assert (proj.id, "Development") in exc.value.pairs
 
 
+def test_import_force_imports_unresolved_as_null(session):
+    """IP2: force=True imports despite an unmapped position-mode level; the booking stays
+    unresolved (billing_position_id=None) rather than aborting."""
+    from sqlmodel import select
+
+    _make_person(session)
+    proj = _make_project(session)
+    proj.position_mode = True
+    _make_mapping(session, "P00001 Analytics", proj.id)
+    _priced_position(session, proj.id)  # position mode, no level mapping
+    session.commit()
+
+    result = import_bookings(_csv([_ROW]), session, force=True)
+    assert result.inserted == 1
+    booking = session.exec(select(TimeBooking)).first()
+    assert booking.billing_position_id is None
+
+
 def test_position_mapping_is_project_scoped(session):
     # Two projects with an identically-named level ("Development") must resolve to their
     # OWN position — no cross-project mixing (finding 2026-07-16).
@@ -448,6 +466,32 @@ def test_import_simple_mode_leaves_position_null(session):
     assert result.inserted == 1
     booking = session.exec(__import__("sqlmodel").select(TimeBooking)).first()
     assert booking.billing_position_id is None
+
+
+def test_backfill_bookings_for_level(session):
+    """IP4: applying a mapping re-assigns existing bookings of that level (re-import wouldn't)."""
+    from sqlmodel import select
+
+    from app.services.importer import backfill_bookings_for_level
+
+    def _tb(level, day):
+        return TimeBooking(
+            booking_date=date(2026, 1, day), person_id=1, project_id=1, import_batch_id=1,
+            sage_project_name="X", sage_project_level=level, billing_position_id=None, net_hours=1.0,
+        )
+    session.add(_tb("Dev", 1))
+    session.add(_tb("Dev", 2))
+    session.add(_tb("Ops", 3))
+    session.commit()
+
+    n = backfill_bookings_for_level(1, "Dev", 42, session)
+    assert n == 2
+    rows = session.exec(select(TimeBooking)).all()
+    assert sorted((r.sage_project_level, r.billing_position_id) for r in rows) == [
+        ("Dev", 42), ("Dev", 42), ("Ops", None),
+    ]
+    # clearing (mapping deleted) sets them back to NULL
+    assert backfill_bookings_for_level(1, "Dev", None, session) == 2
 
 
 # ---------------------------------------------------------------------------

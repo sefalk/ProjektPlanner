@@ -1,7 +1,7 @@
-import React, { useRef, useState } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Upload, CheckCircle, AlertCircle, FileText, RefreshCw, ChevronDown, ChevronRight, Flag, RotateCcw } from 'lucide-react'
-import { projects, mappings, persons, imports as importsApi, bookings as bookingsApi, type ImportBatch, type TimeBooking, type ExclusionReason } from '../api'
+import { projects, mappings, persons, positionMappings, imports as importsApi, bookings as bookingsApi, type ImportBatch, type TimeBooking, type ExclusionReason, type BillingPosition } from '../api'
 import PageHeader from '../components/PageHeader'
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api'
@@ -21,9 +21,15 @@ interface ParseErrorRow {
   message: string
 }
 
+interface UnresolvedPosition {
+  project_id: number
+  sage_project_level: string
+}
+
 interface ImportError422 {
   unresolved_projects?: string[]
   unmatched_persons?: string[]
+  unresolved_positions?: UnresolvedPosition[]
   detail?: string
   parse_errors?: ParseErrorRow[]
 }
@@ -33,20 +39,21 @@ type PageState =
   | { kind: 'uploading' }
   | { kind: 'unresolved'; names: string[]; file: File | string }
   | { kind: 'unmatched'; names: string[]; file: File | string }
+  | { kind: 'positions_unresolved'; pairs: UnresolvedPosition[]; file: File | string }
   | { kind: 'parse_error'; message: string; errors: ParseErrorRow[] }
   | { kind: 'success'; result: ImportResultOut }
   | { kind: 'error'; message: string }
 
 // ─── Upload helper ────────────────────────────────────────────────────────────
 
-async function postImport(source: File | string): Promise<{ ok: true; result: ImportResultOut } | { ok: false; error: ImportError422 }> {
+async function postImport(source: File | string, force = false): Promise<{ ok: true; result: ImportResultOut } | { ok: false; error: ImportError422 }> {
   const form = new FormData()
   if (typeof source === 'string') {
     form.append('file', new Blob([source], { type: 'text/csv' }), 'paste.csv')
   } else {
     form.append('file', source)
   }
-  const res = await fetch(`${BASE}/imports`, { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/imports${force ? '?force=true' : ''}`, { method: 'POST', body: form })
   if (res.status === 201) {
     return { ok: true, result: await res.json() as ImportResultOut }
   }
@@ -458,6 +465,140 @@ function PersonResolver({
   )
 }
 
+// ─── Position (Projektebene → Posten) resolver ─────────────────────────────────
+
+function PositionResolver({
+  pairs, onResolved, onCancel, onForce,
+}: {
+  pairs: UnresolvedPosition[]
+  onResolved: () => void
+  onCancel: () => void
+  onForce: () => void
+}) {
+  const qc = useQueryClient()
+  const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projects.list })
+  const projectIds = [...new Set(pairs.map((p) => p.project_id))]
+  const { data: posByProject = {} } = useQuery({
+    queryKey: ['positions-for-resolve', projectIds],
+    queryFn: async () => {
+      const entries = await Promise.all(
+        projectIds.map(async (pid) => [pid, await projects.billingPositions(pid)] as const),
+      )
+      return Object.fromEntries(entries) as Record<number, BillingPosition[]>
+    },
+  })
+  const key = (p: UnresolvedPosition) => `${p.project_id}|${p.sage_project_level}`
+  const projLabel = (pid: number) => {
+    const p = projectList.find((x) => x.id === pid)
+    return p ? p.project_number : `#${pid}`
+  }
+  const [sel, setSel] = useState<Record<string, number>>({})
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Pre-select the sole Posten of a project (still requires confirmation via Save) — a level
+  // that only appears in this import must not silently persist a mapping (doc 24 IP2).
+  useEffect(() => {
+    setSel((prev) => {
+      const next = { ...prev }
+      for (const p of pairs) {
+        const k = key(p)
+        if (next[k] == null) {
+          const list = posByProject[p.project_id] ?? []
+          next[k] = list.length === 1 ? list[0].id : 0
+        }
+      }
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posByProject])
+
+  const allMapped = pairs.every((p) => (sel[key(p)] ?? 0) > 0)
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      for (const p of pairs) {
+        const posId = sel[key(p)] ?? 0
+        if (posId > 0)
+          await positionMappings.create({ project_id: p.project_id, sage_project_level: p.sage_project_level, billing_position_id: posId })
+      }
+      qc.invalidateQueries({ queryKey: ['sage-position-mappings'] })
+      onResolved()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+      <div className="flex items-start gap-2 mb-3">
+        <AlertCircle size={16} className="text-yellow-600 mt-0.5 flex-shrink-0" />
+        <div>
+          <p className="text-sm font-medium text-yellow-800">Projektebenen ohne Posten-Zuordnung</p>
+          <p className="text-xs text-yellow-700 mt-0.5">
+            Im Posten-Modus muss jede Projektebene einem Posten zugeordnet sein. Bitte zuordnen
+            (oder in den Projekteinstellungen einen Posten anlegen), dann erneut importieren.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2 mb-4">
+        {pairs.map((p) => {
+          const list = posByProject[p.project_id] ?? []
+          return (
+            <div key={key(p)} className="flex items-center gap-3">
+              <span className="text-sm text-gray-700 min-w-[16rem] truncate">
+                <span className="font-mono">{projLabel(p.project_id)}</span>
+                <span className="text-gray-400"> · </span>
+                <span className="font-mono">{p.sage_project_level}</span>
+              </span>
+              <span className="text-gray-400">→</span>
+              <select
+                className="flex-1 border border-gray-300 rounded px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={sel[key(p)] ?? 0}
+                onChange={(e) => setSel((s) => ({ ...s, [key(p)]: parseInt(e.target.value) }))}
+              >
+                <option value={0} disabled>— Posten wählen —</option>
+                {list.map((bp) => (
+                  <option key={bp.id} value={bp.id}>{bp.position_number}{bp.description ? ` – ${bp.description}` : ''}</option>
+                ))}
+              </select>
+            </div>
+          )
+        })}
+      </div>
+
+      {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
+
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => { if (window.confirm('Import ERZWINGEN? Die betroffenen Buchungen bleiben ohne Posten (unaufgelöst), gehen NICHT in die Posten-Berechnung ein und werden im Meilenstein gewarnt. Erst nach nachträglicher Zuordnung fließen sie ein.')) onForce() }}
+          className="text-xs text-red-600 hover:text-red-800 underline"
+        >
+          Trotzdem importieren (erzwingen)
+        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={onCancel} className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
+          <button
+            type="button"
+            disabled={!allMapped || saving}
+            onClick={handleSave}
+            className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle size={14} />}
+            Zuordnen &amp; erneut importieren
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ImportPage() {
@@ -474,10 +615,10 @@ export default function ImportPage() {
     },
   })
 
-  async function runImport(source: File | string) {
+  async function runImport(source: File | string, force = false) {
     setState({ kind: 'uploading' })
     try {
-      const outcome = await postImport(source)
+      const outcome = await postImport(source, force)
       if (outcome.ok) {
         setState({ kind: 'success', result: outcome.result })
         void refetchBatches()
@@ -489,6 +630,8 @@ export default function ImportPage() {
           setState({ kind: 'unresolved', names: error.unresolved_projects, file: source })
         } else if (error.unmatched_persons?.length) {
           setState({ kind: 'unmatched', names: error.unmatched_persons, file: source })
+        } else if (error.unresolved_positions?.length) {
+          setState({ kind: 'positions_unresolved', pairs: error.unresolved_positions, file: source })
         } else {
           setState({ kind: 'error', message: error.detail ?? 'Unbekannter Fehler.' })
         }
@@ -619,6 +762,15 @@ export default function ImportPage() {
                 unmatchedNames={state.names}
                 onResolved={() => void runImport(state.file)}
                 onCancel={() => setState({ kind: 'idle' })}
+              />
+            )}
+
+            {state.kind === 'positions_unresolved' && (
+              <PositionResolver
+                pairs={state.pairs}
+                onResolved={() => void runImport(state.file)}
+                onCancel={() => setState({ kind: 'idle' })}
+                onForce={() => void runImport(state.file, true)}
               />
             )}
 
