@@ -562,8 +562,13 @@ function BillingPositionsSection({
           <div>
             <p className="text-sm font-medium text-gray-700">Posten-Modus</p>
             <p className="text-xs text-gray-400 max-w-md">
-              Aktiviert die Verteilung, Zuweisung, Import-Zuordnung und Abrechnung je Posten.
-              Voraussetzung: alle aktiven Mitglieder einem Posten zugewiesen und Budget vollständig verteilt.
+              Beim Aktivieren werden Budget, Zuweisungen, Import-Zuordnung und Abrechnung je Posten
+              geführt statt für das Projekt als Ganzes; bestehende Buchungen werden anhand der
+              Mappings den Posten zugeordnet.
+            </p>
+            <p className="text-xs text-gray-400 max-w-md mt-1">
+              Voraussetzungen: mindestens ein Posten mit Satz vorhanden, Σ Posten-Budget = Gesamtbudget
+              und alle aktiven Mitglieder einem Posten zugewiesen. Lässt sich jederzeit wieder deaktivieren.
             </p>
           </div>
           <button
@@ -1661,6 +1666,11 @@ export default function ProjectDetailPage() {
                         )
                       })}
                   </div>
+                  <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 text-[11px] text-gray-400 leading-relaxed">
+                    <span className="font-medium text-gray-500">Ist</span> = bereits gebuchter Aufwand ·{' '}
+                    <span className="font-medium text-gray-500">Prognose</span> = erwarteter Gesamtaufwand bei Projektende (Ist + geplanter Rest) ·{' '}
+                    <span className="font-medium text-gray-500">Rest</span> = Posten-Budget − Prognose (negativ = Überschreitung).
+                  </div>
                 </div>
               )}
             </div>
@@ -1901,6 +1911,9 @@ export default function ProjectDetailPage() {
                   ) },
                   ...(billingPositions.length > 0 ? [{
                     key: 'billing_position_id', header: 'Posten',
+                    headerTitle: positionMode
+                      ? 'Im Posten-Modus muss jedes aktive Mitglied einem Posten zugewiesen sein — daraus kommen Stundensatz und die Zuordnung von Plan und Ist zum Posten-Budget.'
+                      : 'Optionale Zuordnung zu einer Vertragsposition. Ein zugewiesener Posten liefert den Stundensatz. Im Posten-Modus wird die Zuordnung verpflichtend.',
                     render: (m: ProjectMembership) => {
                       const p = m.billing_position_id != null ? posById.get(m.billing_position_id) : undefined
                       return p
@@ -2117,6 +2130,11 @@ export default function ProjectDetailPage() {
                 auf den unten gewählten Standard-Posten zurück.
               </p>
             ) : null}
+            <p className="text-xs text-gray-400 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+              Nur vorwärts wirksam: Der Abschluss erzeugt Rechnungen für den gewählten Monat.
+              Bereits abgerechnete Monate bleiben unverändert — auch ein späteres Umschalten des
+              Posten-Modus rechnet zurückliegende Rechnungen nicht neu.
+            </p>
             {billingPositions.length > 1 && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">

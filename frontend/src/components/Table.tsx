@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 interface Column<T> {
   key: string
   header: string
+  /** Optional native tooltip shown on the column header (title attribute). */
+  headerTitle?: string
   render?: (row: T) => ReactNode
   className?: string
 }
@@ -25,7 +27,8 @@ export default function Table<T>({ columns, rows, onRowClick, keyFn, emptyMessag
               <th
                 key={col.key}
                 scope="col"
-                className={`px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider ${col.className ?? ''}`}
+                title={col.headerTitle}
+                className={`px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider ${col.headerTitle ? 'cursor-help' : ''} ${col.className ?? ''}`}
               >
                 {col.header}
               </th>
