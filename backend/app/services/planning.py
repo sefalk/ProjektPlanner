@@ -16,7 +16,7 @@ from datetime import date, timedelta
 import httpx
 from sqlmodel import Session, select
 
-from app.models.enums import AbsenceStatus, AbsenceType
+from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 from app.models.membership import ProjectMembership
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
@@ -121,6 +121,25 @@ def _covers(absence: PersonAbsence, day: date) -> bool:
     return absence.start_date <= day <= a_end
 
 
+def _day_fraction(absence: PersonAbsence, day: date) -> float:
+    """Fraction of ``day`` the absence covers: 0.0 (not covered), 0.5 (half) or 1.0.
+
+    The start day uses start_segment, the end day uses end_segment; a single-day
+    absence (start == end) uses start_segment. Middle days are always full.
+    A morning/afternoon segment is half a day; full is a whole day.
+    """
+    a_end = absence.end_date if absence.end_date is not None else date.today()
+    if not (absence.start_date <= day <= a_end):
+        return 0.0
+    if day == absence.start_date:  # also the single-day case (start == end)
+        seg = absence.start_segment
+    elif day == a_end:
+        seg = absence.end_segment
+    else:
+        return 1.0
+    return 0.5 if seg in (AbsenceDaySegment.morning, AbsenceDaySegment.afternoon) else 1.0
+
+
 def _is_confirmed_sick(a: PersonAbsence) -> bool:
     """A sick record with a medical certificate on file (AU vorliegt)."""
     return a.absence_type == AbsenceType.sick and a.status == AbsenceStatus.confirmed
@@ -159,7 +178,9 @@ def absence_days_in_range(
     absences = _overlapping_absences(person_id, start, end, session)
     if not absences:
         return 0.0
-    return float(sum(1 for d in workdates if any(_covers(a, d) for a in absences)))
+    # Per working day, the absent portion = the largest coverage among overlapping
+    # absences (0.5 for a half day, 1.0 for a full day); summed over the range.
+    return sum(max((_day_fraction(a, d) for a in absences), default=0.0) for d in workdates)
 
 
 def vacation_days_consumed_in_year(
@@ -186,11 +207,12 @@ def vacation_days_consumed_in_year(
     sick_confirmed = [a for a in absences if _is_confirmed_sick(a)]
     if not vac:
         return 0.0
-    consumed = 0
+    consumed = 0.0
     for d in workdates:
-        if any(_covers(a, d) for a in vac) and not any(_covers(a, d) for a in sick_confirmed):
-            consumed += 1
-    return float(consumed)
+        if any(_covers(a, d) for a in sick_confirmed):
+            continue  # topped by AU → refunded
+        consumed += max((_day_fraction(a, d) for a in vac), default=0.0)
+    return consumed
 
 
 def _person_daily_hours(person: Person | None, weekday: int, pattern: list[float] | None) -> float:
@@ -229,17 +251,17 @@ def absence_booking(
     workdates = effective_working_dates(
         absence.start_date, a_end, session, country, state or "", pattern, client
     )
-    days = len(workdates)
-    hours = sum(_person_daily_hours(person, d.weekday(), pattern) for d in workdates)
+    days = round(sum(_day_fraction(absence, d) for d in workdates), 3)
+    hours = sum(_day_fraction(absence, d) * _person_daily_hours(person, d.weekday(), pattern) for d in workdates)
     result: dict = {"working_days": days, "hours": round(hours, 2)}
     if absence.absence_type == AbsenceType.vacation:
         sick_confirmed = [
             a for a in _overlapping_absences(person.id, absence.start_date, a_end, session)
             if _is_confirmed_sick(a)
         ]
-        result["contingent_days"] = sum(
-            1 for d in workdates if not any(_covers(s, d) for s in sick_confirmed)
-        )
+        result["contingent_days"] = round(sum(
+            _day_fraction(absence, d) for d in workdates if not any(_covers(s, d) for s in sick_confirmed)
+        ), 3)
     return result
 
 
@@ -269,27 +291,32 @@ def absence_summary(
     workdates = effective_working_dates(year_start, year_end, session, country, state or "", pattern, client)
     absences = _overlapping_absences(person.id, year_start, year_end, session)
 
-    def hours_over(days: list[date]) -> float:
-        return round(sum(_person_daily_hours(person, d.weekday(), pattern) for d in days), 2)
-
     categories: dict[str, dict] = {}
     for t in AbsenceType:
         of_type = [a for a in absences if a.absence_type == t]
-        covered = [d for d in workdates if any(_covers(a, d) for a in of_type)]
-        categories[t.value] = {"days": len(covered), "hours": hours_over(covered)}
+        days = 0.0
+        hours = 0.0
+        for d in workdates:
+            frac = max((_day_fraction(a, d) for a in of_type), default=0.0)
+            if frac:
+                days += frac
+                hours += frac * _person_daily_hours(person, d.weekday(), pattern)
+        categories[t.value] = {"days": round(days, 3), "hours": round(hours, 2)}
 
     # Vacation split by status, with the confirmed-sick (AU) refund applied.
     sick_confirmed = [a for a in absences if _is_confirmed_sick(a)]
     vac_confirmed = [a for a in absences if a.absence_type == AbsenceType.vacation and a.status == AbsenceStatus.confirmed]
     vac_planned = [a for a in absences if a.absence_type == AbsenceType.vacation and a.status == AbsenceStatus.planned]
-    taken = planned = 0
+    taken = planned = 0.0
     for d in workdates:
         if any(_covers(s, d) for s in sick_confirmed):
             continue  # topped by AU → refunded, consumes no vacation
-        if any(_covers(a, d) for a in vac_confirmed):
-            taken += 1
-        elif any(_covers(a, d) for a in vac_planned):
-            planned += 1
+        tf = max((_day_fraction(a, d) for a in vac_confirmed), default=0.0)
+        pf = max((_day_fraction(a, d) for a in vac_planned), default=0.0)
+        if tf > 0:
+            taken += tf
+        elif pf > 0:
+            planned += pf
 
     contingent_row = session.exec(
         select(VacationContingent).where(
@@ -305,9 +332,9 @@ def absence_summary(
         "categories": categories,
         "vacation": {
             "contingent": contingent,
-            "taken": float(taken),
-            "planned": float(planned),
-            "open": open_days,
+            "taken": round(taken, 3),
+            "planned": round(planned, 3),
+            "open": round(open_days, 3),
         },
     }
 

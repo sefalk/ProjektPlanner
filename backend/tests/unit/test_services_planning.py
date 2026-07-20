@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.models.enums import AbsenceStatus, AbsenceType
+from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.project import Project
 from app.models.membership import ProjectMembership
@@ -96,6 +96,8 @@ def _make_absence(
     end: date | None,
     absence_type: AbsenceType = AbsenceType.vacation,
     status: AbsenceStatus = AbsenceStatus.planned,
+    start_segment: AbsenceDaySegment = AbsenceDaySegment.full,
+    end_segment: AbsenceDaySegment = AbsenceDaySegment.full,
 ) -> PersonAbsence:
     a = PersonAbsence(
         person_id=person_id,
@@ -103,6 +105,8 @@ def _make_absence(
         end_date=end,
         absence_type=absence_type,
         status=status,
+        start_segment=start_segment,
+        end_segment=end_segment,
     )
     session.add(a)
     session.commit()
@@ -555,6 +559,63 @@ def test_absence_summary_confirmed_sick_refunds_vacation(mem_session):
     # Only Mon+Tue draw vacation; Wed–Fri refunded by AU
     assert s["vacation"]["taken"] == 2.0
     assert s["vacation"]["open"] == 28.0
+
+
+# ---------------------------------------------------------------------------
+# Half-day absences (segments)
+# ---------------------------------------------------------------------------
+
+def test_half_day_single_counts_half(mem_session):
+    p = _make_person(mem_session)  # 40h/week → 8h/day
+    a = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 1),  # Monday, single day
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+        start_segment=AbsenceDaySegment.afternoon,
+    )
+    b = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert b["working_days"] == 0.5
+    assert b["hours"] == 4.0
+    assert b["contingent_days"] == 0.5
+
+
+def test_half_day_range_start_and_end(mem_session):
+    """Mon–Fri with a half start and half end day → 4.0 working days."""
+    p = _make_person(mem_session)
+    a = _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 5),  # Mon–Fri = 5 full
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+        start_segment=AbsenceDaySegment.afternoon, end_segment=AbsenceDaySegment.morning,
+    )
+    b = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
+    assert b["working_days"] == 4.0  # 0.5 + 1 + 1 + 1 + 0.5
+    assert b["hours"] == 32.0
+
+
+def test_half_day_absence_days_in_range(mem_session):
+    p = _make_person(mem_session)
+    _make_absence(
+        mem_session, p.id, date(2026, 6, 1), date(2026, 6, 1),
+        start_segment=AbsenceDaySegment.morning,
+    )
+    result = absence_days_in_range(
+        p.id, date(2026, 6, 1), date(2026, 6, 30), mem_session, "DE", "BY", _empty_client()
+    )
+    assert result == 0.5
+
+
+def test_half_day_summary_taken(mem_session):
+    p = _make_person(mem_session)
+    mem_session.add(VacationContingent(person_id=p.id, year=2026, total_days=30.0))
+    mem_session.commit()
+    _make_absence(
+        mem_session, p.id, date(2026, 3, 2), date(2026, 3, 2),  # single half day
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+        start_segment=AbsenceDaySegment.morning,
+    )
+    s = absence_summary(p, 2026, mem_session, "DE", "BY", _empty_client())
+    assert s["vacation"]["taken"] == 0.5
+    assert s["vacation"]["open"] == 29.5
+    assert s["categories"]["vacation"]["days"] == 0.5
 
 
 # ---------------------------------------------------------------------------

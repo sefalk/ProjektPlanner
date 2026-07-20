@@ -26,6 +26,19 @@ class AbsenceStatus(str, Enum):
     ongoing = "ongoing"      # sick only
 
 
+class AbsenceDaySegment(str, Enum):
+    """Which part of a day an absence covers (for half-day absences).
+
+    Applies to the start day (start_segment) and end day (end_segment) of an
+    absence. A half segment (morning/afternoon) counts 0.5 working days; full
+    counts 1.0. Middle days of a multi-day absence are always full.
+    """
+
+    full = "full"
+    morning = "morning"      # Vormittag
+    afternoon = "afternoon"  # Nachmittag
+
+
 class MilestoneStatus(str, Enum):
     open = "open"
     closed = "closed"
