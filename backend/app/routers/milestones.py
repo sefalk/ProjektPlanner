@@ -328,7 +328,10 @@ def list_milestones_detail(project_id: int, session: SessionDep):
             # WP6: a non-override row planned below its available capacity was capped by a
             # budget (capacity itself = available_hours). Name which budget bound it.
             booked_hours = booked_pos.get((person.id, budget.billing_position_id), 0.0)
-            if primary_budget_by_person.get(person.id) == budget.id:
+            # NULL-position bookings: in simple mode attribute to the person's primary row;
+            # in POSITION mode they are UNRESOLVED (no posten) → excluded from any posten row
+            # and surfaced as a milestone warning (doc 24 IP5), never silently placed.
+            if not project.position_mode and primary_budget_by_person.get(person.id) == budget.id:
                 booked_hours += booked_null.get(person.id, 0.0)
             cap_reason: str | None = None
             if not ms.is_locked and not budget.is_manual_override and stats.hours - budget.current_hours > 0.05:
@@ -381,6 +384,15 @@ def list_milestones_detail(project_id: int, session: SessionDep):
             warnings.append(
                 "Gesperrter Meilenstein liegt außerhalb des aktuellen Projektzeitraums."
             )
+        # doc 24 IP5: in position mode, bookings without a resolved Posten are unresolved —
+        # excluded from the per-Posten Ist above; flag their existence here.
+        if project.position_mode:
+            unresolved_h = sum(booked_null.values())
+            if unresolved_h > 0.05:
+                warnings.append(
+                    f"{unresolved_h:.1f} h gebuchte Ist-Stunden ohne Posten-Zuordnung — nicht in "
+                    f"der Posten-Berechnung berücksichtigt. Projektebene→Posten-Mapping prüfen."
+                )
 
         result.append(MilestoneDetailOut(milestone=ms, persons=persons_out, warnings=warnings))
 
