@@ -378,6 +378,12 @@ export interface PersonAbsence {
   contingent_days?: number | null;
 }
 
+export interface AbsenceSummary {
+  year: number;
+  categories: Record<'vacation' | 'sick' | 'training' | 'other', { days: number; hours: number }>;
+  vacation: { contingent: number; taken: number; planned: number; open: number };
+}
+
 export interface VacationContingent {
   id: number;
   person_id: number;
@@ -413,6 +419,10 @@ export const persons = {
     req<PersonAbsence>('PUT', `/persons/${personId}/absences/${absenceId}`, d),
   deleteAbsence: (personId: number, absenceId: number) =>
     req<void>('DELETE', `/persons/${personId}/absences/${absenceId}`),
+  absenceSummary: (id: number, year?: number) =>
+    req<AbsenceSummary>('GET', `/persons/${id}/absence-summary${year ? `?year=${year}` : ''}`),
+  absenceSummaryBatch: (year?: number) =>
+    req<Record<number, AbsenceSummary>>('GET', `/persons/absence-summary${year ? `?year=${year}` : ''}`),
   vacationContingents: (id: number) => req<VacationContingent[]>('GET', `/persons/${id}/vacation-contingents`),
   addVacationContingent: (id: number, d: Omit<VacationContingent, 'id' | 'person_id'>) =>
     req<VacationContingent>('POST', `/persons/${id}/vacation-contingents`, d),

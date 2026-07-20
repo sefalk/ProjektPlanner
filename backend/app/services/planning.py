@@ -243,6 +243,75 @@ def absence_booking(
     return result
 
 
+def absence_summary(
+    person: Person,
+    year: int,
+    session: Session,
+    country: str | None = None,
+    state: str | None = None,
+    client: httpx.Client | None = None,
+) -> dict:
+    """Per-year absence overview for one person.
+
+    Returns, for the given ``year``:
+    - ``categories``: for each AbsenceType a ``{days, hours}`` sum of booked working
+      days (deduped within the type) and the person's hours over them.
+    - ``vacation``: ``{contingent, taken, planned, open}`` in working days. Taken =
+      confirmed vacation, planned = planned vacation; both after the confirmed-sick
+      (AU) refund. Open = max(0, contingent − taken − planned).
+
+    All counts respect weekends, holidays (effective region) and the work-week pattern.
+    """
+    if country is None:
+        country, state = resolve_holiday_region(session, person)
+    pattern = parse_work_week_pattern_or_none(person)
+    year_start, year_end = date(year, 1, 1), date(year, 12, 31)
+    workdates = effective_working_dates(year_start, year_end, session, country, state or "", pattern, client)
+    absences = _overlapping_absences(person.id, year_start, year_end, session)
+
+    def hours_over(days: list[date]) -> float:
+        return round(sum(_person_daily_hours(person, d.weekday(), pattern) for d in days), 2)
+
+    categories: dict[str, dict] = {}
+    for t in AbsenceType:
+        of_type = [a for a in absences if a.absence_type == t]
+        covered = [d for d in workdates if any(_covers(a, d) for a in of_type)]
+        categories[t.value] = {"days": len(covered), "hours": hours_over(covered)}
+
+    # Vacation split by status, with the confirmed-sick (AU) refund applied.
+    sick_confirmed = [a for a in absences if _is_confirmed_sick(a)]
+    vac_confirmed = [a for a in absences if a.absence_type == AbsenceType.vacation and a.status == AbsenceStatus.confirmed]
+    vac_planned = [a for a in absences if a.absence_type == AbsenceType.vacation and a.status == AbsenceStatus.planned]
+    taken = planned = 0
+    for d in workdates:
+        if any(_covers(s, d) for s in sick_confirmed):
+            continue  # topped by AU → refunded, consumes no vacation
+        if any(_covers(a, d) for a in vac_confirmed):
+            taken += 1
+        elif any(_covers(a, d) for a in vac_planned):
+            planned += 1
+
+    contingent_row = session.exec(
+        select(VacationContingent).where(
+            VacationContingent.person_id == person.id,
+            VacationContingent.year == year,
+        )
+    ).first()
+    contingent = contingent_row.total_days if contingent_row else 0.0
+    open_days = max(0.0, contingent - taken - planned)
+
+    return {
+        "year": year,
+        "categories": categories,
+        "vacation": {
+            "contingent": contingent,
+            "taken": float(taken),
+            "planned": float(planned),
+            "open": open_days,
+        },
+    }
+
+
 def estimated_vacation_days(
     person_id: int,
     start: date,
