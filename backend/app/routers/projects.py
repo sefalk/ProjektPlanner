@@ -536,6 +536,7 @@ class BookingOut(BaseModel):
     import_batch_id: int
     sage_project_name: str
     sage_project_level: str
+    billing_position_id: int | None  # resolved Posten (doc 24 IP3); None = nicht zugeordnet
     net_hours: float
     duration_raw: str
     break_duration: str
@@ -601,6 +602,7 @@ def list_project_bookings(
             import_batch_id=b.import_batch_id,
             sage_project_name=b.sage_project_name,
             sage_project_level=b.sage_project_level,
+            billing_position_id=b.billing_position_id,
             net_hours=b.net_hours,
             duration_raw=b.duration_raw,
             break_duration=b.break_duration,

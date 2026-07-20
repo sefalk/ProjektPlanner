@@ -112,6 +112,9 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
   const [sortKey, setSortKey] = useState<SortKey>('booking_date')
   const [sortAsc, setSortAsc] = useState(false)
   const { data: allPersons = [] } = useQuery({ queryKey: ['persons'], queryFn: persons.list })
+  const { data: positions = [] } = useQuery({ queryKey: ['billingPositions', projectId], queryFn: () => projects.billingPositions(projectId) })
+  const posById = new Map(positions.map((p) => [p.id, p]))
+  const hasPositions = positions.length > 0
 
   const filters = {
     ...(filterPerson > 0 && { person_id: filterPerson }),
@@ -219,6 +222,7 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
               <SortTh k="booking_date" label="Datum" />
               <SortTh k="person_name" label="Person" />
               <SortTh k="sage_project_level" label="Projektebene" title="Sage-Projektebene 1" />
+              {hasPositions && <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase" title="Aufgelöster Projektposten (aus dem Projektebene→Posten-Mapping)">Posten</th>}
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Dauer (roh)</th>
               <SortTh k="net_hours" label="Std." />
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Bemerkung</th>
@@ -227,13 +231,20 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
           </thead>
           <tbody className="divide-y divide-gray-100">
             {!isLoading && sorted.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-400">Keine Buchungen für diesen Filter.</td></tr>
+              <tr><td colSpan={hasPositions ? 8 : 7} className="px-4 py-8 text-center text-sm text-gray-400">Keine Buchungen für diesen Filter.</td></tr>
             )}
             {sorted.map(b => (
               <tr key={b.id} className={b.is_excluded ? 'bg-red-50' : 'hover:bg-gray-50'}>
                 <td className={`px-4 py-2.5 text-sm font-mono ${b.is_excluded ? 'text-red-400 line-through' : 'text-gray-700'}`}>{b.booking_date}</td>
                 <td className={`px-4 py-2.5 text-sm ${b.is_excluded ? 'text-red-400 line-through' : 'text-gray-700'}`}>{b.person_name}</td>
                 <td className={`px-4 py-2.5 text-sm ${b.is_excluded ? 'text-red-300 line-through' : 'text-gray-600'}`}>{b.sage_project_level}</td>
+                {hasPositions && (
+                  <td className="px-4 py-2.5 text-sm">
+                    {b.billing_position_id != null
+                      ? <span className="text-gray-700">{posById.get(b.billing_position_id)?.position_number ?? `#${b.billing_position_id}`}</span>
+                      : <span className="px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-700" title="Keinem Posten zugeordnet – Projektebene→Posten-Mapping prüfen">nicht zugeordnet</span>}
+                  </td>
+                )}
                 <td className={`px-4 py-2.5 text-sm font-mono ${b.is_excluded ? 'text-red-300 line-through' : 'text-gray-500'}`}>{b.duration_raw || '–'}</td>
                 <td className={`px-4 py-2.5 text-sm font-mono text-right ${b.is_excluded ? 'text-red-400 line-through' : 'text-gray-800'}`}>{b.net_hours.toFixed(2)}</td>
                 <td className="px-4 py-2.5 text-xs text-gray-400 max-w-[8rem] truncate">{b.note || ''}</td>
@@ -244,7 +255,7 @@ function BookingsTab({ projectId, memberships }: { projectId: number; membership
           {sorted.length > 0 && (
             <tfoot className="bg-gray-50 font-medium text-gray-700">
               <tr>
-                <td colSpan={4} className="px-4 py-2.5 text-sm">Gesamt (aktiv)</td>
+                <td colSpan={hasPositions ? 5 : 4} className="px-4 py-2.5 text-sm">Gesamt (aktiv)</td>
                 <td className="px-4 py-2.5 text-sm font-mono text-right">{totalHours.toFixed(2)}</td>
                 <td colSpan={2} />
               </tr>
