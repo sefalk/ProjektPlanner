@@ -14,6 +14,7 @@ from app.models.project import Project
 from app.models.membership import ProjectMembership
 from app.services.planning import (
     absence_booking,
+    absence_summary,
     absence_days_in_range,
     available_days,
     capacity_hours,
@@ -509,6 +510,51 @@ def test_absence_booking_non_vacation_has_no_contingent(mem_session):
     result = absence_booking(p, a, mem_session, "DE", "BY", _empty_client())
     assert result["working_days"] == 3
     assert "contingent_days" not in result
+
+
+# ---------------------------------------------------------------------------
+# absence_summary (per-year overview)
+# ---------------------------------------------------------------------------
+
+def test_absence_summary_vacation_split_and_open(mem_session):
+    p = _make_person(mem_session)
+    mem_session.add(VacationContingent(person_id=p.id, year=2026, total_days=30.0))
+    mem_session.commit()
+    _make_absence(  # confirmed = genommen, 5 working days
+        mem_session, p.id, date(2026, 3, 2), date(2026, 3, 6),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    _make_absence(  # planned = geplant, 3 working days
+        mem_session, p.id, date(2026, 9, 21), date(2026, 9, 23),
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.planned,
+    )
+    _make_absence(  # sick, own category
+        mem_session, p.id, date(2026, 4, 1), date(2026, 4, 2),
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    s = absence_summary(p, 2026, mem_session, "DE", "BY", _empty_client())
+    assert s["vacation"] == {"contingent": 30.0, "taken": 5.0, "planned": 3.0, "open": 22.0}
+    assert s["categories"]["vacation"]["days"] == 8
+    assert s["categories"]["sick"]["days"] == 2
+    assert s["categories"]["training"]["days"] == 0
+
+
+def test_absence_summary_confirmed_sick_refunds_vacation(mem_session):
+    p = _make_person(mem_session)
+    mem_session.add(VacationContingent(person_id=p.id, year=2026, total_days=30.0))
+    mem_session.commit()
+    _make_absence(
+        mem_session, p.id, date(2026, 3, 2), date(2026, 3, 6),  # 5 wd vacation confirmed
+        absence_type=AbsenceType.vacation, status=AbsenceStatus.confirmed,
+    )
+    _make_absence(
+        mem_session, p.id, date(2026, 3, 4), date(2026, 3, 6),  # 3 wd confirmed sick (AU)
+        absence_type=AbsenceType.sick, status=AbsenceStatus.confirmed,
+    )
+    s = absence_summary(p, 2026, mem_session, "DE", "BY", _empty_client())
+    # Only Mon+Tue draw vacation; Wed–Fri refunded by AU
+    assert s["vacation"]["taken"] == 2.0
+    assert s["vacation"]["open"] == 28.0
 
 
 # ---------------------------------------------------------------------------

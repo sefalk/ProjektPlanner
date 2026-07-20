@@ -11,7 +11,7 @@ from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.membership import ProjectMembership
 from app.models.project import Project
 from app.models.setting import Setting
-from app.services.planning import absence_booking
+from app.services.planning import absence_booking, absence_summary
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
@@ -96,6 +96,19 @@ def list_persons_with_projects(session: SessionDep):
         )
         for p in all_persons
     ]
+
+
+@router.get("/absence-summary")
+def batch_absence_summary(session: SessionDep, year: int | None = None):
+    """Per-person absence overview for a year (defaults to the current year).
+
+    Keyed by person_id. Used by the persons table's vacation column. Declared
+    before /{person_id} so the literal path wins the route match.
+    """
+    from datetime import date as _date
+    yr = year or _date.today().year
+    persons_all = session.exec(select(Person)).all()
+    return {p.id: absence_summary(p, yr, session) for p in persons_all if p.id is not None}
 
 
 @router.post("", response_model=Person, status_code=201)
@@ -209,6 +222,16 @@ def list_person_memberships(person_id: int, session: SessionDep):
 # ---------------------------------------------------------------------------
 # Absences
 # ---------------------------------------------------------------------------
+
+@router.get("/{person_id}/absence-summary")
+def person_absence_summary(person_id: int, session: SessionDep, year: int | None = None):
+    """Absence overview (categories + vacation taken/planned/open) for one person/year."""
+    from datetime import date as _date
+    person = session.get(Person, person_id)
+    if not person:
+        raise HTTPException(404, "Person not found.")
+    return absence_summary(person, year or _date.today().year, session)
+
 
 @router.get("/{person_id}/absences", response_model=list[AbsenceWithBooking])
 def list_absences(person_id: int, session: SessionDep):
