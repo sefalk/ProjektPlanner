@@ -277,7 +277,15 @@ export default function SettingsPage() {
   const SETTING_META: Record<string, { label: string; description: string }> = {
     default_vacation_days: {
       label: 'Standard-Urlaubstage (Tage/Jahr)',
-      description: 'Wird beim Anlegen einer neuen Person automatisch als Urlaubskontingent für das aktuelle Jahr übernommen.',
+      description: 'Urlaubskontingent, das beim Anlegen einer neuen Person automatisch für das aktuelle Jahr übernommen wird. Standard: 30.',
+    },
+    sick_days_per_year: {
+      label: 'Pauschale Krankheitstage (Tage/Jahr)',
+      description: 'Angenommene Krankheitstage pro Person und Jahr. Fließen als geschätzte Abwesenheit in die Meilenstein-Prognose ein und mindern die verfügbare Kapazität. Pro Projekt überschreibbar; 0 deaktiviert die Schätzung. Standard: 10.',
+    },
+    training_days_per_year: {
+      label: 'Pauschale Fortbildungstage (Tage/Jahr)',
+      description: 'Angenommene Fortbildungs-/Schulungstage pro Person und Jahr. Fließen als geschätzte Abwesenheit in die Meilenstein-Prognose ein und mindern die verfügbare Kapazität. Pro Projekt überschreibbar; 0 deaktiviert die Schätzung. Standard: 5.',
     },
   }
 

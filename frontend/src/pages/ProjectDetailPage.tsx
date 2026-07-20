@@ -562,8 +562,13 @@ function BillingPositionsSection({
           <div>
             <p className="text-sm font-medium text-gray-700">Posten-Modus</p>
             <p className="text-xs text-gray-400 max-w-md">
-              Aktiviert die Verteilung, Zuweisung, Import-Zuordnung und Abrechnung je Posten.
-              Voraussetzung: alle aktiven Mitglieder einem Posten zugewiesen und Budget vollständig verteilt.
+              Beim Aktivieren werden Budget, Zuweisungen, Import-Zuordnung und Abrechnung je Posten
+              geführt statt für das Projekt als Ganzes; bestehende Buchungen werden anhand der
+              Mappings den Posten zugeordnet.
+            </p>
+            <p className="text-xs text-gray-400 max-w-md mt-1">
+              Voraussetzungen: mindestens ein Posten mit Satz vorhanden, Σ Posten-Budget = Gesamtbudget
+              und alle aktiven Mitglieder einem Posten zugewiesen. Lässt sich jederzeit wieder deaktivieren.
             </p>
           </div>
           <button
@@ -634,7 +639,6 @@ interface AssignRow {
   weekly_capacity_hours: number
   priority: number
   billing_rate_per_hour: number
-  vacation_days_taken: number
 }
 
 /** Manage ALL Posten-assignments of one MA in a project as an editable list — each row is
@@ -656,11 +660,17 @@ function MemberAssignmentsModal({
   const seq = useRef(0)
   const [fromDate, setFromDate] = useState(mine[0]?.from_date ?? '')
   const [toDate, setToDate] = useState(mine[0]?.to_date ?? '')
+  // vacation_days_taken is a per-MA fact (already-taken vacation for this project), not per Posten.
+  // Initialize from the largest value across the MA's rows (guards against legacy rows that were
+  // filled inconsistently) and write it back to every row on save.
+  const [vacationTaken, setVacationTaken] = useState(
+    mine.reduce((mx, m) => Math.max(mx, m.vacation_days_taken), 0),
+  )
   const [rows, setRows] = useState<AssignRow[]>(
     mine.map((m) => ({
       key: 'm' + m.id, membershipId: m.id, billing_position_id: m.billing_position_id,
       weekly_capacity_hours: m.weekly_capacity_hours, priority: m.priority,
-      billing_rate_per_hour: m.billing_rate_per_hour, vacation_days_taken: m.vacation_days_taken,
+      billing_rate_per_hour: m.billing_rate_per_hour,
     })),
   )
   const [saving, setSaving] = useState(false)
@@ -678,7 +688,7 @@ function MemberAssignmentsModal({
     setRows((rs) => [...rs, {
       key: 'n' + (seq.current++), membershipId: null,
       billing_position_id: free?.id ?? null, weekly_capacity_hours: 0, priority: 0,
-      billing_rate_per_hour: 0, vacation_days_taken: 0,
+      billing_rate_per_hour: 0,
     }])
   }
 
@@ -702,7 +712,7 @@ function MemberAssignmentsModal({
         const payload = {
           from_date: fromDate, to_date: toDate, weekly_capacity_hours: r.weekly_capacity_hours,
           billing_rate_per_hour: rowRate(r), priority: r.priority,
-          vacation_days_taken: r.vacation_days_taken, billing_position_id: r.billing_position_id,
+          vacation_days_taken: vacationTaken, billing_position_id: r.billing_position_id,
         }
         const res = r.membershipId != null
           ? await projects.updateMembership(projectId, r.membershipId, payload)
@@ -734,9 +744,22 @@ function MemberAssignmentsModal({
         </div>
         <p className="text-xs text-gray-500">Zeitraum gilt für alle Posten-Zuweisungen dieses MA.</p>
 
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">
+            Bereits genommener Urlaub (Tage)
+            <span className="ml-1 font-normal text-gray-400">— pro Mitarbeiter, gilt für alle Posten</span>
+          </label>
+          <input type="number" min={0} step={0.5}
+            title="Bereits genommene Urlaubstage dieses MA für dieses Projekt. Reduziert die Rest-Urlaubsschätzung in der Kapazitätsberechnung — einmal pro Mitarbeiter, nicht je Posten."
+            className="w-32 border border-gray-300 rounded px-3 py-1.5 text-sm"
+            value={vacationTaken || ''}
+            onChange={(e) => setVacationTaken(parseFloat(e.target.value) || 0)} />
+        </div>
+
         <div className="border border-gray-200 rounded overflow-hidden">
-          <div className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 bg-gray-50 text-[11px] font-medium text-gray-500">
-            <span>Posten</span><span>h/Woche</span><span>Priorität</span><span></span>
+          <div className="grid grid-cols-[1fr_6rem_6rem_2rem] gap-2 px-2 py-1.5 bg-gray-50 text-[11px] font-medium text-gray-500">
+            <span>Posten</span><span>h/Woche</span><span>Priorität</span>
+            <span></span>
           </div>
           {rows.length === 0 && (
             <div className="px-2 py-3 text-xs text-gray-400">Noch keine Zuweisung — „+ Posten" klicken.</div>
@@ -745,7 +768,7 @@ function MemberAssignmentsModal({
             const pos = r.billing_position_id != null ? posById.get(r.billing_position_id) : undefined
             const rateFromPos = pos != null && pos.billing_rate_per_hour > 0
             return (
-              <div key={r.key} className="grid grid-cols-[1fr_5rem_5rem_2rem] gap-2 px-2 py-1.5 items-center border-t border-gray-100">
+              <div key={r.key} className="grid grid-cols-[1fr_6rem_6rem_2rem] gap-2 px-2 py-1.5 items-center border-t border-gray-100">
                 <div>
                   <select className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
                     value={r.billing_position_id ?? ''}
@@ -810,8 +833,6 @@ export default function ProjectDetailPage() {
   const [tab, setTab] = useState<Tab>('milestones')
   const [showCloseModal, setShowCloseModal] = useState(false)
   const [showAddMember, setShowAddMember] = useState(false)
-  const [editMember, setEditMember] = useState<ProjectMembership | null>(null)
-  const [editMemberForm, setEditMemberForm] = useState({ from_date: '', to_date: '', weekly_capacity_hours: 40, billing_rate_per_hour: 90, priority: 0, vacation_days_taken: 0, billing_position_id: null as number | null })
   const [editAssign, setEditAssign] = useState<{ personId: number; personName: string } | null>(null)  // Posten-Zuweisungs-Liste eines MA
   const [confirmReopenId, setConfirmReopenId] = useState<number | null>(null)
   const [confirmReopenMilestone, setConfirmReopenMilestone] = useState<{ year: number; month: number } | null>(null)
@@ -962,16 +983,6 @@ export default function ProjectDetailPage() {
       if (result.warnings && result.warnings.length > 0) {
         setMemberWarnings(result.warnings)
       }
-    },
-    onError: (e: Error) => setError(errText(e)),
-  })
-  const updateMember = useMutation({
-    mutationFn: () => projects.updateMembership(projectId, editMember!.id, editMemberForm),
-    onSuccess: (result) => {
-      qc.invalidateQueries({ queryKey: ['memberships', projectId] })
-      setEditMember(null)
-      setError(null)
-      if (result.warnings && result.warnings.length > 0) setMemberWarnings(result.warnings)
     },
     onError: (e: Error) => setError(errText(e)),
   })
@@ -1655,6 +1666,11 @@ export default function ProjectDetailPage() {
                         )
                       })}
                   </div>
+                  <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 text-[11px] text-gray-400 leading-relaxed">
+                    <span className="font-medium text-gray-500">Ist</span> = bereits gebuchter Aufwand ·{' '}
+                    <span className="font-medium text-gray-500">Prognose</span> = erwarteter Gesamtaufwand bei Projektende (Ist + geplanter Rest) ·{' '}
+                    <span className="font-medium text-gray-500">Rest</span> = Posten-Budget − Prognose (negativ = Überschreitung).
+                  </div>
                 </div>
               )}
             </div>
@@ -1884,17 +1900,20 @@ export default function ProjectDetailPage() {
             <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
               <Table
                 columns={[
-                  { key: 'person_id', header: 'Person', render: (m: ProjectMembership) => personName(m.person_id) },
-                  { key: 'from_date', header: 'Von' },
-                  { key: 'to_date', header: 'Bis' },
-                  { key: 'weekly_capacity_hours', header: 'h/Woche', render: (m: ProjectMembership) => `${m.weekly_capacity_hours} h` },
-                  { key: 'billing_rate_per_hour', header: 'Stundensatz', render: (m: ProjectMembership) => (
+                  { key: 'person_id', header: 'Person', headerTitle: 'Zugewiesener Mitarbeiter. Im Posten-Modus kann eine Person mehrere Zeilen haben — eine je Posten.', render: (m: ProjectMembership) => personName(m.person_id) },
+                  { key: 'from_date', header: 'Von', headerTitle: 'Beginn der Projektzugehörigkeit (gilt für alle Posten-Zuweisungen dieses MA).' },
+                  { key: 'to_date', header: 'Bis', headerTitle: 'Ende der Projektzugehörigkeit (gilt für alle Posten-Zuweisungen dieses MA).' },
+                  { key: 'weekly_capacity_hours', header: 'h/Woche', headerTitle: 'Wöchentliche Kapazität dieses MA für diese Zeile. Bei mehreren Posten teilt sich die Gesamtkapazität auf die Zeilen auf.', render: (m: ProjectMembership) => `${m.weekly_capacity_hours} h` },
+                  { key: 'billing_rate_per_hour', header: 'Stundensatz', headerTitle: 'Abrechnungssatz (€/Std.). Ist ein Posten zugewiesen, kommt der Satz vom Posten.', render: (m: ProjectMembership) => (
                     <span title={m.billing_position_id != null ? 'Satz vom zugewiesenen Posten' : undefined}>
                       {memberRate(m)} €{m.billing_position_id != null && <span className="ml-1 text-gray-300">(Posten)</span>}
                     </span>
                   ) },
                   ...(billingPositions.length > 0 ? [{
                     key: 'billing_position_id', header: 'Posten',
+                    headerTitle: positionMode
+                      ? 'Im Posten-Modus muss jedes aktive Mitglied einem Posten zugewiesen sein — daraus kommen Stundensatz und die Zuordnung von Plan und Ist zum Posten-Budget.'
+                      : 'Optionale Zuordnung zu einer Vertragsposition. Ein zugewiesener Posten liefert den Stundensatz. Im Posten-Modus wird die Zuordnung verpflichtend.',
                     render: (m: ProjectMembership) => {
                       const p = m.billing_position_id != null ? posById.get(m.billing_position_id) : undefined
                       return p
@@ -1904,6 +1923,7 @@ export default function ProjectDetailPage() {
                   }] : []),
                   {
                     key: 'priority', header: 'Priorität',
+                    headerTitle: 'Budget-Priorität für die Verteilung: kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral. Bei knappem Budget werden höher priorisierte Zeilen zuerst gedeckt.',
                     render: (m: ProjectMembership) => (
                       <span title="Budget-Priorität: kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral">
                         {m.priority === 0 ? <span className="text-gray-300">–</span> : m.priority}
@@ -1912,8 +1932,9 @@ export default function ProjectDetailPage() {
                   },
                   {
                     key: 'vacation_days_taken', header: 'Urlaub genommen',
+                    headerTitle: 'Bereits genommene Urlaubstage pro Mitarbeiter (projektbezogen, nicht je Posten) — reduziert die geschätzte Rest-Abwesenheit. Bearbeiten über „Bearbeiten“.',
                     render: (m: ProjectMembership) => (
-                      <span title="Bereits genommene Urlaubstage (pauschal, projektbezogen). Werden vom Jahres-Urlaubskontingent abgezogen und senken die geschätzte Abwesenheit.">
+                      <span title="Bereits genommene Urlaubstage (pro Mitarbeiter, projektbezogen). Werden vom Jahres-Urlaubskontingent abgezogen und senken die geschätzte Abwesenheit.">
                         {m.vacation_days_taken > 0 ? `${m.vacation_days_taken} T` : <span className="text-gray-300">–</span>}
                       </span>
                     ),
@@ -1932,7 +1953,11 @@ export default function ProjectDetailPage() {
                     ),
                   },
                 ]}
-                rows={memberships}
+                rows={[...memberships].sort((a, b) =>
+                  personName(a.person_id).localeCompare(personName(b.person_id), 'de') ||
+                  a.priority - b.priority ||
+                  b.weekly_capacity_hours - a.weekly_capacity_hours
+                )}
                 keyFn={(m) => m.id}
               />
             </div>
@@ -2111,6 +2136,11 @@ export default function ProjectDetailPage() {
                 auf den unten gewählten Standard-Posten zurück.
               </p>
             ) : null}
+            <p className="text-xs text-gray-400 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+              Nur vorwärts wirksam: Der Abschluss erzeugt Rechnungen für den gewählten Monat.
+              Bereits abgerechnete Monate bleiben unverändert — auch ein späteres Umschalten des
+              Posten-Modus rechnet zurückliegende Rechnungen nicht neu.
+            </p>
             {billingPositions.length > 1 && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -2454,79 +2484,6 @@ export default function ProjectDetailPage() {
         />
       )}
 
-      {/* Edit membership modal (legacy single-Posten — nur noch als Fallback) */}
-      {editMember && (
-        <Modal title="Zuweisung bearbeiten" onClose={() => { setEditMember(null); setError(null) }}>
-          <p className="text-xs text-gray-500 mb-3">Person: <strong>{personName(editMember.person_id)}</strong></p>
-          <form onSubmit={(e) => { e.preventDefault(); updateMember.mutate() }} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Von</label>
-                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.from_date}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, from_date: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
-                <input required type="date" className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.to_date}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, to_date: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">h/Woche</label>
-                <input required type="number" min={0} max={60} step={0.01}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                  value={editMemberForm.weekly_capacity_hours}
-                  onChange={(e) => setEditMemberForm({ ...editMemberForm, weekly_capacity_hours: parseFloat(e.target.value) })} />
-              </div>
-              {(() => {
-                const pos = editMemberForm.billing_position_id != null ? posById.get(editMemberForm.billing_position_id) : undefined
-                const fromPosition = pos != null && pos.billing_rate_per_hour > 0
-                return (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Stundensatz (€)</label>
-                    <input required={!fromPosition} type="number" min={0} step={0.01} disabled={fromPosition}
-                      className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-400"
-                      title={fromPosition ? 'Satz kommt vom zugewiesenen Posten' : undefined}
-                      value={fromPosition ? pos!.billing_rate_per_hour : editMemberForm.billing_rate_per_hour}
-                      onChange={(e) => setEditMemberForm({ ...editMemberForm, billing_rate_per_hour: parseFloat(e.target.value) })} />
-                  </div>
-                )
-              })()}
-            </div>
-            <PositionSelect positions={billingPositions} required={positionMode}
-              value={editMemberForm.billing_position_id}
-              onChange={(v) => setEditMemberForm({ ...editMemberForm, billing_position_id: v })} />
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Priorität <span className="text-gray-400 font-normal">(kleiner = höher, gleicher Wert = gleiche Stufe, 0 = neutral)</span>
-              </label>
-              <input type="number" step={1}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                value={editMemberForm.priority}
-                onChange={(e) => setEditMemberForm({ ...editMemberForm, priority: parseInt(e.target.value) || 0 })} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Bereits genommener Urlaub <span className="text-gray-400 font-normal">(Tage, projektbezogen — reduziert die geschätzte Abwesenheit)</span>
-              </label>
-              <input type="number" min={0} step={0.5}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"
-                value={editMemberForm.vacation_days_taken}
-                onChange={(e) => setEditMemberForm({ ...editMemberForm, vacation_days_taken: parseFloat(e.target.value) || 0 })} />
-            </div>
-            {error && <p className="text-xs text-red-600">{error}</p>}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => { setEditMember(null); setError(null) }}
-                className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-              <button type="submit"
-                className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
-            </div>
-          </form>
-        </Modal>
-      )}
     </div>
   )
 }
