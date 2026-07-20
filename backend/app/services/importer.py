@@ -372,12 +372,15 @@ def resolve_position_mappings(
     pairs: list[tuple[int, str]],
     position_project_ids: set[int],
     session: Session,
+    raise_unresolved: bool = True,
 ) -> dict[tuple[int, str], int]:
     """Map (project_id, sage_project_level) → billing_position_id via SagePositionMapping,
     but only for position-mode projects. Simple-mode projects need no mapping (their pairs
     are skipped and their bookings keep billing_position_id = None).
 
-    Raises UnresolvedPositionsError for position-mode pairs with no mapping entry.
+    With raise_unresolved=True (default) raises UnresolvedPositionsError for position-mode
+    pairs with no mapping entry. With raise_unresolved=False (forced import, doc 24 IP2) the
+    unresolved pairs are simply absent from the result → those bookings stay NULL (unresolved).
     """
     result: dict[tuple[int, str], int] = {}
     unresolved: list[tuple[int, str]] = []
@@ -396,7 +399,7 @@ def resolve_position_mappings(
         else:
             unresolved.append((project_id, level))
 
-    if unresolved:
+    if unresolved and raise_unresolved:
         raise UnresolvedPositionsError(sorted(unresolved))
 
     return result
@@ -491,16 +494,23 @@ def import_bookings(
     content: str | bytes,
     session: Session,
     source_filename: str | None = None,
+    force: bool = False,
 ) -> ImportResult:
     """Parse a Sage CSV export and persist time bookings.
 
     Creates one ImportBatch per distinct project found in the file.
     Duplicate bookings (matching the UNIQUE constraint) are silently skipped.
 
+    With force=False (default), position-mode projects with an unmapped Projektebene abort
+    with UnresolvedPositionsError so the caller can resolve them (doc 24 IP2). With force=True
+    the import proceeds and those bookings stay unresolved (billing_position_id=None), flagged
+    downstream (IP5) — a deliberate override.
+
     Raises:
         ParseError: malformed file content (carries .details list for row-level errors)
         UnmatchedPersonsError: employee names with no fuzzy match
         UnresolvedProjectsError: sage_project_names with no SageProjectMapping
+        UnresolvedPositionsError: position-mode (project, level) with no mapping (unless force)
     """
     rows = parse_rows(content)
 
@@ -518,6 +528,7 @@ def import_bookings(
         [(project_map[r["sage_project_name"]], r["sage_project_level"]) for r in rows],
         position_ids,
         session,
+        raise_unresolved=not force,
     )
 
     # Compute last booking date per project for the ImportBatch records.

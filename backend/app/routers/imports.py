@@ -61,16 +61,18 @@ class PositionMappingCreate(SQLModel):
 
 
 @router.post("/imports", response_model=ImportResultOut, status_code=201)
-async def post_import(file: UploadFile, session: SessionDep):
+async def post_import(file: UploadFile, session: SessionDep, force: bool = False):
     """Upload a Sage ERP CSV export and persist the time bookings.
 
-    Returns 422 with `detail` + `unresolved_projects` / `unmatched_persons` lists
-    when the file references unknown project names or unmatched persons.
+    Returns 422 with `detail` + `unresolved_projects` / `unmatched_persons` /
+    `unresolved_positions` lists when the file references unknown project names, unmatched
+    persons, or unmapped position-mode Projektebenen. Pass `?force=true` to import despite
+    unmapped Projektebenen (those bookings stay unresolved and are flagged — doc 24 IP2).
     """
     content = await file.read()
     try:
         result: ImportResult = import_bookings(
-            content, session, source_filename=file.filename
+            content, session, source_filename=file.filename, force=force
         )
     except ParseError as exc:
         if exc.details:

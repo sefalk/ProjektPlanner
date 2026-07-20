@@ -411,6 +411,24 @@ def test_import_position_mode_missing_mapping_raises(session):
     assert (proj.id, "Development") in exc.value.pairs
 
 
+def test_import_force_imports_unresolved_as_null(session):
+    """IP2: force=True imports despite an unmapped position-mode level; the booking stays
+    unresolved (billing_position_id=None) rather than aborting."""
+    from sqlmodel import select
+
+    _make_person(session)
+    proj = _make_project(session)
+    proj.position_mode = True
+    _make_mapping(session, "P00001 Analytics", proj.id)
+    _priced_position(session, proj.id)  # position mode, no level mapping
+    session.commit()
+
+    result = import_bookings(_csv([_ROW]), session, force=True)
+    assert result.inserted == 1
+    booking = session.exec(select(TimeBooking)).first()
+    assert booking.billing_position_id is None
+
+
 def test_position_mapping_is_project_scoped(session):
     # Two projects with an identically-named level ("Development") must resolve to their
     # OWN position — no cross-project mixing (finding 2026-07-16).
