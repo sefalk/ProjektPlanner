@@ -84,10 +84,17 @@ function AbsenceForm({
     start_date: initial?.start_date ?? '',
     end_date: initial?.end_date ?? '',
     note: initial?.note ?? '',
+    start_segment: initial?.start_segment ?? 'full',
+    end_segment: initial?.end_segment ?? 'full',
   })
 
   const isSick = form.absence_type === 'sick'
   const isOngoing = form.status === 'ongoing'
+  // One segment dropdown for a single day / ongoing; two for a multi-day range.
+  const singleDay = isOngoing || !form.end_date || form.end_date === form.start_date
+  const SEGS: [NonNullable<AbsenceFormData['start_segment']>, string][] = [
+    ['full', 'Voller Tag'], ['morning', 'Vormittag (½)'], ['afternoon', 'Nachmittag (½)'],
+  ]
 
   // Adjust status when type changes
   function setType(t: PersonAbsence['absence_type']) {
@@ -101,7 +108,7 @@ function AbsenceForm({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    onSave({ ...form, end_date: form.end_date || null })
+    onSave({ ...form, end_date: form.end_date || null, end_segment: singleDay ? 'full' : form.end_segment })
   }
 
   const allowedStatuses: PersonAbsence['status'][] = isSick
@@ -155,6 +162,40 @@ function AbsenceForm({
             onChange={(e) => setForm((f) => ({ ...f, end_date: e.target.value || null }))} />
         </div>
       </div>
+      {singleDay ? (
+        <div>
+          <label htmlFor="abs-seg" className="block text-xs font-medium text-gray-600 mb-1">
+            Tag <span className="font-normal text-gray-400">— voller oder halber Tag</span>
+          </label>
+          <select id="abs-seg"
+            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={form.start_segment ?? 'full'}
+            onChange={(e) => setForm((f) => ({ ...f, start_segment: e.target.value as AbsenceFormData['start_segment'] }))}>
+            {SEGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="abs-seg-start" className="block text-xs font-medium text-gray-600 mb-1">Erster Tag</label>
+            <select id="abs-seg-start"
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={form.start_segment ?? 'full'}
+              onChange={(e) => setForm((f) => ({ ...f, start_segment: e.target.value as AbsenceFormData['start_segment'] }))}>
+              {SEGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="abs-seg-end" className="block text-xs font-medium text-gray-600 mb-1">Letzter Tag</label>
+            <select id="abs-seg-end"
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={form.end_segment ?? 'full'}
+              onChange={(e) => setForm((f) => ({ ...f, end_segment: e.target.value as AbsenceFormData['end_segment'] }))}>
+              {SEGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
       <div>
         <label htmlFor="abs-note" className="block text-xs font-medium text-gray-600 mb-1">Notiz</label>
         <input id="abs-note" type="text"
@@ -219,6 +260,11 @@ function ContingentForm({
 
 /** "Gebucht" cell: working days + hours an absence books, with the vacation
  *  contingent (after the AU refund) called out when it differs from the raw days. */
+/** Short half-day marker for a day cell (Vm = Vormittag, Nm = Nachmittag). */
+function segShort(seg?: string): string {
+  return seg === 'morning' ? ' · ½ Vm' : seg === 'afternoon' ? ' · ½ Nm' : ''
+}
+
 function renderBooking(a: PersonAbsence) {
   if (a.booked_working_days == null) return <span className="text-gray-300">–</span>
   const days = a.booked_working_days
@@ -564,8 +610,8 @@ export default function PersonDetailPage() {
                           {TYPE_LABELS[a.absence_type]}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{a.start_date}</td>
-                      <td className="px-4 py-3 text-sm text-gray-600">{a.end_date ?? <span className="text-gray-400 italic">laufend</span>}</td>
+                      <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{a.start_date}<span className="text-amber-600 text-xs">{segShort(a.start_segment)}</span></td>
+                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">{a.end_date ? <>{a.end_date}{a.end_date !== a.start_date && <span className="text-amber-600 text-xs">{segShort(a.end_segment)}</span>}</> : <span className="text-gray-400 italic">laufend</span>}</td>
                       <td className="px-4 py-3 text-sm text-gray-600">{STATUS_LABELS[a.status]}</td>
                       <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{renderBooking(a)}</td>
                       <td className="px-4 py-3 text-sm text-gray-400 max-w-[12rem] truncate">{a.note}</td>

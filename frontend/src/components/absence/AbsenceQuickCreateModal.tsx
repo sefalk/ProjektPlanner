@@ -7,8 +7,14 @@ import { TYPE_LABELS, STATUS_LABELS } from '../../lib/absenceColors'
 
 type AbsenceType = 'vacation' | 'sick' | 'training' | 'other'
 type AbsenceStatus = 'planned' | 'confirmed' | 'ongoing'
+type DaySegment = 'full' | 'morning' | 'afternoon'
 
 const TYPES: AbsenceType[] = ['vacation', 'training', 'sick', 'other']
+const SEGMENTS: [DaySegment, string][] = [
+  ['full', 'Voller Tag'],
+  ['morning', 'Vormittag (½)'],
+  ['afternoon', 'Nachmittag (½)'],
+]
 
 function allowedStatuses(type: AbsenceType): AbsenceStatus[] {
   return type === 'sick' ? ['confirmed', 'ongoing'] : ['planned', 'confirmed']
@@ -45,9 +51,13 @@ export default function AbsenceQuickCreateModal({
   const [start, setStart] = useState(editAbsence?.start_date ?? startDate)
   const [end, setEnd] = useState(editAbsence?.end_date ?? endDate)
   const [note, setNote] = useState(editAbsence?.note ?? '')
+  const [startSegment, setStartSegment] = useState<DaySegment>(editAbsence?.start_segment ?? 'full')
+  const [endSegment, setEndSegment] = useState<DaySegment>(editAbsence?.end_segment ?? 'full')
   const [error, setError] = useState<string | null>(null)
 
   const isOngoing = type === 'sick' && status === 'ongoing'
+  // Single-day (or ongoing) uses one segment; multi-day uses a start- and end-day segment.
+  const singleDay = isOngoing || start === end
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['calendar-year'] })
@@ -65,6 +75,9 @@ export default function AbsenceQuickCreateModal({
         absence_type: type,
         status,
         note,
+        start_segment: startSegment,
+        // On a single-day/ongoing absence only the start segment is meaningful.
+        end_segment: singleDay ? 'full' as DaySegment : endSegment,
       }
       return isEdit
         ? personsApi.updateAbsence(editAbsence!.person_id, editAbsence!.id, payload)
@@ -151,6 +164,45 @@ export default function AbsenceQuickCreateModal({
             />
           </div>
         </div>
+
+        {/* Half-day segments. One dropdown for a single day (or ongoing), two for a range. */}
+        {singleDay ? (
+          <div>
+            <label htmlFor="qc-seg" className="block text-xs font-medium text-gray-600 mb-1">
+              Tag <span className="font-normal text-gray-400">— voller oder halber Tag</span>
+            </label>
+            <select id="qc-seg"
+              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={startSegment}
+              onChange={(e) => setStartSegment(e.target.value as DaySegment)}
+            >
+              {SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="qc-seg-start" className="block text-xs font-medium text-gray-600 mb-1">Erster Tag</label>
+              <select id="qc-seg-start"
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={startSegment}
+                onChange={(e) => setStartSegment(e.target.value as DaySegment)}
+              >
+                {SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="qc-seg-end" className="block text-xs font-medium text-gray-600 mb-1">Letzter Tag</label>
+              <select id="qc-seg-end"
+                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={endSegment}
+                onChange={(e) => setEndSegment(e.target.value as DaySegment)}
+              >
+                {SEGMENTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
 
         <div>
           <label htmlFor="qc-note" className="block text-xs font-medium text-gray-600 mb-1">Notiz <span className="font-normal text-gray-400">optional</span></label>
