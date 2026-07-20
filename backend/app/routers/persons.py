@@ -11,6 +11,7 @@ from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.membership import ProjectMembership
 from app.models.project import Project
 from app.models.setting import Setting
+from app.services.planning import absence_booking
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
@@ -27,6 +28,26 @@ class AbsenceCreate(SQLModel):
     absence_type: AbsenceType
     status: AbsenceStatus
     note: str = ""
+
+
+class AbsenceWithBooking(SQLModel):
+    """A PersonAbsence plus what it actually books (working days / hours).
+
+    booked_working_days / booked_hours: working days (Mon–Fri ∩ no holiday ∩
+    pattern>0) in the absence range and the person's hours over them.
+    contingent_days: for vacation only — days that draw down the contingent after
+    the confirmed-sick (AU) refund; None for non-vacation types.
+    """
+
+    id: int
+    start_date: date
+    end_date: date | None
+    absence_type: AbsenceType
+    status: AbsenceStatus
+    note: str
+    booked_working_days: int
+    booked_hours: float
+    contingent_days: float | None = None
 
 
 class ContingentCreate(SQLModel):
@@ -189,13 +210,25 @@ def list_person_memberships(person_id: int, session: SessionDep):
 # Absences
 # ---------------------------------------------------------------------------
 
-@router.get("/{person_id}/absences", response_model=list[PersonAbsence])
+@router.get("/{person_id}/absences", response_model=list[AbsenceWithBooking])
 def list_absences(person_id: int, session: SessionDep):
-    if not session.get(Person, person_id):
+    person = session.get(Person, person_id)
+    if not person:
         raise HTTPException(404, "Person not found.")
-    return session.exec(
+    rows = session.exec(
         select(PersonAbsence).where(PersonAbsence.person_id == person_id)
     ).all()
+    out: list[AbsenceWithBooking] = []
+    for a in rows:
+        booking = absence_booking(person, a, session)
+        out.append(AbsenceWithBooking(
+            id=a.id, start_date=a.start_date, end_date=a.end_date,
+            absence_type=a.absence_type, status=a.status, note=a.note,
+            booked_working_days=booking["working_days"],
+            booked_hours=booking["hours"],
+            contingent_days=booking.get("contingent_days"),
+        ))
+    return out
 
 
 @router.post("/{person_id}/absences", response_model=PersonAbsence, status_code=201)

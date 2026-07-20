@@ -256,11 +256,15 @@ def _person_available_hours(
         holiday_dates = set()
     holiday_days_count = len(holiday_dates)
 
-    # Working days in effective period (Mon-Fri, not holiday)
+    # Effective working days: Mon-Fri, not a workday holiday (project region) and — if a
+    # work-week pattern is set — a day the person actually works (pattern hours > 0).
+    # Same definition as planning.effective_working_dates so capacity/absence stay aligned.
+    pattern = _parse_work_week_pattern(person.work_week_pattern) if person.work_week_pattern else None
     working_day_list: list[date] = []
     d = eff_start
     while d <= eff_end:
-        if d.weekday() < 5 and d not in holiday_dates:
+        wd = d.weekday()
+        if wd < 5 and d not in holiday_dates and (pattern is None or pattern[wd] > 0):
             working_day_list.append(d)
         d += timedelta(days=1)
     work_days_count = len(working_day_list)
@@ -269,7 +273,6 @@ def _person_available_hours(
         return PersonMonthStats(0.0, 0, 0, holiday_days_count)
 
     # Gross hours from pattern or uniform
-    pattern = _parse_work_week_pattern(person.work_week_pattern) if person.work_week_pattern else None
     if pattern:
         total_pattern = sum(pattern)
         gross_hours = sum(
@@ -281,15 +284,20 @@ def _person_available_hours(
 
     avg_daily_hours = gross_hours / work_days_count
 
-    # Specific absence days (all types including vacation)
-    abs_days = absence_days_in_range(person.id, eff_start, eff_end, session)
+    # Specific absence working days (all types), deduped so overlaps count once.
+    abs_days = absence_days_in_range(
+        person.id, eff_start, eff_end, session,
+        project.holiday_country, project.holiday_state,
+    )
 
     # Unplanned (remaining) vacation estimate for the effective period.
-    # estimated_vacation_days already subtracts concrete vacation already taken in the
-    # year (no double counting with abs_days) and distributes the remaining contingent
-    # across the remaining days of the year — see B3 / planning.estimated_vacation_days.
+    # estimated_vacation_days already subtracts concrete vacation working days consumed
+    # in the year (after the AU refund; no double counting with abs_days) and distributes
+    # the remaining contingent across the remaining days — see B3 / planning.
     vacation_estimate = estimated_vacation_days(
-        person.id, eff_start, eff_end, session, taken_days_flat=membership.vacation_days_taken
+        person.id, eff_start, eff_end, session,
+        taken_days_flat=membership.vacation_days_taken,
+        country=project.holiday_country, state=project.holiday_state,
     )
     # Cap: can't estimate more vacation days than actual available working days
     vacation_estimate = min(vacation_estimate, max(0, work_days_count - abs_days))
