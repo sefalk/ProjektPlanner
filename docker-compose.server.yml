@@ -1,0 +1,54 @@
+# Server deployment WITH login + HTTPS (issue #45), for the internal Linux host.
+#
+#   docker compose -f docker-compose.server.yml up -d --build
+#
+# vs. docker-compose.prod.yml (plain, frontend published directly): here the frontend
+# is NOT published — only the `proxy` is reachable, and it enforces TLS + a login
+# (Basic Auth) before forwarding to the app. One shared tenant (one DB).
+#
+# Host-side secrets (NOT in the repo), created once at /home/sfalkner/pp-secrets:
+#   cert.pem, key.pem   — TLS certificate + key (self-signed or internal CA)
+#   htpasswd            — login credentials (create with `htpasswd`, password is yours)
+services:
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=sqlite:///./data/projektplanner.db
+      - DEFAULT_HOLIDAY_COUNTRY=DE
+      - DEFAULT_HOLIDAY_STATE=BY
+      - DEBUG=false
+    volumes:
+      - backend_data:/app/data
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # Not published — only reachable inside the compose network, via the proxy.
+    expose:
+      - "80"
+
+  proxy:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      # Host secrets dir (certs + htpasswd) — survives code redeploys.
+      - /home/sfalkner/pp-secrets:/etc/nginx/secrets:ro
+
+volumes:
+  backend_data:
