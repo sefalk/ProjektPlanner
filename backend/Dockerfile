@@ -11,7 +11,7 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_COMPILE_BYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 # --- dev: adds dev dependencies + live reload ---
