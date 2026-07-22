@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, Pencil, Plus, Trash2 } from 'lucide-react'
-import { persons, projects as projectsApi, type Person, type PersonAbsence, type VacationContingent, type PersonMembershipDetail, type ProjectMembership } from '../api'
+import { persons, projects as projectsApi, type PersonAbsence, type PersonMembershipDetail, type ProjectMembership } from '../api'
 import Modal from '../components/Modal'
 import { TYPE_LABELS, TYPE_BADGE as TYPE_COLORS, STATUS_LABELS } from '../lib/absenceColors'
-import PersonForm from '../components/person/PersonForm'
+import PersonSettings from '../components/person/PersonSettings'
+import { MembershipForm, MembershipEditForm } from '../components/person/forms'
 
 // ─── Absence form ─────────────────────────────────────────────────────────────
 
@@ -155,49 +156,6 @@ function AbsenceForm({
   )
 }
 
-// ─── Vacation contingent form ─────────────────────────────────────────────────
-
-function ContingentForm({
-  initial,
-  onSave,
-  onCancel,
-}: {
-  initial?: Partial<VacationContingent>
-  onSave: (d: { year: number; total_days: number }) => void
-  onCancel: () => void
-}) {
-  const [form, setForm] = useState({
-    year: initial?.year ?? new Date().getFullYear(),
-    total_days: initial?.total_days ?? 30,
-  })
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="cont-year" className="block text-xs font-medium text-gray-600 mb-1">Jahr</label>
-          <input id="cont-year" required type="number" min={2000} max={2100}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.year}
-            onChange={(e) => setForm((f) => ({ ...f, year: parseInt(e.target.value) }))} />
-        </div>
-        <div>
-          <label htmlFor="cont-days" className="block text-xs font-medium text-gray-600 mb-1">Urlaubstage</label>
-          <input id="cont-days" required type="number" min={0} max={365} step={0.5}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.total_days}
-            onChange={(e) => setForm((f) => ({ ...f, total_days: parseFloat(e.target.value) }))} />
-        </div>
-      </div>
-      <div className="flex justify-end gap-2 pt-2">
-        <button type="button" onClick={onCancel}
-          className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-        <button type="submit"
-          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
-      </div>
-    </form>
-  )
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 /** "Gebucht" cell: working days + hours an absence books, with the vacation
@@ -285,171 +243,6 @@ function AbsenceSummaryPanel({ personId }: { personId: number }) {
 
 type Tab = 'absences' | 'projects'
 
-// ─── Membership form ──────────────────────────────────────────────────────────
-
-function MembershipForm({
-  personId,
-  defaultBillingRate,
-  onSave,
-  onCancel,
-}: {
-  personId: number
-  defaultBillingRate: number | null
-  onSave: (d: Omit<ProjectMembership, 'id' | 'project_id'>) => void
-  onCancel: () => void
-}) {
-  const { data: projectList = [] } = useQuery({ queryKey: ['projects'], queryFn: projectsApi.list })
-  const [form, setForm] = useState({
-    person_id: personId,
-    from_date: '',
-    to_date: '',
-    weekly_capacity_hours: 40,
-    billing_rate_per_hour: defaultBillingRate ?? 0,
-    priority: 0,
-    vacation_days_taken: 0,
-    billing_position_id: null as number | null,
-    project_id: 0,
-  })
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
-      <div>
-        <label htmlFor="ms-project" className="block text-xs font-medium text-gray-600 mb-1">Projekt</label>
-        <select id="ms-project" required
-          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.project_id || ''}
-          onChange={(e) => setForm((f) => ({ ...f, project_id: parseInt(e.target.value) }))}>
-          <option value="">— Projekt wählen —</option>
-          {projectList.map((p) => (
-            <option key={p.id} value={p.id}>{p.project_number} – {p.name}</option>
-          ))}
-        </select>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="ms-from" className="block text-xs font-medium text-gray-600 mb-1">Von</label>
-          <input id="ms-from" required type="date"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.from_date}
-            onChange={(e) => setForm((f) => ({ ...f, from_date: e.target.value }))} />
-        </div>
-        <div>
-          <label htmlFor="ms-to" className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
-          <input id="ms-to" required type="date"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.to_date}
-            onChange={(e) => setForm((f) => ({ ...f, to_date: e.target.value }))} />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="ms-hours" className="block text-xs font-medium text-gray-600 mb-1">Kapazität (h/Woche)</label>
-          <input id="ms-hours" required type="number" min={0} max={60} step={0.01}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.weekly_capacity_hours}
-            onChange={(e) => setForm((f) => ({ ...f, weekly_capacity_hours: parseFloat(e.target.value) }))} />
-        </div>
-        <div>
-          <label htmlFor="ms-rate" className="block text-xs font-medium text-gray-600 mb-1">Verrechnungssatz (€/h)</label>
-          <input id="ms-rate" required type="number" min={0} step={0.01}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.billing_rate_per_hour}
-            onChange={(e) => setForm((f) => ({ ...f, billing_rate_per_hour: parseFloat(e.target.value) }))} />
-        </div>
-      </div>
-      <div className="flex justify-end gap-2 pt-2">
-        <button type="button" onClick={onCancel}
-          className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-        <button type="submit"
-          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
-      </div>
-    </form>
-  )
-}
-
-// ─── Membership edit form (from the person view) ───────────────────────────────
-// Edits the assignment's dates / capacity / rate. priority, vacation_days_taken and
-// billing_position_id are carried through unchanged so an edit here doesn't reset the
-// priority (feeds the milestone engine) or unassign the Posten.
-
-type MembershipEditPayload = {
-  from_date: string
-  to_date: string
-  weekly_capacity_hours: number
-  billing_rate_per_hour: number
-  priority: number
-  vacation_days_taken: number
-  billing_position_id: number | null
-}
-
-function MembershipEditForm({ initial, onSave, onCancel }: {
-  initial: PersonMembershipDetail
-  onSave: (d: MembershipEditPayload) => void
-  onCancel: () => void
-}) {
-  const [form, setForm] = useState({
-    from_date: initial.from_date,
-    to_date: initial.to_date,
-    weekly_capacity_hours: initial.weekly_capacity_hours,
-    billing_rate_per_hour: initial.billing_rate_per_hour,
-  })
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        onSave({
-          ...form,
-          priority: initial.priority,
-          vacation_days_taken: initial.vacation_days_taken,
-          billing_position_id: initial.billing_position_id,
-        })
-      }}
-      className="space-y-3"
-    >
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="me-from" className="block text-xs font-medium text-gray-600 mb-1">Von</label>
-          <input id="me-from" required type="date"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.from_date}
-            onChange={(e) => setForm((f) => ({ ...f, from_date: e.target.value }))} />
-        </div>
-        <div>
-          <label htmlFor="me-to" className="block text-xs font-medium text-gray-600 mb-1">Bis</label>
-          <input id="me-to" required type="date"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.to_date}
-            onChange={(e) => setForm((f) => ({ ...f, to_date: e.target.value }))} />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="me-hours" className="block text-xs font-medium text-gray-600 mb-1">Kapazität (h/Woche)</label>
-          <input id="me-hours" required type="number" min={0.01} max={60} step={0.01}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.weekly_capacity_hours}
-            onChange={(e) => setForm((f) => ({ ...f, weekly_capacity_hours: parseFloat(e.target.value) }))} />
-        </div>
-        <div>
-          <label htmlFor="me-rate" className="block text-xs font-medium text-gray-600 mb-1">Verrechnungssatz (€/h)</label>
-          <input id="me-rate" required type="number" min={0} step={0.01}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.billing_rate_per_hour}
-            onChange={(e) => setForm((f) => ({ ...f, billing_rate_per_hour: parseFloat(e.target.value) }))} />
-        </div>
-      </div>
-      <p className="text-xs text-gray-400">
-        Priorität und Posten-Zuweisung werden im Projekt selbst gepflegt und bleiben hier unverändert.
-      </p>
-      <div className="flex justify-end gap-2 pt-2">
-        <button type="button" onClick={onCancel}
-          className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-        <button type="submit"
-          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Speichern</button>
-      </div>
-    </form>
-  )
-}
-
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>()
   const personId = parseInt(id!)
@@ -460,9 +253,6 @@ export default function PersonDetailPage() {
   const [showEdit, setShowEdit] = useState(false)
   const [showAddAbsence, setShowAddAbsence] = useState(false)
   const [editingAbsence, setEditingAbsence] = useState<PersonAbsence | null>(null)
-  const [showAddContingent, setShowAddContingent] = useState(false)
-  const [editingContingent, setEditingContingent] = useState<VacationContingent | null>(null)
-  const [confirmDeleteContingent, setConfirmDeleteContingent] = useState<VacationContingent | null>(null)
   const [showAddMembership, setShowAddMembership] = useState(false)
   const [editingMembership, setEditingMembership] = useState<PersonMembershipDetail | null>(null)
   const [confirmDeleteMembership, setConfirmDeleteMembership] = useState<PersonMembershipDetail | null>(null)
@@ -475,10 +265,6 @@ export default function PersonDetailPage() {
   const { data: absences = [] } = useQuery({
     queryKey: ['absences', personId],
     queryFn: () => persons.absences(personId),
-  })
-  const { data: contingents = [] } = useQuery({
-    queryKey: ['contingents', personId],
-    queryFn: () => persons.vacationContingents(personId),
   })
   const { data: memberships = [] } = useQuery({
     queryKey: ['person-memberships', personId],
@@ -495,17 +281,6 @@ export default function PersonDetailPage() {
     qc.invalidateQueries({ queryKey: ['calendar-year'] })
   }
 
-  const updatePerson = useMutation({
-    mutationFn: (d: Omit<Person, 'id'>) => persons.update(personId, d),
-    onSuccess: () => {
-      // A holiday-region override changes the calendar's resolved region and the
-      // working-day-based summary, so refresh those too.
-      qc.invalidateQueries({ queryKey: ['person', personId] })
-      invalidateDerived()
-      setShowEdit(false); setError(null)
-    },
-    onError: (e: Error) => setError(e.message),
-  })
   const addAbsence = useMutation({
     mutationFn: (d: Omit<PersonAbsence, 'id' | 'person_id'>) => persons.addAbsence(personId, d),
     onSuccess: () => { invalidateDerived(); setShowAddAbsence(false); setError(null) },
@@ -519,21 +294,6 @@ export default function PersonDetailPage() {
   const deleteAbsence = useMutation({
     mutationFn: (absenceId: number) => persons.deleteAbsence(personId, absenceId),
     onSuccess: () => invalidateDerived(),
-  })
-  const addContingent = useMutation({
-    mutationFn: (d: { year: number; total_days: number }) => persons.addVacationContingent(personId, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setShowAddContingent(false); setError(null) },
-    onError: (e: Error) => setError(e.message),
-  })
-  const updateContingent = useMutation({
-    mutationFn: ({ id, d }: { id: number; d: { year: number; total_days: number } }) =>
-      persons.updateVacationContingent(personId, id, d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setEditingContingent(null); setError(null) },
-    onError: (e: Error) => setError(e.message),
-  })
-  const deleteContingent = useMutation({
-    mutationFn: (contingentId: number) => persons.deleteVacationContingent(personId, contingentId),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['contingents', personId] }); invalidateDerived(); setConfirmDeleteContingent(null) },
   })
   const addMembership = useMutation({
     mutationFn: (d: Omit<ProjectMembership, 'id' | 'project_id'>) =>
@@ -558,7 +318,6 @@ export default function PersonDetailPage() {
   if (!person) return <div className="p-6 text-sm text-gray-400">Lade…</div>
 
   const sortedAbsences = [...absences].sort((a, b) => b.start_date.localeCompare(a.start_date))
-  const sortedContingents = [...contingents].sort((a, b) => b.year - a.year)
 
   return (
     <div>
@@ -734,53 +493,9 @@ export default function PersonDetailPage() {
         )}
       </div>
 
-      {/* Person settings modal (person fields + vacation contingents) */}
+      {/* Person settings — the single shared modal (fields + Urlaubskontingente + Projekte) */}
       {showEdit && (
-        <Modal title="Personeneinstellungen" onClose={() => { setShowEdit(false); setEditingContingent(null); setShowAddContingent(false); setError(null) }}>
-          <PersonForm
-            initial={person}
-            onSave={(d) => updatePerson.mutate(d)}
-            onCancel={() => { setShowEdit(false); setError(null) }}
-          />
-
-          {/* Vacation contingents — moved here from the removed tab */}
-          <div className="mt-5 pt-4 border-t border-gray-200">
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-sm font-semibold text-gray-700">Urlaubskontingente</h4>
-              {!showAddContingent && !editingContingent && (
-                <button onClick={() => setShowAddContingent(true)}
-                  className="flex items-center gap-1 text-xs text-blue-600 hover:underline">
-                  <Plus size={12} /> Kontingent
-                </button>
-              )}
-            </div>
-
-            {(showAddContingent || editingContingent) ? (
-              <ContingentForm
-                initial={editingContingent ?? undefined}
-                onSave={(d) => editingContingent
-                  ? updateContingent.mutate({ id: editingContingent.id, d })
-                  : addContingent.mutate(d)}
-                onCancel={() => { setShowAddContingent(false); setEditingContingent(null); setError(null) }}
-              />
-            ) : (
-              <div className="space-y-1">
-                {sortedContingents.length === 0 && (
-                  <p className="text-xs text-gray-400">Noch keine Kontingente eingetragen.</p>
-                )}
-                {sortedContingents.map((c) => (
-                  <div key={c.id} className="flex items-center justify-between text-sm border border-gray-100 rounded px-2 py-1">
-                    <span className="text-gray-700"><span className="font-medium">{c.year}</span> · {c.total_days} Tage</span>
-                    <span className="flex items-center gap-2">
-                      <button aria-label={`Kontingent ${c.year} bearbeiten`} onClick={() => { setEditingContingent(c); setError(null) }} className="text-gray-400 hover:text-blue-500"><Pencil size={13} /></button>
-                      <button aria-label={`Kontingent ${c.year} löschen`} onClick={() => setConfirmDeleteContingent(c)} className="text-gray-400 hover:text-red-500"><Trash2 size={13} /></button>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </Modal>
+        <PersonSettings person={person} onClose={() => setShowEdit(false)} />
       )}
 
       {/* Add absence modal */}
@@ -831,24 +546,6 @@ export default function PersonDetailPage() {
             })}
             onCancel={() => { setEditingMembership(null); setError(null) }}
           />
-        </Modal>
-      )}
-
-      {/* Confirm delete contingent */}
-      {confirmDeleteContingent && (
-        <Modal title="Kontingent löschen" onClose={() => setConfirmDeleteContingent(null)}>
-          <p className="text-sm text-gray-600 mb-4">
-            Urlaubskontingent <strong>{confirmDeleteContingent.year}</strong> ({confirmDeleteContingent.total_days} Tage) löschen?
-          </p>
-          <div className="flex justify-end gap-2">
-            <button onClick={() => setConfirmDeleteContingent(null)}
-              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">Abbrechen</button>
-            <button
-              onClick={() => deleteContingent.mutate(confirmDeleteContingent.id)}
-              className="px-4 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">
-              Löschen
-            </button>
-          </div>
         </Modal>
       )}
 

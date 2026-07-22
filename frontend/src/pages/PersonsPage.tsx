@@ -10,6 +10,7 @@ import AbsenceQuickCreateModal from '../components/absence/AbsenceQuickCreateMod
 import { personColor, TYPE_LABELS, TYPE_SHORT } from '../lib/absenceColors'
 import { regionKey, regionLabel, regionShade } from '../lib/holidayRegions'
 import PersonForm from '../components/person/PersonForm'
+import PersonSettings from '../components/person/PersonSettings'
 
 type AbsenceType = 'vacation' | 'sick' | 'training' | 'other'
 const ALL_TYPES: AbsenceType[] = ['vacation', 'training', 'sick', 'other']
@@ -108,16 +109,6 @@ export default function PersonsPage() {
     onSuccess: () => {
       invalidatePersonData()
       setShowCreate(false)
-      setError(null)
-    },
-    onError: (e: Error) => setError(e.message),
-  })
-
-  const update = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Omit<Person, 'id'> }) => persons.update(id, data),
-    onSuccess: () => {
-      invalidatePersonData()
-      setEditPerson(null)
       setError(null)
     },
     onError: (e: Error) => setError(e.message),
@@ -448,13 +439,10 @@ export default function PersonsPage() {
       )}
 
       {editPerson && (
-        <Modal title="Person bearbeiten" onClose={() => { setEditPerson(null); setError(null) }}>
-          <PersonForm
-            initial={editPerson}
-            onSave={(d) => update.mutate({ id: editPerson.id, data: d })}
-            onCancel={() => { setEditPerson(null); setError(null) }}
-          />
-        </Modal>
+        <PersonSettings
+          person={editPerson}
+          onClose={() => { setEditPerson(null); setError(null) }}
+        />
       )}
 
       {quickCreate && (
