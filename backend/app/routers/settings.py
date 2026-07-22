@@ -4,11 +4,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, SQLModel, select
 
-from app.db import get_session
+from app.auth.deps import owner_context
+from app.db import ensure_owner_settings, get_session
 from app.models.setting import Setting
 from app.services import db_management
 
-router = APIRouter(prefix="/settings", tags=["settings"])
+router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -36,6 +37,9 @@ class DbPathResult(SQLModel):
 
 @router.get("", response_model=dict[str, str])
 def get_settings(session: SessionDep):
+    # Per-owner (doc 25): seed this owner's defaults on first access, then return
+    # only their rows (auto-scoped by the central filter).
+    ensure_owner_settings(session)
     rows = session.exec(select(Setting)).all()
     return {row.key: row.value for row in rows}
 
@@ -74,7 +78,10 @@ def set_database_path(body: DbPathUpdate):
 
 @router.put("/{key}", response_model=Setting)
 def update_setting(key: str, body: SettingUpdate, session: SessionDep):
-    setting = session.get(Setting, key)
+    # Per-owner (doc 25): ensure this owner's defaults exist, then look the key up
+    # scoped to the owner (key is no longer the PK, so session.get can't be used).
+    ensure_owner_settings(session)
+    setting = session.exec(select(Setting).where(Setting.key == key)).first()
     if not setting:
         raise HTTPException(404, f"Setting '{key}' not found.")
     setting.value = body.value

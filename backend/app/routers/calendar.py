@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from sqlalchemy import func
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
@@ -25,7 +26,7 @@ from app.services.holiday_region import (
     resolve_holiday_region,
 )
 
-router = APIRouter(prefix="/calendar", tags=["calendar"])
+router = APIRouter(prefix="/calendar", tags=["calendar"], dependencies=[Depends(owner_context)])
 SessionDep = Annotated[Session, Depends(get_session)]
 
 

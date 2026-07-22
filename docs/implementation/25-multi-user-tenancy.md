@@ -84,7 +84,7 @@ Diese Constraints sind heute **global** und würden Isolation brechen (User2 kö
 
 **Bleibt global** (Referenzdatum, kein Nutzerbesitz): `Holiday` `(holiday_date, country, state)` (`models/holiday.py:20`).
 
-**`Setting`:** Zielbild ist **pro Owner** (Nutzerentscheidung 2026-07-22). In **WP1 bleibt `setting` global**, weil „Defaults pro Account seeden" einen User-Kontext braucht, den es erst mit Auth (WP2) gibt — und das idempotente Seeding (#42) an `session.get(Setting, key)` hängt. Die Umstellung `Setting`-PK → `(owner_id, key)` + per-Account-Seeding erfolgt in **WP3** zusammen mit dem Auto-Set/Filter.
+**`Setting`:** **pro Owner** (Nutzerentscheidung 2026-07-22) — umgesetzt in **WP3 (Schritt 3b)**: Surrogat-`id`-PK + `owner_id` + `UNIQUE(owner_id, key)` (eine `(owner_id, key)`-Composite-PK scheidet aus, da `owner_id` nullable). Kein globales Startup-Seeding mehr; `db.ensure_owner_settings` seedet die Defaults pro Owner beim ersten Zugriff (owner-gescoped + `before_flush`-Stempel, race-safe). Die Lesepfade (milestones/persons/holiday_region) fallen bei fehlendem Key auf dieselben Defaults zurück, daher Verhalten vor/nach Seeding identisch.
 
 Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — auf `project_id`/`person_id` gekeyt) sind bereits über ihren Eltern-Owner geschützt und brauchen i. d. R. **keinen** eigenen `owner_id`, solange der Filter über den Join greift. Ob `owner_id` dennoch denormalisiert wird (einfacherer Filter, mehr Speicher), ist eine WP1-Abwägung.
 
@@ -118,7 +118,7 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 |---|---|---|
 | **WP1** ✅ | Datenmodell: `user`, `invite_token`; `owner_id` auf besitzbaren Entitäten; Unique-Constraints pro Owner; Referenzdaten-Grenze fixieren; Alembic-Migration (frische DB) | `models/*`, Alembic |
 | **WP2** ✅ | Auth-Backend: `fastapi-users`, Session-Cookie, Invite-Token-Flow, Admin-Flag | `routers/auth.py`, `main.py` |
-| **WP3** | Zentraler Owner-Filter (ContextVar + `do_orm_execute`), Auto-Set von `owner_id` beim Insert; Admin-Bypass | `db.py` |
+| **WP3** ✅ | Zentraler Owner-Filter (`session.info` + `do_orm_execute`), Auto-Set von `owner_id` beim Insert, Auth-Schutz aller CRUD-Router, `Setting` pro Owner; Admin-Bypass | `tenancy.py`, `auth/deps.py`, `routers/*` |
 | **WP4** | Frontend: Login/Registrierung (Invite), Auth-Guard/Redirect, Logout, Account-Menü | `frontend/` |
 | **WP5** | Datenexport/-löschung pro User; DSGVO-Export pro `Person` (separat) | `routers/account.py`, `frontend/` |
 | **WP6** | Deployment: verschlüsseltes Volume + verschlüsselte Backups; Proxy-Basic-Auth durch App-Login ersetzen | `docker-compose.server.yml`, `deploy/` |
@@ -142,11 +142,22 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 - **Noch nicht:** Der Owner-Filter greift erst in **WP3** — die CRUD-Endpunkte sind aktuell noch nicht auth-geschützt/gefiltert. Config: `AUTH_SECRET` (in Prod setzen!), Cookie-/Session-Flags, Admin-Bootstrap in `.env.example`.
 - **Tests:** `tests/unit/test_auth.py` (Invite-Gate, Login/Session, /users/me, Admin-only Invites, Bootstrap-Idempotenz). Suite: 567 grün, Coverage 91%.
 
+### Umsetzungsstand WP3 (auf `dev`)
+- **Bindung an die Session, nicht ContextVar:** Der Owner wird **einmal** an die `Session` gebunden (`session.info["owner"]`, `app/tenancy.py`). Grund: FastAPI fährt sync-Endpunkte und `yield`-Dependencies im Threadpool — ein dort gesetzter `ContextVar` propagiert nicht zuverlässig in den Endpunkt. Die Session ist dagegen exakt das Objekt, auf dem jede Query läuft → leck-sicher by construction.
+- **Zwei globale ORM-Event-Listener** (`tenancy.py`):
+  - `do_orm_execute` hängt für jede der `OWNABLE_MODELS` ein `with_loader_criteria(owner_id == uid, include_aliases=True)` an **jedes SELECT** (Relationship-/Column-Lazy-Loads ausgenommen). Superuser & unbound-Sessions: kein Filter.
+  - `before_flush` erzwingt die Owner-Invariante: neue Zeilen werden gestempelt (Client-gesendetes `owner_id` ignoriert), und bei Updates wird `owner_id` aus der History wiederhergestellt (per CRUD **nicht** änderbar). Fixt u. a. das Blanking durch `model_dump(exclude_unset)` auf `ValidatedSQLModel`.
+- **Auth-Schutz:** `owner_context`-Dependency (`app/auth/deps.py`) hängt an allen **acht** CRUD-Routern (`dependencies=[…]`) → 401 ohne Login, Daten pro Owner isoliert. `/auth`, `/users`, `/health` bleiben ungeschützt.
+- **App-Level-Duplikatprüfung** in den Update-Handlern (program/project/person/mapping) **vor** die Mutation gezogen: sonst schreibt der von der Prüf-Query ausgelöste Autoflush den Konfliktwert und der per-Owner-UNIQUE kippt (500 statt 409).
+- **`Setting` pro Owner (Schritt 3b):** Surrogat-`id`-PK + `owner_id` + `UNIQUE(owner_id, key)`; kein globales Startup-Seeding mehr — `db.ensure_owner_settings` seedet die Defaults pro Owner beim ersten Zugriff (`GET/PUT /settings`, race-safe). Alle `session.get(Setting, key)`-Lesepfade (holiday_region, milestones, persons) auf owner-gescopte Query umgestellt; Fallback-Defaults dort unverändert. Migration `a1b2c3d4e5f6` (Rebuild, reversibel validiert).
+- **Tests:** `tests/unit/test_tenancy.py` (Auth-Pflicht, Lese-Isolation, Auto-Stempel, owner_id nicht schmuggel-/änderbar, per-Owner-Eindeutigkeit, Admin-Bypass, Settings pro Owner), `test_db_seeding.py` neu auf per-Owner. `conftest`: `client` (Owner 1), `client_for` (header-getaggte Mehr-Owner-Clients gegen eine DB). Suite: 576 grün, Coverage 91%.
+- **Noch offen (WP4+):** Frontend hat noch keinen Login/Guard; `owner_id` bleibt nullable (spätere NOT-NULL-Verschärfung möglich); `AUTH_SECRET` vor Prod setzen.
+
 ---
 
 ## 8. Offene Punkte für die Umsetzungsphase
 - ~~`owner_id` denormalisiert auf Kind-Tabellen vs. Filter über Join.~~ **Entschieden (WP1): denormalisiert** — jede besitzbare Tabelle trägt `owner_id`, damit der zentrale Filter (`with_loader_criteria`) uniform ohne Join greift und keine Route ihn „vergessen" kann. Speicher-Overhead bei dieser App-Größe vernachlässigbar.
-- ~~Referenzdaten-Grenze.~~ **Entschieden:** `holiday` bleibt global; `setting` wird in WP3 pro-Owner (s. §5.1).
-- `owner_id` ist in WP1 **nullable**; WP3 setzt es beim Insert automatisch und erzwingt den Filter. Eine spätere Migration kann auf NOT NULL verschärfen, sobald jede Zeile nachweislich einen Owner hat.
+- ~~Referenzdaten-Grenze.~~ **Entschieden:** `holiday` bleibt global; `setting` ist ab WP3 pro-Owner (s. §5.1).
+- ~~`owner_id` ist in WP1 **nullable**; WP3 setzt es beim Insert automatisch und erzwingt den Filter.~~ **Umgesetzt (WP3):** Auto-Set + zentraler Filter aktiv. `owner_id` bleibt vorerst nullable; eine spätere Migration kann auf NOT NULL verschärfen, sobald jede Zeile nachweislich einen Owner hat.
 - Invite-Token: Ablaufzeit, Mehrfach-Kontingent (1 Token = 1 Account) — Default: einmalig, mit Ablauf (WP2).
 - Passwort-Policy / Reset-Weg ohne SMTP (Admin-gestützter Reset?) (WP2).

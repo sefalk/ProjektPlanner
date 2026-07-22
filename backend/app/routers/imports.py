@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.person import Person
 from app.models.timebooking import (
@@ -27,7 +28,7 @@ from app.services.importer import (
 
 
 
-router = APIRouter(tags=["imports"])
+router = APIRouter(tags=["imports"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -284,10 +285,10 @@ def update_mapping(mapping_id: int, body: MappingCreate, session: SessionDep):
     mapping = session.get(SageProjectMapping, mapping_id)
     if not mapping:
         raise HTTPException(404, "Mapping not found.")
-    mapping.sage_project_name = body.sage_project_name
-    mapping.project_id = body.project_id
     # App-level duplicate check (doc 25): reject a sage_project_name already used by
-    # another of this owner's mappings. Auto-scoped to the owner by WP3's filter.
+    # another of this owner's mappings. Auto-scoped to the owner by WP3's filter. Run
+    # BEFORE mutating `mapping`, else the autoflush the query triggers would write the
+    # conflicting value and trip the per-owner UNIQUE constraint (500 instead of 409).
     dup = session.exec(
         select(SageProjectMapping).where(
             SageProjectMapping.sage_project_name == body.sage_project_name,
@@ -296,6 +297,8 @@ def update_mapping(mapping_id: int, body: MappingCreate, session: SessionDep):
     ).first()
     if dup:
         raise HTTPException(409, "Mapping for this sage_project_name already exists.")
+    mapping.sage_project_name = body.sage_project_name
+    mapping.project_id = body.project_id
     try:
         session.add(mapping)
         session.commit()
