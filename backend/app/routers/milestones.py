@@ -347,12 +347,18 @@ def list_milestones_detail(project_id: int, session: SessionDep):
                 booked_hours += leftover_by_person.get(person.id, 0.0)
             cap_reason: str | None = None
             if not ms.is_locked and not budget.is_manual_override and stats.hours - budget.current_hours > 0.05:
-                if project.position_mode and membership.billing_position_id is not None:
-                    pos = positions_by_id.get(membership.billing_position_id)
-                    posnum = pos.position_number if pos else "?"
+                pos = positions_by_id.get(membership.billing_position_id) if membership.billing_position_id is not None else None
+                if project.position_mode and pos is not None and pos.overrunnable:
+                    # Überschreitbarer Posten hat kein eigenes hartes Budget — was hier bindet,
+                    # ist der Gesamtbudget-Deckel (#50, Variante 'Reserviert + Priorität').
                     cap_reason = (
                         f"Nur {budget.current_hours:.1f} von {stats.hours:.1f} h verplant — "
-                        f"Budget von Posten '{posnum}' ausgeschöpft."
+                        f"Projektbudget ausgeschöpft (überschreitbarer Posten)."
+                    )
+                elif project.position_mode and pos is not None:
+                    cap_reason = (
+                        f"Nur {budget.current_hours:.1f} von {stats.hours:.1f} h verplant — "
+                        f"Budget von Posten '{pos.position_number}' ausgeschöpft."
                     )
                 else:
                     cap_reason = (
