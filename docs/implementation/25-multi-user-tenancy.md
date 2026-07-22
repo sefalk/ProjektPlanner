@@ -82,7 +82,9 @@ Diese Constraints sind heute **global** und würden Isolation brechen (User2 kö
 | `Project.project_number` | `models/project.py:17` `unique=True` | `(owner_id, project_number)` |
 | `SageProjectMapping.sage_project_name` | `models/timebooking.py:37` `unique=True` | `(owner_id, sage_project_name)` |
 
-**Bleibt global** (Referenzdatum, kein Nutzerbesitz): `Holiday` `(holiday_date, country, state)` (`models/holiday.py:20`). Kandidat für „bleibt global": der Feiertags-Cache und ggf. globale Defaults in `settings` — als eigene Entscheidung im WP1 zu fixieren.
+**Bleibt global** (Referenzdatum, kein Nutzerbesitz): `Holiday` `(holiday_date, country, state)` (`models/holiday.py:20`).
+
+**`Setting`:** Zielbild ist **pro Owner** (Nutzerentscheidung 2026-07-22). In **WP1 bleibt `setting` global**, weil „Defaults pro Account seeden" einen User-Kontext braucht, den es erst mit Auth (WP2) gibt — und das idempotente Seeding (#42) an `session.get(Setting, key)` hängt. Die Umstellung `Setting`-PK → `(owner_id, key)` + per-Account-Seeding erfolgt in **WP3** zusammen mit dem Auto-Set/Filter.
 
 Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — auf `project_id`/`person_id` gekeyt) sind bereits über ihren Eltern-Owner geschützt und brauchen i. d. R. **keinen** eigenen `owner_id`, solange der Filter über den Join greift. Ob `owner_id` dennoch denormalisiert wird (einfacherer Filter, mehr Speicher), ist eine WP1-Abwägung.
 
@@ -114,7 +116,7 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 
 | WP | Inhalt | Kern-Artefakte |
 |---|---|---|
-| **WP1** | Datenmodell: `user`, `invite_token`; `owner_id` auf besitzbaren Entitäten; Unique-Constraints pro Owner; Referenzdaten-Grenze fixieren; Alembic-Migration (frische DB) | `models/*`, Alembic |
+| **WP1** ✅ | Datenmodell: `user`, `invite_token`; `owner_id` auf besitzbaren Entitäten; Unique-Constraints pro Owner; Referenzdaten-Grenze fixieren; Alembic-Migration (frische DB) | `models/*`, Alembic |
 | **WP2** | Auth-Backend: `fastapi-users`, Session-Cookie, Invite-Token-Flow, Admin-Flag | `routers/auth.py`, `main.py` |
 | **WP3** | Zentraler Owner-Filter (ContextVar + `do_orm_execute`), Auto-Set von `owner_id` beim Insert; Admin-Bypass | `db.py` |
 | **WP4** | Frontend: Login/Registrierung (Invite), Auth-Guard/Redirect, Logout, Account-Menü | `frontend/` |
@@ -122,10 +124,19 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 | **WP6** | Deployment: verschlüsseltes Volume + verschlüsselte Backups; Proxy-Basic-Auth durch App-Login ersetzen | `docker-compose.server.yml`, `deploy/` |
 | **später** | Übergang Modell A: Teams/Rollen/Sichtbarkeit als ACL-Schicht über `owner_id` (Filter aufweichen) | — |
 
+### Umsetzungsstand WP1 (auf `dev`)
+- **Neue Modelle:** `models/user.py` (`User`, fastapi-users-kompatible Felder, int-PK, `is_superuser` = Admin/Filter-Bypass), `models/invite_token.py` (`InviteToken`).
+- **`owner_id`** (nullable FK → `user.id`, indiziert) auf allen 15 besitzbaren Tabellen (Root + Kinder **denormalisiert**, s. §8-Entscheidung). Referenzdaten `holiday` bleibt global; `user`/`invite_token` tragen kein `owner_id`.
+- **Composite-Uniques** `(owner_id, feld)` für `program_number`, `project_number`, `sage_employee_name`, `sage_project_name`.
+- **App-Level-Duplikatprüfung** in den vier CRUD-Routern (create+update) statt Verlass auf den DB-Constraint — verhält sich in WP1 (owner NULL) korrekt und wird in WP3 automatisch owner-gescoped.
+- **Alembic** `e7a1c9d2f3b4` (batch-Mode, Guards, Up-/Downgrade gegen Wegwerf-DB validiert). Prod baut per `alembic upgrade head`, daher vollständige Migration.
+- **Tests:** `tests/unit/test_models_owner_tenancy.py` (owner_id-Präsenz, Per-Owner-Eindeutigkeit, Auth-Tabellen). Suite: 554 grün.
+
 ---
 
 ## 8. Offene Punkte für die Umsetzungsphase
-- Referenzdaten-Grenze endgültig festlegen (Feiertags-Cache & welche `settings` global bleiben).
-- `owner_id` denormalisiert auf Kind-Tabellen vs. Filter über Join (Performance vs. Einfachheit).
-- Invite-Token: Ablaufzeit, Mehrfach-Kontingent (1 Token = 1 Account) — Default: einmalig, mit Ablauf.
-- Passwort-Policy / Reset-Weg ohne SMTP (Admin-gestützter Reset?).
+- ~~`owner_id` denormalisiert auf Kind-Tabellen vs. Filter über Join.~~ **Entschieden (WP1): denormalisiert** — jede besitzbare Tabelle trägt `owner_id`, damit der zentrale Filter (`with_loader_criteria`) uniform ohne Join greift und keine Route ihn „vergessen" kann. Speicher-Overhead bei dieser App-Größe vernachlässigbar.
+- ~~Referenzdaten-Grenze.~~ **Entschieden:** `holiday` bleibt global; `setting` wird in WP3 pro-Owner (s. §5.1).
+- `owner_id` ist in WP1 **nullable**; WP3 setzt es beim Insert automatisch und erzwingt den Filter. Eine spätere Migration kann auf NOT NULL verschärfen, sobald jede Zeile nachweislich einen Owner hat.
+- Invite-Token: Ablaufzeit, Mehrfach-Kontingent (1 Token = 1 Account) — Default: einmalig, mit Ablauf (WP2).
+- Passwort-Policy / Reset-Weg ohne SMTP (Admin-gestützter Reset?) (WP2).

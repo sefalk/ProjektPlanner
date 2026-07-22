@@ -12,11 +12,17 @@ from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 
 class Person(ValidatedSQLModel, table=True):
     __tablename__ = "person"
+    # Multi-user (doc 25): sage_employee_name is unique PER OWNER, not globally.
+    __table_args__ = (
+        UniqueConstraint("owner_id", "sage_employee_name", name="uq_person_owner_sage_name"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): owning user; nullable now, populated + enforced in WP3.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     name: str = Field(min_length=1)
     # Must match the employee name string used in Sage ERP exports.
-    sage_employee_name: str = Field(unique=True, index=True, min_length=1)
+    sage_employee_name: str = Field(index=True, min_length=1)
     default_weekly_hours: float = Field(gt=0, le=60)
     # Comma-separated daily hours Mon–Fri, e.g. "8,8,8,8,0" for 4-day/32h week.
     work_week_pattern: str | None = Field(default=None)
@@ -32,6 +38,9 @@ class VacationContingent(ValidatedSQLModel, table=True):
     __table_args__ = (UniqueConstraint("person_id", "year", name="uq_vacation_contingent_person_year"),)
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent person, so the central
+    # filter (WP3) applies uniformly to every table without a join.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     person_id: int = Field(foreign_key="person.id", index=True)
     year: int = Field(ge=2000, le=2100)
     total_days: float = Field(ge=0, le=365)
@@ -48,6 +57,8 @@ class PersonAbsence(ValidatedSQLModel, table=True):
     __tablename__ = "person_absence"
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent person.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     person_id: int = Field(foreign_key="person.id", index=True)
     start_date: date
     end_date: date | None = None  # null only for sick + ongoing

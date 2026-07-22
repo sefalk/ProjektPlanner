@@ -3,6 +3,7 @@
 from datetime import date
 
 from pydantic import model_validator
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field
 
 from app.models.base import ValidatedSQLModel
@@ -11,10 +12,16 @@ from app.models.enums import ProjectStatus
 
 class Project(ValidatedSQLModel, table=True):
     __tablename__ = "project"
+    # Multi-user (doc 25): project_number is unique PER OWNER, not globally.
+    __table_args__ = (
+        UniqueConstraint("owner_id", "project_number", name="uq_project_owner_number"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): owning user; nullable now, populated + enforced in WP3.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     program_id: int | None = Field(default=None, foreign_key="program.id", index=True)
-    project_number: str = Field(unique=True, index=True, min_length=1)
+    project_number: str = Field(index=True, min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
     start_date: date
