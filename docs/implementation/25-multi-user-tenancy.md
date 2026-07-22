@@ -117,7 +117,7 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 | WP | Inhalt | Kern-Artefakte |
 |---|---|---|
 | **WP1** ✅ | Datenmodell: `user`, `invite_token`; `owner_id` auf besitzbaren Entitäten; Unique-Constraints pro Owner; Referenzdaten-Grenze fixieren; Alembic-Migration (frische DB) | `models/*`, Alembic |
-| **WP2** | Auth-Backend: `fastapi-users`, Session-Cookie, Invite-Token-Flow, Admin-Flag | `routers/auth.py`, `main.py` |
+| **WP2** ✅ | Auth-Backend: `fastapi-users`, Session-Cookie, Invite-Token-Flow, Admin-Flag | `routers/auth.py`, `main.py` |
 | **WP3** | Zentraler Owner-Filter (ContextVar + `do_orm_execute`), Auto-Set von `owner_id` beim Insert; Admin-Bypass | `db.py` |
 | **WP4** | Frontend: Login/Registrierung (Invite), Auth-Guard/Redirect, Logout, Account-Menü | `frontend/` |
 | **WP5** | Datenexport/-löschung pro User; DSGVO-Export pro `Person` (separat) | `routers/account.py`, `frontend/` |
@@ -131,6 +131,16 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 - **App-Level-Duplikatprüfung** in den vier CRUD-Routern (create+update) statt Verlass auf den DB-Constraint — verhält sich in WP1 (owner NULL) korrekt und wird in WP3 automatisch owner-gescoped.
 - **Alembic** `e7a1c9d2f3b4` (batch-Mode, Guards, Up-/Downgrade gegen Wegwerf-DB validiert). Prod baut per `alembic upgrade head`, daher vollständige Migration.
 - **Tests:** `tests/unit/test_models_owner_tenancy.py` (owner_id-Präsenz, Per-Owner-Eindeutigkeit, Auth-Tabellen). Suite: 554 grün.
+
+### Umsetzungsstand WP2 (auf `dev`)
+- **Bibliothek:** `fastapi-users` 15 (pwdlib argon2/bcrypt, pyjwt). Neue Dependency in `pyproject.toml`.
+- **Sync-Adapter:** `app/auth/user_db.py` implementiert die `BaseUserDatabase` synchron auf der bestehenden sync-`Session` — vermeidet eine zweite async-Engine (aiosqlite) auf derselben SQLite-Datei (Locking-Risiko). Methoden sind `async def`, führen aber sync-Queries aus (für diese Last unkritisch).
+- **Transport/Strategy:** httpOnly-**Session-Cookie** (`projektplannerauth`, secure/samesite konfigurierbar) mit **JWT** (HS256, 12 h, kein Refresh). Logout löscht das Cookie; das kurzlebige JWT läuft dann aus. Bewusst gewählt statt DB-Sessions (keine Extra-Tabelle) und statt Bearer/localStorage (XSS-sicher).
+- **Registrierungs-Gate:** `UserManager.create` validiert & verbraucht das Einmal-Invite-Token (`app/auth/manager.py`), erst nach erfolgreicher Erstellung wird es als benutzt markiert. Selbst-Registrierung kann sich **nicht** zum Admin machen (`safe=True`).
+- **Admin:** `is_superuser`. Invite-Verwaltung nur für Admins (`POST/GET /auth/invites`). **First-Admin-Bootstrap** (`app/auth/bootstrap.py`): via `ADMIN_EMAIL`/`ADMIN_PASSWORD` bei leerer User-Tabelle beim Start — löst die Henne-Ei-Situation.
+- **Routen:** `routers/auth.py` mountet `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET/PATCH /users/me`, `GET/…/users/{id}`, plus `/auth/invites`. Passwort-Reset/Verify-Router bewusst noch weggelassen (Admin-gestützter Reset später).
+- **Noch nicht:** Der Owner-Filter greift erst in **WP3** — die CRUD-Endpunkte sind aktuell noch nicht auth-geschützt/gefiltert. Config: `AUTH_SECRET` (in Prod setzen!), Cookie-/Session-Flags, Admin-Bootstrap in `.env.example`.
+- **Tests:** `tests/unit/test_auth.py` (Invite-Gate, Login/Session, /users/me, Admin-only Invites, Bootstrap-Idempotenz). Suite: 567 grün, Coverage 91%.
 
 ---
 
