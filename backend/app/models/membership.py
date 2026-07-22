@@ -27,6 +27,8 @@ class ProjectMembership(ValidatedSQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent project/person.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     project_id: int = Field(foreign_key="project.id", index=True)
     person_id: int = Field(foreign_key="person.id", index=True)
     from_date: date

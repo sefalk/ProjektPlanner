@@ -254,6 +254,13 @@ def create_mapping(body: MappingCreate, session: SessionDep):
         sage_project_name=body.sage_project_name,
         project_id=body.project_id,
     )
+    # App-level duplicate check (doc 25): sage_project_name is unique per-owner. This
+    # query is auto-scoped to the current owner by WP3's filter; IntegrityError stays
+    # as a race backstop.
+    if session.exec(
+        select(SageProjectMapping).where(SageProjectMapping.sage_project_name == body.sage_project_name)
+    ).first():
+        raise HTTPException(409, "Mapping for this sage_project_name already exists.")
     try:
         session.add(mapping)
         session.commit()
@@ -279,6 +286,16 @@ def update_mapping(mapping_id: int, body: MappingCreate, session: SessionDep):
         raise HTTPException(404, "Mapping not found.")
     mapping.sage_project_name = body.sage_project_name
     mapping.project_id = body.project_id
+    # App-level duplicate check (doc 25): reject a sage_project_name already used by
+    # another of this owner's mappings. Auto-scoped to the owner by WP3's filter.
+    dup = session.exec(
+        select(SageProjectMapping).where(
+            SageProjectMapping.sage_project_name == body.sage_project_name,
+            SageProjectMapping.id != mapping_id,
+        )
+    ).first()
+    if dup:
+        raise HTTPException(409, "Mapping for this sage_project_name already exists.")
     try:
         session.add(mapping)
         session.commit()

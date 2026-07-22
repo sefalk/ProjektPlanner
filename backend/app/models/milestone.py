@@ -24,6 +24,8 @@ class Milestone(ValidatedSQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     project_id: int = Field(foreign_key="project.id", index=True)
     year: int = Field(ge=2000, le=2100)
     month: int = Field(ge=1, le=12)
@@ -60,6 +62,8 @@ class MilestonePersonBudget(ValidatedSQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent milestone/project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     milestone_id: int = Field(foreign_key="milestone.id", index=True)
     person_id: int = Field(foreign_key="person.id", index=True)
     # Line item this budget row belongs to (doc 23). None = simple mode / unassigned.

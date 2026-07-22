@@ -122,6 +122,11 @@ def batch_absence_summary(session: SessionDep, year: int | None = None):
 def create_person(person: Person, session: SessionDep):
     from datetime import date as _date
     person.id = None
+    # App-level duplicate check (doc 25): sage_employee_name is unique per-owner. This
+    # query is auto-scoped to the current owner by WP3's filter; IntegrityError stays
+    # as a race backstop.
+    if session.exec(select(Person).where(Person.sage_employee_name == person.sage_employee_name)).first():
+        raise HTTPException(409, "sage_employee_name already exists.")
     try:
         session.add(person)
         session.flush()
@@ -159,6 +164,15 @@ def update_person(person_id: int, data: Person, session: SessionDep):
     update = data.model_dump(exclude_unset=True, exclude={"id"})
     for field, value in update.items():
         setattr(person, field, value)
+    # App-level duplicate check (doc 25): reject a sage_employee_name already used by
+    # another of this owner's persons. Auto-scoped to the owner by WP3's filter.
+    dup = session.exec(
+        select(Person).where(
+            Person.sage_employee_name == person.sage_employee_name, Person.id != person_id
+        )
+    ).first()
+    if dup:
+        raise HTTPException(409, "sage_employee_name already exists.")
     try:
         session.add(person)
         session.commit()

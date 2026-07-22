@@ -16,6 +16,8 @@ class MonthlyInvoice(ValidatedSQLModel, table=True):
     __tablename__ = "monthly_invoice"
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     project_id: int = Field(foreign_key="project.id", index=True)
     billing_position_id: int = Field(foreign_key="billing_position.id")
     year: int = Field(ge=2000, le=2100)
@@ -32,6 +34,8 @@ class InvoicePersonEntry(ValidatedSQLModel, table=True):
     __tablename__ = "invoice_person_entry"
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent invoice/project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     invoice_id: int = Field(foreign_key="monthly_invoice.id", index=True)
     person_id: int = Field(foreign_key="person.id", index=True)
     hours: float = Field(ge=0)

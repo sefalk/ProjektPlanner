@@ -9,6 +9,8 @@ class BillingPosition(ValidatedSQLModel, table=True):
     __tablename__ = "billing_position"
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     project_id: int = Field(foreign_key="project.id", index=True)
     position_number: str = Field(min_length=1)
     description: str = ""

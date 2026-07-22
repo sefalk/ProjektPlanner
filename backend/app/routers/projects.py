@@ -150,6 +150,11 @@ def get_project_stats(session: SessionDep):
 @router.post("", response_model=Project, status_code=201)
 def create_project(project: Project, session: SessionDep):
     project.id = None
+    # App-level duplicate check (doc 25): uniqueness of project_number is per-owner
+    # (owner_id, project_number). This query is auto-scoped to the current owner by
+    # the central filter (WP3); the IntegrityError catch stays as a race backstop.
+    if session.exec(select(Project).where(Project.project_number == project.project_number)).first():
+        raise HTTPException(409, "Project number already exists.")
     try:
         session.add(project)
         session.commit()
@@ -178,6 +183,13 @@ def update_project(project_id: int, data: Project, session: SessionDep):
     update = data.model_dump(exclude_unset=True, exclude={"id", "position_mode"})
     for field, value in update.items():
         setattr(project, field, value)
+    # App-level duplicate check (doc 25): reject a project_number already used by
+    # another of this owner's projects. Auto-scoped to the owner by WP3's filter.
+    dup = session.exec(
+        select(Project).where(Project.project_number == project.project_number, Project.id != project_id)
+    ).first()
+    if dup:
+        raise HTTPException(409, "Project number already exists.")
     try:
         session.add(project)
         session.commit()
