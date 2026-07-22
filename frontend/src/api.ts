@@ -405,6 +405,9 @@ export interface PersonMembershipDetail {
   to_date: string;
   weekly_capacity_hours: number;
   billing_rate_per_hour: number;
+  priority: number;
+  vacation_days_taken: number;
+  billing_position_id: number | null;
 }
 
 export const persons = {
