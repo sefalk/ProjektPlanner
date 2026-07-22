@@ -15,6 +15,22 @@ export class ApiError extends Error {
   }
 }
 
+/** Event fired when any authenticated request gets a 401 — the session expired
+ *  or the cookie is gone. The AuthProvider listens and drops the user, so the
+ *  route guard bounces to the login page. Not fired by the bootstrap `me()`
+ *  check (a logged-out visitor is normal, not an expiry). */
+export const AUTH_UNAUTHORIZED_EVENT = 'auth:unauthorized';
+
+function raiseHttpError(method: string, path: string, status: number, text: string): never {
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    /* keep raw text */
+  }
+  throw new ApiError(status, parsed, `${method} ${path} → ${status}: ${text}`);
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -22,14 +38,12 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    const text = await res.text();
-    let parsed: unknown = text;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      /* keep raw text */
+    // A 401 on a normal call means the session lapsed mid-use → tell the app to
+    // re-authenticate, then still throw so the caller's own error path runs.
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event(AUTH_UNAUTHORIZED_EVENT));
     }
-    throw new ApiError(res.status, parsed, `${method} ${path} → ${res.status}: ${text}`);
+    raiseHttpError(method, path, res.status, await res.text());
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -609,4 +623,56 @@ export const imports = {
 export const bookings = {
   flag: (id: number, data: { is_excluded: boolean; exclusion_reason?: ExclusionReason | null; exclusion_note?: string | null }) =>
     req<TimeBooking>('PUT', `/bookings/${id}/flag`, data),
+};
+
+// ─── Auth / account (multi-user, doc 25 WP4) ───────────────────────────────────
+
+export interface User {
+  id: number;
+  email: string;
+  is_active: boolean;
+  is_superuser: boolean;
+  is_verified: boolean;
+}
+
+export interface Invite {
+  id: number;
+  token: string;
+  created_by: number | null;
+  used_by: number | null;
+  created_at: string | null;
+  used_at: string | null;
+  expires_at: string | null;
+}
+
+export const auth = {
+  /** Current user, or null when unauthenticated. Uses a bare fetch so a logged-out
+   *  visitor (401) is a normal outcome and does NOT raise the global re-auth event. */
+  me: async (): Promise<User | null> => {
+    const res = await fetch(`${BASE}/users/me`);
+    if (res.status === 401) return null;
+    if (!res.ok) raiseHttpError('GET', '/users/me', res.status, await res.text());
+    return res.json();
+  },
+
+  /** fastapi-users login expects form-encoded `username`/`password` (OAuth2 form). */
+  login: async (email: string, password: string): Promise<void> => {
+    const res = await fetch(`${BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: email, password }),
+    });
+    if (!res.ok) raiseHttpError('POST', '/auth/login', res.status, await res.text());
+  },
+
+  logout: () => req<void>('POST', '/auth/logout'),
+
+  register: (d: { email: string; password: string; invite_token: string }) =>
+    req<User>('POST', '/auth/register', d),
+
+  invites: {
+    list: () => req<Invite[]>('GET', '/auth/invites'),
+    create: (expiresInDays: number | null = 14) =>
+      req<Invite>('POST', '/auth/invites', { expires_in_days: expiresInDays }),
+  },
 };

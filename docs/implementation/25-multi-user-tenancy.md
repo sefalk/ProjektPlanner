@@ -119,7 +119,7 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 | **WP1** ✅ | Datenmodell: `user`, `invite_token`; `owner_id` auf besitzbaren Entitäten; Unique-Constraints pro Owner; Referenzdaten-Grenze fixieren; Alembic-Migration (frische DB) | `models/*`, Alembic |
 | **WP2** ✅ | Auth-Backend: `fastapi-users`, Session-Cookie, Invite-Token-Flow, Admin-Flag | `routers/auth.py`, `main.py` |
 | **WP3** ✅ | Zentraler Owner-Filter (`session.info` + `do_orm_execute`), Auto-Set von `owner_id` beim Insert, Auth-Schutz aller CRUD-Router, `Setting` pro Owner; Admin-Bypass | `tenancy.py`, `auth/deps.py`, `routers/*` |
-| **WP4** | Frontend: Login/Registrierung (Invite), Auth-Guard/Redirect, Logout, Account-Menü | `frontend/` |
+| **WP4** ✅ | Frontend: Login/Registrierung (Invite), Auth-Guard/Redirect, Logout, Account-Menü, Admin-Invite-Verwaltung | `frontend/src/auth/*`, `frontend/src/pages/{Login,Register,Invites}Page.tsx`, `api.ts`, `App.tsx` |
 | **WP5** | Datenexport/-löschung pro User; DSGVO-Export pro `Person` (separat) | `routers/account.py`, `frontend/` |
 | **WP6** | Deployment: verschlüsseltes Volume + verschlüsselte Backups; Proxy-Basic-Auth durch App-Login ersetzen | `docker-compose.server.yml`, `deploy/` |
 | **später** | Übergang Modell A: Teams/Rollen/Sichtbarkeit als ACL-Schicht über `owner_id` (Filter aufweichen) | — |
@@ -153,6 +153,15 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 - **Tests:** `tests/unit/test_tenancy.py` (Auth-Pflicht, Lese-Isolation, Auto-Stempel, owner_id nicht schmuggel-/änderbar, per-Owner-Eindeutigkeit, Admin-Bypass, Settings pro Owner), `test_db_seeding.py` neu auf per-Owner. `conftest`: `client` (Owner 1), `client_for` (header-getaggte Mehr-Owner-Clients gegen eine DB). Suite: 576 grün, Coverage 91%.
 - **Noch offen (WP4+):** Frontend hat noch keinen Login/Guard; `owner_id` bleibt nullable (spätere NOT-NULL-Verschärfung möglich); `AUTH_SECRET` vor Prod setzen.
 
+### Umsetzungsstand WP4 (auf `dev`)
+- **Auth-State im Client:** `frontend/src/auth/AuthContext.tsx` bootstrappt den User einmal aus `GET /users/me` (httpOnly-Cookie, der Client sieht nie ein Token). Ein globales `auth:unauthorized`-Event (im API-Layer bei **jedem** 401 gefeuert, außer beim Bootstrap-`me()`) setzt den User zurück → der Guard leitet bei abgelaufener Session zur Anmeldung.
+- **Guards:** `RequireAuth` (Spinner während Bootstrap, sonst Redirect nach `/login` mit gemerktem Ziel) und `RequireAdmin` (Superuser-only, sonst zurück auf `/calendar`). Öffentliche Routen `/login` und `/register` liegen außerhalb des Guards; die gesamte App-Shell dahinter.
+- **Login/Registrierung:** `LoginPage` (form-kodierter OAuth2-Login, dann `refresh()` + Redirect aufs Ziel), `RegisterPage` (E-Mail/Passwort/Invite-Token; nach Erfolg direkt Auto-Login, da `register` keine Session öffnet; Backend-400 → sprechende deutsche Meldungen für ungültiges/verbrauchtes/abgelaufenes Token, schwaches Passwort, Dublette).
+- **Account-Menü** in der Sidebar: E-Mail, Administrator-Badge (nur Superuser), Abmelden. **Einladungen-Nav + `InvitesPage`** nur für Admins (Token erzeugen, Liste mit Status offen/verwendet/abgelaufen, Copy-to-Clipboard).
+- **API-Layer** (`api.ts`): neuer `auth`-Namespace (`me/login/logout/register/invites`); `me()` nutzt bare-fetch (401 = ausgeloggt, kein Event); alle anderen 401 → `AUTH_UNAUTHORIZED_EVENT`.
+- **Tests:** `frontend/src/auth/__tests__/auth.test.tsx` (API-Formkodierung, `me()`-401-ohne-Event, Auth-/Admin-Guard-Redirects, Login-Erfolg/Fehlbedienung, Session-Ablauf per Event). Suite: **36 grün**. Browser-verifiziert: Guard-Redirect, echter UI-Login mit Ziel-Redirect, Admin-Token → Registrierung → Auto-Login als Nicht-Admin, Nicht-Admin von `/invites` abgewiesen, Logout.
+- **Noch offen (WP5+):** Datenexport/-löschung im Account-Menü; Passwort-Reset-UI; ggf. „Angemeldet bleiben".
+
 ---
 
 ## 8. Offene Punkte für die Umsetzungsphase
@@ -161,3 +170,4 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 - ~~`owner_id` ist in WP1 **nullable**; WP3 setzt es beim Insert automatisch und erzwingt den Filter.~~ **Umgesetzt (WP3):** Auto-Set + zentraler Filter aktiv. `owner_id` bleibt vorerst nullable; eine spätere Migration kann auf NOT NULL verschärfen, sobald jede Zeile nachweislich einen Owner hat.
 - Invite-Token: Ablaufzeit, Mehrfach-Kontingent (1 Token = 1 Account) — Default: einmalig, mit Ablauf (WP2).
 - Passwort-Policy / Reset-Weg ohne SMTP (Admin-gestützter Reset?) (WP2).
+- **Bestehende Dev-DBs migrieren (bei WP4-Browserverifikation entdeckt):** Der Startup nutzt `create_db_and_tables()` (`create_all`) — legt **neue Tabellen** an (`user`, `invite_token`), ergänzt aber **keine Spalten** auf bestehenden Tabellen. Eine Dev-DB, die vor WP1 angelegt wurde (Alembic-Stand vor `e7a1c9d2f3b4`), hat daher **kein `owner_id`** → für Nicht-Admins schlägt jede gefilterte Query fehl (500), Superuser (Bypass) merken es nicht. Fix: `alembic upgrade head` auf die Dev-DB (bzw. frische DB, da die gehostete Instanz ohnehin leer startet, §1). Prod ist nicht betroffen (baut per `alembic upgrade head`).
