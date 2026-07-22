@@ -1940,15 +1940,15 @@ export default function ProjectDetailPage() {
                     ),
                   },
                   {
-                    key: 'actions', header: '',
+                    key: 'actions', header: 'Aktionen',
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => { setEditAssign({ personId: m.person_id, personName: personName(m.person_id) }); setError(null) }}
-                          className="text-gray-400 hover:text-blue-500" aria-label="Bearbeiten"
+                          className="text-gray-400 hover:text-blue-500" title="Posten-Zuweisungen bearbeiten" aria-label="Posten-Zuweisungen bearbeiten"
                         ><Pencil size={14} /></button>
                         <button onClick={() => removeMember.mutate(m.id)}
-                          className="text-gray-400 hover:text-red-500" aria-label="Entfernen"><Trash2 size={14} /></button>
+                          className="text-gray-400 hover:text-red-500" title="Mitglied aus Projekt entfernen" aria-label="Mitglied aus Projekt entfernen"><Trash2 size={14} /></button>
                       </div>
                     ),
                   },

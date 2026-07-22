@@ -214,10 +214,12 @@ export default function YearCalendar({
     const numDays = daysInMonth(year, monthIdx)
     const isCurrent = year === curYear && monthIdx === curMonth
     const segs = segmentsByYearMonth[`${year}-${monthIdx}`] ?? []
+    // December closes a year → a strong rule separates it from the next January.
+    const isYearEnd = monthIdx === 11
     return (
       <div
         ref={isCurrent ? currentRowRef : undefined}
-        className={`flex border-b border-gray-100 ${isCurrent ? 'bg-blue-50/40' : ''}`}
+        className={`flex ${isYearEnd ? 'border-b-2 border-gray-400' : 'border-b border-gray-100'} ${isCurrent ? 'bg-blue-50/40' : ''}`}
       >
         <div
           className={`sticky z-10 flex-shrink-0 flex items-center border-r border-gray-200 px-2 font-medium ${

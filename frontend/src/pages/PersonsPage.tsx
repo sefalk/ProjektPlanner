@@ -477,7 +477,7 @@ export default function PersonsPage() {
                         Urlaub {currentYear}
                       </th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Projekte</th>
-                      <th className="px-4 py-2" />
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Aktionen</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
@@ -492,7 +492,7 @@ export default function PersonsPage() {
                           key={p.id}
                           onClick={() => toggle(p.id)}
                           className={`cursor-pointer transition-colors ${sel ? 'hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-50'}`}
-                          title={sel ? 'Abwählen' : 'Auswählen'}
+                          title={sel ? `${p.name} abwählen (Kalender)` : `${p.name} auswählen (Kalender)`}
                         >
                           <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                             <input
@@ -540,9 +540,9 @@ export default function PersonsPage() {
                           </td>
                           <td className="px-4 py-2">
                             <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                              <button aria-label={`${p.name} öffnen`} onClick={() => navigate(`/persons/${p.id}`)} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><ArrowUpRight size={14} /></button>
-                              <button aria-label={`${p.name} bearbeiten`} onClick={() => { setEditPerson(p); setError(null) }} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><Pencil size={13} /></button>
-                              <button aria-label={`${p.name} löschen`} onClick={() => setConfirmDelete(p)} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
+                              <button title="Details öffnen" aria-label={`${p.name} öffnen`} onClick={() => navigate(`/persons/${p.id}`)} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><ArrowUpRight size={14} /></button>
+                              <button title="Person bearbeiten" aria-label={`${p.name} bearbeiten`} onClick={() => { setEditPerson(p); setError(null) }} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><Pencil size={13} /></button>
+                              <button title="Person löschen" aria-label={`${p.name} löschen`} onClick={() => setConfirmDelete(p)} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
                             </div>
                           </td>
                         </tr>
