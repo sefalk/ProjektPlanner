@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlmodel import Field, Session, SQLModel, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.membership import ProjectMembership
 from app.models.milestone import Milestone, MilestonePersonBudget
@@ -43,7 +44,7 @@ from app.services.milestones import (
     set_milestone_target_budget,
 )
 
-router = APIRouter(prefix="/projects", tags=["milestones"])
+router = APIRouter(prefix="/projects", tags=["milestones"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 

@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import tenancy  # noqa: F401 — registers the owner-filter ORM event listeners
 from app.auth.bootstrap import seed_admin_user
 from app.config import settings
 from app.db import create_db_and_tables, seed_default_settings

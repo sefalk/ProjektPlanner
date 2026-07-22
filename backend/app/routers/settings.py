@@ -4,11 +4,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, SQLModel, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.setting import Setting
 from app.services import db_management
 
-router = APIRouter(prefix="/settings", tags=["settings"])
+router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 

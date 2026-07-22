@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 from app.models.person import Person, PersonAbsence, VacationContingent
@@ -13,7 +14,7 @@ from app.models.project import Project
 from app.models.setting import Setting
 from app.services.planning import absence_booking, absence_summary
 
-router = APIRouter(prefix="/persons", tags=["persons"])
+router = APIRouter(prefix="/persons", tags=["persons"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -162,17 +163,18 @@ def update_person(person_id: int, data: Person, session: SessionDep):
     if not person:
         raise HTTPException(404, "Person not found.")
     update = data.model_dump(exclude_unset=True, exclude={"id"})
-    for field, value in update.items():
-        setattr(person, field, value)
     # App-level duplicate check (doc 25): reject a sage_employee_name already used by
-    # another of this owner's persons. Auto-scoped to the owner by WP3's filter.
+    # another of this owner's persons. Auto-scoped to the owner by WP3's filter. Run
+    # BEFORE mutating `person`, else the autoflush the query triggers would write the
+    # conflicting value and trip the per-owner UNIQUE constraint (500 instead of 409).
+    new_name = update.get("sage_employee_name", person.sage_employee_name)
     dup = session.exec(
-        select(Person).where(
-            Person.sage_employee_name == person.sage_employee_name, Person.id != person_id
-        )
+        select(Person).where(Person.sage_employee_name == new_name, Person.id != person_id)
     ).first()
     if dup:
         raise HTTPException(409, "sage_employee_name already exists.")
+    for field, value in update.items():
+        setattr(person, field, value)
     try:
         session.add(person)
         session.commit()

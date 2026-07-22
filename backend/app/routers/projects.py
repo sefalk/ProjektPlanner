@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.billing import BillingPosition
 from app.models.enums import MilestoneStatus
@@ -31,7 +32,7 @@ from app.services.milestones import (
     set_position_mode,
 )
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+router = APIRouter(prefix="/projects", tags=["projects"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -181,15 +182,18 @@ def update_project(project_id: int, data: Project, session: SessionDep):
     old_start, old_end = project.start_date, project.end_date
     # position_mode is toggled only via the guarded /position-mode endpoint (§21 WP8).
     update = data.model_dump(exclude_unset=True, exclude={"id", "position_mode"})
-    for field, value in update.items():
-        setattr(project, field, value)
     # App-level duplicate check (doc 25): reject a project_number already used by
-    # another of this owner's projects. Auto-scoped to the owner by WP3's filter.
+    # another of this owner's projects. Auto-scoped to the owner by WP3's filter. Run
+    # BEFORE mutating `project`, else the autoflush the query triggers would write the
+    # conflicting value and trip the per-owner UNIQUE constraint (500 instead of 409).
+    new_number = update.get("project_number", project.project_number)
     dup = session.exec(
-        select(Project).where(Project.project_number == project.project_number, Project.id != project_id)
+        select(Project).where(Project.project_number == new_number, Project.id != project_id)
     ).first()
     if dup:
         raise HTTPException(409, "Project number already exists.")
+    for field, value in update.items():
+        setattr(project, field, value)
     try:
         session.add(project)
         session.commit()
