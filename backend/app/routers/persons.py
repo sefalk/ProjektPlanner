@@ -199,6 +199,11 @@ class PersonMembershipOut(SQLModel):
     to_date: date
     weekly_capacity_hours: float
     billing_rate_per_hour: float
+    # Carried so an edit from the person view round-trips them instead of resetting
+    # priority (feeds the milestone engine) or unassigning the Posten.
+    priority: int
+    vacation_days_taken: float
+    billing_position_id: int | None
 
 
 @router.get("/{person_id}/memberships", response_model=list[PersonMembershipOut])
@@ -222,6 +227,9 @@ def list_person_memberships(person_id: int, session: SessionDep):
                 to_date=m.to_date,
                 weekly_capacity_hours=m.weekly_capacity_hours,
                 billing_rate_per_hour=m.billing_rate_per_hour,
+                priority=m.priority,
+                vacation_days_taken=m.vacation_days_taken,
+                billing_position_id=m.billing_position_id,
             ))
     return result
 

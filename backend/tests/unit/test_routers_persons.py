@@ -55,6 +55,28 @@ def test_delete_person(client):
     assert client.get(f"/persons/{created['id']}").status_code == 404
 
 
+def test_person_memberships_carry_priority_and_position(client):
+    """Regression (#48): the person view edits assignments and must round-trip priority /
+    vacation_days_taken / billing_position_id so an edit there doesn't reset them."""
+    person = client.post("/persons", json=_person()).json()
+    proj = client.post("/projects", json={
+        "project_number": "P00042", "name": "T", "start_date": "2026-01-01",
+        "end_date": "2026-12-31", "total_budget_euros": 50000.0, "total_budget_hours": 500.0,
+    }).json()
+    bp = client.post(f"/projects/{proj['id']}/billing-positions", json={
+        "position_number": "P1", "budget_euros": 10000.0,
+    }).json()
+    client.post(f"/projects/{proj['id']}/memberships", json={
+        "person_id": person["id"], "from_date": "2026-01-01", "to_date": "2026-12-31",
+        "weekly_capacity_hours": 32.0, "billing_rate_per_hour": 96.75,
+        "priority": 2, "vacation_days_taken": 5.0, "billing_position_id": bp["id"],
+    })
+    row = client.get(f"/persons/{person['id']}/memberships").json()[0]
+    assert row["priority"] == 2
+    assert row["vacation_days_taken"] == 5.0
+    assert row["billing_position_id"] == bp["id"]
+
+
 def test_with_projects_returns_full_person_fields(client):
     """Regression: the persons-table edit form is fed from /with-projects.
 
