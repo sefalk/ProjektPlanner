@@ -60,10 +60,16 @@ class ContingentCreate(SQLModel):
 
 
 class PersonWithProjects(SQLModel):
+    # Mirrors every Person column (so the persons-table edit form can round-trip
+    # them without nulling unshown fields) plus the derived project_numbers.
     id: int
     name: str
     sage_employee_name: str
     default_weekly_hours: float
+    work_week_pattern: str | None = None
+    default_billing_rate: float | None = None
+    holiday_country: str | None = None
+    holiday_state: str | None = None
     project_numbers: list[str]
 
 
@@ -92,10 +98,7 @@ def list_persons_with_projects(session: SessionDep):
                 person_projects[m.person_id].append(num)
     return [
         PersonWithProjects(
-            id=p.id,
-            name=p.name,
-            sage_employee_name=p.sage_employee_name,
-            default_weekly_hours=p.default_weekly_hours,
+            **p.model_dump(),
             project_numbers=person_projects.get(p.id, []),
         )
         for p in all_persons
@@ -196,6 +199,11 @@ class PersonMembershipOut(SQLModel):
     to_date: date
     weekly_capacity_hours: float
     billing_rate_per_hour: float
+    # Carried so an edit from the person view round-trips them instead of resetting
+    # priority (feeds the milestone engine) or unassigning the Posten.
+    priority: int
+    vacation_days_taken: float
+    billing_position_id: int | None
 
 
 @router.get("/{person_id}/memberships", response_model=list[PersonMembershipOut])
@@ -219,6 +227,9 @@ def list_person_memberships(person_id: int, session: SessionDep):
                 to_date=m.to_date,
                 weekly_capacity_hours=m.weekly_capacity_hours,
                 billing_rate_per_hour=m.billing_rate_per_hour,
+                priority=m.priority,
+                vacation_days_taken=m.vacation_days_taken,
+                billing_position_id=m.billing_position_id,
             ))
     return result
 

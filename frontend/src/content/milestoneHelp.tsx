@@ -31,13 +31,26 @@ export function MilestoneHelpContent() {
       </section>
 
       <section>
-        <h4 className="font-semibold text-gray-800 mb-1">Verteilungsformel</h4>
+        <h4 className="font-semibold text-gray-800 mb-1">Verteilungsformel (Standardmodus)</h4>
         <p>
-          Globaler Skalierungsfaktor <code className="px-1 bg-gray-100 rounded">s = min(1, R / C<sub>max</sub>)</code>,
+          Ohne Positions-Modus gilt ein globaler Skalierungsfaktor <code className="px-1 bg-gray-100 rounded">s = min(1, R / C<sub>max</sub>)</code>,
           wobei <code className="px-1 bg-gray-100 rounded">R</code> das Restbudget (Gesamt − abgerechnete gesperrte Monate)
           und <code className="px-1 bg-gray-100 rounded">C<sub>max</sub></code> die Kosten bei voller Kapazität sind.
           Plan-Stunden = Verfügbar × s. So werden Budget und Kapazität nie überschritten.
         </p>
+      </section>
+
+      <section>
+        <h4 className="font-semibold text-gray-800 mb-1">Positions-Modus (Budget je Posten)</h4>
+        <p className="mb-1">
+          Ist der Positions-Modus aktiv, hat jeder Posten sein eigenes Budget. Verteilt wird
+          nach dem Prinzip <em>„Reserviert + Priorität“</em>:
+        </p>
+        <ul className="list-disc list-inside space-y-1">
+          <li><strong>Feste Posten</strong> werden bis zu ihrem <strong>eigenen</strong> Budget gefüllt (durch die MA-Kapazität gedeckelt) — ihr Budget ist ihnen reserviert.</li>
+          <li><strong>Überschreitbare Posten</strong> (Schalter am Posten) teilen sich anschließend das <strong>restliche Projektbudget</strong> — auch die Kapazität, die ein fester Posten nicht ausschöpfen konnte — und werden gemeinsam nach MA-Priorität gefüllt. Ein überschreitbarer Posten darf so sein eigenes Budget übersteigen.</li>
+          <li>Das <strong>Gesamtbudget bleibt die harte Grenze</strong>: reicht der geteilte Rest nicht für alle, bleibt der Posten mit dem <em>niedrigst-priorisierten</em> MA unvollständig. Ein Hinweis nennt dann den bindenden Deckel (Posten- oder Projektbudget).</li>
+        </ul>
       </section>
 
       <section>

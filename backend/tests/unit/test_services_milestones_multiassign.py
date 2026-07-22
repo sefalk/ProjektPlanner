@@ -83,21 +83,25 @@ def test_positions_capped_independently(session):
     assert abs(row_a.current_hours - 2.0) < 1e-6  # 200 € / 100 €·h⁻¹
 
 
-def test_overrunnable_position_funds_beyond_budget(session):
-    """WP3: a cheap OVERRUNNABLE position is funded to full capacity even past its budget,
-    while a hard position stays capped. So cheaper hours absorb what the expensive one can't."""
-    # A hard, tiny (2 h cap). B overrunnable with a tiny nominal budget (100 € @ 50/h = 2 h)
-    # but must fund to full capacity regardless.
-    proj, pos_a, pos_b, person = _setup(session, budget_a=200.0, budget_b=100.0, b_overrunnable=True)
+def test_overrunnable_position_shares_remaining_project_budget(session):
+    """WP3 korrigiert (#50): ein überschreitbarer Posten wird über sein eigenes Budget hinaus
+    gefüllt — aber nur mit dem Rest des PROJEKT-Budgets, den ein fester Posten kapazitäts-
+    bedingt nicht nutzt. Die Projektsumme bleibt <= Gesamtbudget (früher: unbegrenzt)."""
+    # A: fest, großes Budget (10000 €), das die MA-Kapazität nicht ausschöpft → gibt Rest frei.
+    # B: überschreitbar, winziges Nominalbudget (100 €) — absorbiert den frei gewordenen Rest.
+    proj, pos_a, pos_b, person = _setup(session, budget_a=10_000.0, budget_b=100.0, b_overrunnable=True)
     initialize_milestones(proj.id, session)
 
     ms, by_pos = _budgets(session, proj.id)
     row_a, row_b = by_pos[pos_a.id], by_pos[pos_b.id]
-    # A hard-capped at its budget (2 h); B funded far beyond its 2 h nominal budget.
-    assert abs(row_a.current_hours - 2.0) < 1e-6
-    assert row_b.current_hours > 2.0 + 1e-6
-    # B's planned cost exceeds its nominal budget — the allowed overrun.
-    assert row_b.current_hours * pos_b.billing_rate_per_hour > pos_b.budget_euros + 1e-6
+    cost_a = row_a.current_hours * pos_a.billing_rate_per_hour
+    cost_b = row_b.current_hours * pos_b.billing_rate_per_hour
+    # Projektsumme ist die harte Grenze.
+    assert cost_a + cost_b <= proj.total_budget_euros + 1e-6
+    # A kapazitätsgebunden unter seinem Budget → hat Rest freigegeben.
+    assert cost_a < pos_a.budget_euros - 1e-6
+    # B übersteigt sein eigenes Nominalbudget (nutzt den frei gewordenen Rest).
+    assert cost_b > pos_b.budget_euros + 1e-6
 
 
 def test_cap_reason_names_exhausted_position(session):

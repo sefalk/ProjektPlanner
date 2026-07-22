@@ -587,40 +587,89 @@ def distribute_over_positions(
     project_id: int,
     session: Session,
 ) -> dict[SlotKey, float]:
-    """Position-mode distribution (§21 P4): one independent bucket per line item.
+    """Position-mode distribution (§21 P4, korrigiert #50): 'Reserviert + Priorität'.
 
-    Each position distributes its own R_posten over only the assignments bound to it, at the
-    position's rate; buckets never borrow from one another (shifting hours between positions
-    = adjusting position budgets manually). A person assigned to several positions has one
-    assignment slot per position (WP2). Members not assigned to any position get 0 h.
+    Two phases, so the project total is a HARD cap while überschreitbare Posten stay flexible:
+
+    1. **Feste (nicht-überschreitbare) Posten** werden — wie bisher — je Posten bis zu ihrem
+       EIGENEN Restbudget gefüllt (gedeckelt durch MA-Kapazität), nach MA-Priorität innerhalb
+       des Postens. Ihr Budget ist ihnen reserviert.
+    2. **Überschreitbare Posten** teilen sich anschließend das RESTLICHE Projektbudget
+       (Gesamtbudget − reservierte Vorab-Commitments − die eben verplanten festen Anteile) und
+       werden gemeinsam nach MA-Priorität über alle überschreitbaren Posten hinweg gefüllt. So
+       darf ein überschreitbarer Posten die Kapazität aufnehmen, die ein fester Posten nicht
+       nutzen konnte (und dabei sein eigenes Budget übersteigen) — aber die Projektsumme wird
+       nie überschritten. Ist kein €-Gesamtbudget gesetzt, greift der Alt-Modus (volle Kapazität).
+
+    A person assigned to several positions has one assignment slot per position (WP2). Members
+    not assigned to any position get 0 h.
     """
     plan: dict[SlotKey, float] = dict.fromkeys(avail_map, 0.0)
-    for pos_id, pos in positions_by_id.items():
-        pos_keys = {
+    if not avail_map:
+        return plan
+
+    project = session.get(Project, project_id)
+    total_budget = (
+        project.total_budget_euros
+        if project and project.total_budget_euros and project.total_budget_euros > 0
+        else None
+    )
+
+    def _keys_for(pos_id: int) -> set[AssignmentKey]:
+        return {
             (m.person_id, m.billing_position_id)
             for m in memberships if m.billing_position_id == pos_id
         }
-        if not pos_keys:
+
+    # --- Phase 1: feste Posten, je bis zum eigenen Restbudget reserviert -------------------
+    fixed_cost = 0.0
+    for pos_id, pos in positions_by_id.items():
+        if pos.overrunnable:
             continue
+        pos_keys = _keys_for(pos_id)
         sub_avail = {k: h for k, h in avail_map.items() if k[0] in pos_keys}
         if not sub_avail:
             continue
         rate = pos.billing_rate_per_hour
         rates = {ak: rate for ak in pos_keys}
-        if pos.overrunnable:
-            # Cheap position (doc 23 WP3): no budget cap → fund to full capacity, so it
-            # can absorb the hours a hard (expensive) position cannot. The overrun itself
-            # is surfaced separately (WP6 diagnostics / Aufwand-nach-Posten panel).
-            plan.update(distribute_budget(sub_avail, rates, priorities, None))
-            continue
         base = _remaining_position_euro_budget(project_id, pos, exclude_months, session)
         override_cost = sum(
-            b.current_hours * rate
-            for b in override_rows
-            if b.billing_position_id == pos_id
+            b.current_hours * rate for b in override_rows if b.billing_position_id == pos_id
         )
         remaining = max(0.0, base - override_cost)
-        plan.update(distribute_budget(sub_avail, rates, priorities, remaining))
+        sub_plan = distribute_budget(sub_avail, rates, priorities, remaining)
+        plan.update(sub_plan)
+        fixed_cost += sum(h * rate for h in sub_plan.values())
+
+    # --- Phase 2: überschreitbare Posten teilen sich das restliche Projektbudget ----------
+    over_ids = [pid for pid, pos in positions_by_id.items() if pos.overrunnable]
+    over_keys: set[AssignmentKey] = set()
+    for pos_id in over_ids:
+        over_keys |= _keys_for(pos_id)
+    over_avail = {k: h for k, h in avail_map.items() if k[0] in over_keys}
+    if over_avail:
+        over_rates = {
+            ak: positions_by_id[pos_id].billing_rate_per_hour
+            for pos_id in over_ids
+            for ak in _keys_for(pos_id)
+        }
+        if total_budget is None:
+            # Kein €-Gesamtbudget → Alt-Verhalten: bis volle Kapazität.
+            plan.update(distribute_budget(over_avail, over_rates, priorities, None))
+        else:
+            r_project = _remaining_euro_budget(
+                project_id, total_budget, exclude_months,
+                build_rate_map(memberships, positions_by_id), session,
+            )
+            # Manuelle Overrides (in den neu berechneten Monaten) sind reservierte Commitments;
+            # _remaining_euro_budget lässt sie aus (liegen in exclude_months) → hier abziehen.
+            override_cost_all = sum(
+                b.current_hours * positions_by_id[b.billing_position_id].billing_rate_per_hour
+                for b in override_rows
+                if b.billing_position_id in positions_by_id
+            )
+            r_shared = max(0.0, r_project - override_cost_all - fixed_cost)
+            plan.update(distribute_budget(over_avail, over_rates, priorities, r_shared))
     return plan
 
 

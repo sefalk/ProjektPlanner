@@ -9,125 +9,11 @@ import YearCalendar from '../components/absence/YearCalendar'
 import AbsenceQuickCreateModal from '../components/absence/AbsenceQuickCreateModal'
 import { personColor, TYPE_LABELS, TYPE_SHORT } from '../lib/absenceColors'
 import { regionKey, regionLabel, regionShade } from '../lib/holidayRegions'
-import RegionOverrideSelect from '../components/absence/RegionOverrideSelect'
+import PersonForm from '../components/person/PersonForm'
+import PersonSettings from '../components/person/PersonSettings'
 
 type AbsenceType = 'vacation' | 'sick' | 'training' | 'other'
 const ALL_TYPES: AbsenceType[] = ['vacation', 'training', 'sick', 'other']
-
-const WORK_WEEK_PRESETS = [
-  { label: '40 h (5×8)', value: '8,8,8,8,8' },
-  { label: '32 h (4×8, Fr frei)', value: '8,8,8,8,0' },
-  { label: '32 h (4×8 + 4 Fr)', value: '7,7,7,7,4' },
-  { label: 'Benutzerdefiniert', value: 'custom' },
-]
-
-function PersonForm({ initial, onSave, onCancel }: {
-  initial?: Partial<Person>
-  onSave: (d: Omit<Person, 'id'>) => void
-  onCancel: () => void
-}) {
-  const presetValues = WORK_WEEK_PRESETS.map((p) => p.value).filter((v) => v !== 'custom')
-  const initPattern = initial?.work_week_pattern ?? null
-  const initPreset = initPattern && presetValues.includes(initPattern) ? initPattern : (initPattern ? 'custom' : '')
-  const [form, setForm] = useState({
-    name: initial?.name ?? '',
-    sage_employee_name: initial?.sage_employee_name ?? '',
-    default_weekly_hours: initial?.default_weekly_hours ?? 40,
-    work_week_pattern: initPattern as string | null,
-    default_billing_rate: initial?.default_billing_rate ?? null as number | null,
-    holiday_country: initial?.holiday_country ?? null as string | null,
-    holiday_state: initial?.holiday_state ?? null as string | null,
-  })
-  const [patternPreset, setPatternPreset] = useState(initPreset)
-
-  const handlePatternPreset = (val: string) => {
-    setPatternPreset(val)
-    if (val !== 'custom' && val !== '') {
-      setForm((f) => ({ ...f, work_week_pattern: val }))
-    } else if (val === '') {
-      setForm((f) => ({ ...f, work_week_pattern: null }))
-    }
-  }
-
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(form) }} className="space-y-3">
-      <div>
-        <label htmlFor="person-name" className="block text-xs font-medium text-gray-600 mb-1">Name (Anzeige)</label>
-        <input id="person-name"
-          required
-          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
-        />
-      </div>
-      <div>
-        <label htmlFor="person-sage" className="block text-xs font-medium text-gray-600 mb-1">Sage-Mitarbeitername</label>
-        <input id="person-sage"
-          required
-          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={form.sage_employee_name}
-          onChange={(e) => setForm({ ...form, sage_employee_name: e.target.value })}
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="person-hours" className="block text-xs font-medium text-gray-600 mb-1">Wochenstunden (Standard)</label>
-          <input id="person-hours"
-            required type="number" min={0} max={60} step={0.01}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.default_weekly_hours}
-            onChange={(e) => setForm({ ...form, default_weekly_hours: parseFloat(e.target.value) })}
-          />
-        </div>
-        <div>
-          <label htmlFor="person-rate" className="block text-xs font-medium text-gray-600 mb-1">Verrechnungssatz (€/h) <span className="font-normal text-gray-400">optional</span></label>
-          <input id="person-rate"
-            type="number" min={0} step={0.01}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={form.default_billing_rate ?? ''}
-            onChange={(e) => setForm({ ...form, default_billing_rate: e.target.value ? parseFloat(e.target.value) : null })}
-          />
-        </div>
-      </div>
-      <div>
-        <label htmlFor="person-pattern" className="block text-xs font-medium text-gray-600 mb-1">Arbeitswochenmuster <span className="font-normal text-gray-400">optional</span></label>
-        <select id="person-pattern"
-          className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          value={patternPreset}
-          onChange={(e) => handlePatternPreset(e.target.value)}
-        >
-          <option value="">– Standard (gleichmäßig) –</option>
-          {WORK_WEEK_PRESETS.map((p) => (
-            <option key={p.value} value={p.value}>{p.label}</option>
-          ))}
-        </select>
-        {patternPreset === 'custom' && (
-          <input
-            className="mt-1 w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="z.B. 8,8,8,8,4"
-            value={form.work_week_pattern ?? ''}
-            onChange={(e) => setForm({ ...form, work_week_pattern: e.target.value || null })}
-          />
-        )}
-      </div>
-      <RegionOverrideSelect
-        country={form.holiday_country}
-        state={form.holiday_state}
-        onChange={(c, s) => setForm({ ...form, holiday_country: c, holiday_state: s })}
-      />
-      <div className="flex justify-end gap-2 pt-2">
-        <button type="button" onClick={onCancel}
-          className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800">
-          Abbrechen
-        </button>
-        <button type="submit"
-          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
-          Speichern
-        </button>
-      </div>
-    </form>
-  )
-}
 
 export default function PersonsPage() {
   const qc = useQueryClient()
@@ -223,16 +109,6 @@ export default function PersonsPage() {
     onSuccess: () => {
       invalidatePersonData()
       setShowCreate(false)
-      setError(null)
-    },
-    onError: (e: Error) => setError(e.message),
-  })
-
-  const update = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Omit<Person, 'id'> }) => persons.update(id, data),
-    onSuccess: () => {
-      invalidatePersonData()
-      setEditPerson(null)
       setError(null)
     },
     onError: (e: Error) => setError(e.message),
@@ -477,7 +353,7 @@ export default function PersonsPage() {
                         Urlaub {currentYear}
                       </th>
                       <th className="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Projekte</th>
-                      <th className="px-4 py-2" />
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Aktionen</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-100">
@@ -492,7 +368,7 @@ export default function PersonsPage() {
                           key={p.id}
                           onClick={() => toggle(p.id)}
                           className={`cursor-pointer transition-colors ${sel ? 'hover:bg-gray-50' : 'bg-gray-50/40 hover:bg-gray-50'}`}
-                          title={sel ? 'Abwählen' : 'Auswählen'}
+                          title={sel ? `${p.name} abwählen (Kalender)` : `${p.name} auswählen (Kalender)`}
                         >
                           <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                             <input
@@ -540,9 +416,9 @@ export default function PersonsPage() {
                           </td>
                           <td className="px-4 py-2">
                             <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                              <button aria-label={`${p.name} öffnen`} onClick={() => navigate(`/persons/${p.id}`)} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><ArrowUpRight size={14} /></button>
-                              <button aria-label={`${p.name} bearbeiten`} onClick={() => { setEditPerson(p); setError(null) }} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><Pencil size={13} /></button>
-                              <button aria-label={`${p.name} löschen`} onClick={() => setConfirmDelete(p)} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
+                              <button title="Details öffnen" aria-label={`${p.name} öffnen`} onClick={() => navigate(`/persons/${p.id}`)} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><ArrowUpRight size={14} /></button>
+                              <button title="Person bearbeiten" aria-label={`${p.name} bearbeiten`} onClick={() => { setEditPerson(p); setError(null) }} className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><Pencil size={13} /></button>
+                              <button title="Person löschen" aria-label={`${p.name} löschen`} onClick={() => setConfirmDelete(p)} className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
                             </div>
                           </td>
                         </tr>
@@ -563,13 +439,10 @@ export default function PersonsPage() {
       )}
 
       {editPerson && (
-        <Modal title="Person bearbeiten" onClose={() => { setEditPerson(null); setError(null) }}>
-          <PersonForm
-            initial={editPerson}
-            onSave={(d) => update.mutate({ id: editPerson.id, data: d })}
-            onCancel={() => { setEditPerson(null); setError(null) }}
-          />
-        </Modal>
+        <PersonSettings
+          person={editPerson}
+          onClose={() => { setEditPerson(null); setError(null) }}
+        />
       )}
 
       {quickCreate && (
