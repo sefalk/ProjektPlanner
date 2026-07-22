@@ -12,6 +12,7 @@ DATABASE_URL env var / pydantic default.
 from collections.abc import Generator
 
 from sqlalchemy import event
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import settings
@@ -40,7 +41,15 @@ def create_db_and_tables() -> None:
 
 
 def seed_default_settings() -> None:
-    """Insert default settings rows if they do not yet exist."""
+    """Insert default settings rows if they do not yet exist.
+
+    Idempotent and multi-process safe (#42): with several uvicorn workers the
+    first start on an empty DB races — two workers both see a key missing and
+    both INSERT, tripping ``UNIQUE constraint failed: setting.key``. Each key is
+    therefore inserted in its own transaction and a concurrent-insert
+    IntegrityError is caught and rolled back (treated as "already seeded"). The
+    pre-check keeps the common case (already seeded) free of expected errors.
+    """
     from app.models.setting import Setting  # local import avoids circular deps at module load
 
     defaults = {
@@ -55,9 +64,15 @@ def seed_default_settings() -> None:
     }
     with Session(engine) as session:
         for key, value in defaults.items():
-            if session.get(Setting, key) is None:
-                session.add(Setting(key=key, value=value))
-        session.commit()
+            if session.get(Setting, key) is not None:
+                continue
+            session.add(Setting(key=key, value=value))
+            try:
+                session.commit()
+            except IntegrityError:
+                # Another worker inserted this key concurrently — that is the
+                # desired end state, so drop our pending row and carry on.
+                session.rollback()
 
 
 def get_session() -> Generator[Session, None, None]:  # pragma: no cover
