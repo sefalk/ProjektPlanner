@@ -49,6 +49,12 @@ Derived from the visual review on 2026-04-23. See individual plan documents for 
 |---|---|---|---|
 | 18 | [18-v07-calendar-utilization.md](18-v07-calendar-utilization.md) | Today indicator, utilization badge, overbooking cells, %/h toggle, project label in bars, overbooking validation | ✅ on dev |
 
+## Design docs (nicht chronologisch — Feature-Detailpläne)
+
+| # | Doc | Description | Status |
+|---|---|---|---|
+| 25 | [25-multi-user-tenancy.md](25-multi-user-tenancy.md) | Multi-User: logische Mandantentrennung (eine DB + `owner_id` + zentraler Filter), In-App-Auth (fastapi-users, Session, Invite-Token), Encryption at Rest, Übergang zu geteiltem Arbeitsbereich | 📋 Design |
+
 ## Current state (dev branch)
 
 Phase 1 complete. Phase 2 complete (Steps 13–17). Phase 3 complete (Step 18), app version v0.3.0. E2E suite: 56 tests across 9 files.
