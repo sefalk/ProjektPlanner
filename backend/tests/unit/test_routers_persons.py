@@ -55,6 +55,28 @@ def test_delete_person(client):
     assert client.get(f"/persons/{created['id']}").status_code == 404
 
 
+def test_with_projects_returns_full_person_fields(client):
+    """Regression: the persons-table edit form is fed from /with-projects.
+
+    It must carry every editable Person field (billing rate, work-week pattern,
+    holiday region) so re-saving a person does not null out unshown values.
+    """
+    created = client.post("/persons", json={
+        **_person(),
+        "work_week_pattern": "8,8,8,8,0",
+        "default_billing_rate": 95.0,
+        "holiday_country": "AT",
+        "holiday_state": "9",
+    }).json()
+    rows = client.get("/persons/with-projects").json()
+    row = next(r for r in rows if r["id"] == created["id"])
+    assert row["work_week_pattern"] == "8,8,8,8,0"
+    assert row["default_billing_rate"] == 95.0
+    assert row["holiday_country"] == "AT"
+    assert row["holiday_state"] == "9"
+    assert row["project_numbers"] == []
+
+
 # ---------------------------------------------------------------------------
 # Absences
 # ---------------------------------------------------------------------------
