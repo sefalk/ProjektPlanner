@@ -1,6 +1,12 @@
 {
   "header": "# Changelog\n\nAlle nennenswerten Änderungen dieses Projekts. Format nach Conventional Commits / SemVer.\n",
   "tagPrefix": "v",
+  "bumpFiles": [
+    { "filename": "package.json", "type": "json" },
+    { "filename": "package-lock.json", "type": "json" },
+    { "filename": "../backend/app/config.py", "updater": "scripts/py-version-updater.cjs" },
+    { "filename": "../backend/.env.example", "updater": "scripts/env-version-updater.cjs" }
+  ],
   "types": [
     { "type": "feat", "section": "Features" },
     { "type": "fix", "section": "Bugfixes" },
