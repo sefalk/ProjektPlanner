@@ -116,3 +116,19 @@ def test_superuser_sees_all_owners(client_for):
 
     numbers = {p["program_number"] for p in admin.get("/programs").json()}
     assert numbers == {"A-1", "B-1"}
+
+
+# ── per-owner settings (step 3b) ──────────────────────────────────────────────
+
+def test_settings_are_per_owner(client_for):
+    alice = client_for(user_id=1)
+    bob = client_for(user_id=2)
+
+    # First GET seeds each owner's own copy of the defaults.
+    assert alice.get("/settings").json()["default_vacation_days"] == "30"
+    assert bob.get("/settings").json()["default_vacation_days"] == "30"
+
+    # Alice changes hers; Bob's copy is untouched.
+    assert alice.put("/settings/default_vacation_days", json={"value": "25"}).status_code == 200
+    assert alice.get("/settings").json()["default_vacation_days"] == "25"
+    assert bob.get("/settings").json()["default_vacation_days"] == "30"

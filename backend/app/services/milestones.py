@@ -206,7 +206,9 @@ def _estimated_absence_override(
 
 
 def _get_setting_float(session: Session, key: str, default: float) -> float:
-    setting = session.get(Setting, key)
+    # Per-owner setting (doc 25): key is no longer the PK; the query is auto-scoped
+    # to the current owner by the central filter.
+    setting = session.exec(select(Setting).where(Setting.key == key)).first()
     if setting is None:
         return default
     try:

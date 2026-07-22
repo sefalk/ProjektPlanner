@@ -132,7 +132,10 @@ def create_person(person: Person, session: SessionDep):
         session.add(person)
         session.flush()
         # Auto-create vacation contingent for the current year using default_vacation_days setting.
-        setting = session.get(Setting, "default_vacation_days")
+        # Per-owner setting (doc 25): auto-scoped to the current owner by the central filter.
+        setting = session.exec(
+            select(Setting).where(Setting.key == "default_vacation_days")
+        ).first()
         default_days = float(setting.value) if setting else 30.0
         current_year = _date.today().year
         contingent = VacationContingent(

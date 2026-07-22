@@ -39,12 +39,13 @@ from app.models.milestone import Milestone, MilestonePersonBudget
 from app.models.person import Person, PersonAbsence, VacationContingent
 from app.models.program import Program
 from app.models.project import Project
+from app.models.setting import Setting
 from app.models.timebooking import ImportBatch, SagePositionMapping, SageProjectMapping, TimeBooking
 
 # Every table=True model carrying an owner_id column. The filter is applied for
 # each of these on every SELECT; SQLAlchemy silently ignores the ones not present
 # in a given statement, so listing all is safe (and keeps this the single source
-# of truth for "what is ownable"). Setting is added here in WP3 step 3b.
+# of truth for "what is ownable").
 OWNABLE_MODELS: tuple[type, ...] = (
     Program,
     Project,
@@ -61,6 +62,7 @@ OWNABLE_MODELS: tuple[type, ...] = (
     SageProjectMapping,
     SagePositionMapping,
     TimeBooking,
+    Setting,
 )
 
 _INFO_KEY = "owner"
