@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy, AlertTriangle } from 'lucide-react'
+import { ChevronLeft, RefreshCw, Lock, Unlock, FileText, Plus, Trash2, ChevronDown, ChevronRight, Pencil, Flag, RotateCcw, Mail, Copy, AlertTriangle, ArrowUpRight } from 'lucide-react'
 import {
   projects, persons, programs, invoices as invoiceApi, bookings as bookingsApi, positionMappings, ApiError,
   type Project, type Program, type ProjectMembership, type MonthlyInvoice, type MilestoneDetail, type TimeBooking, type ExclusionReason, type BillingPosition,
@@ -1943,6 +1943,10 @@ export default function ProjectDetailPage() {
                     key: 'actions', header: 'Aktionen',
                     render: (m: ProjectMembership) => (
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => navigate(`/persons/${m.person_id}`)}
+                          className="text-gray-400 hover:text-blue-500" title="Personendetails öffnen" aria-label="Personendetails öffnen"
+                        ><ArrowUpRight size={14} /></button>
                         <button
                           onClick={() => { setEditAssign({ personId: m.person_id, personName: personName(m.person_id) }); setError(null) }}
                           className="text-gray-400 hover:text-blue-500" title="Posten-Zuweisungen bearbeiten" aria-label="Posten-Zuweisungen bearbeiten"
