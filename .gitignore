@@ -31,6 +31,10 @@ backend/.coverage
 # Local runtime config (may contain absolute paths / usernames)
 backend/data_config.json
 
+# Deployment secrets — host-side only (keep the *.example templates)
+deploy/*.env
+!deploy/*.env.example
+
 # Real seed / production data — NEVER commit
 seed/real/
 data/

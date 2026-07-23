@@ -167,17 +167,31 @@ one DB (see issue #45). Host-side secrets live outside the repo at
 `/home/<user>/pp-secrets/`:
 
 ```bash
-# once: create the secrets dir, a self-signed cert, and the login
+# once: create the secrets dir, a self-signed cert, and the (nginx) login
 mkdir -p ~/pp-secrets
 openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
   -keyout ~/pp-secrets/key.pem -out ~/pp-secrets/cert.pem \
   -subj "/CN=$(hostname)" -addext "subjectAltName=IP:<host-ip>,DNS:$(hostname)"
 htpasswd -cB ~/pp-secrets/htpasswd <login-name>     # prompts for the password
 
+# once: app secrets — first-admin bootstrap + session signing key (see below)
+cp deploy/server-secrets.env.example ~/pp-secrets/server.env
+#   → edit ~/pp-secrets/server.env: set ADMIN_EMAIL + a strong ADMIN_PASSWORD,
+#     and AUTH_SECRET=$(openssl rand -hex 32).  chmod 600 ~/pp-secrets/server.env
+
 # start / update
 docker compose -f docker-compose.server.yml up -d --build
 #   → https://<host-ip>   (self-signed cert → browser warning is expected)
 ```
+
+**First login / entry point.** There is no built-in default admin. On the very
+first start with an empty database, the backend creates exactly one superuser
+from `ADMIN_EMAIL`/`ADMIN_PASSWORD` in `server.env` (idempotent — ignored once any
+user exists). Log in with those, then create invite tokens under **Einladungen**
+so colleagues can self-register. Registration is invite-only, so without this
+bootstrap nobody could get in. `AUTH_SECRET` **must** be a fresh random value
+(never the dev default); the session cookie is served `Secure` behind the
+forced-HTTPS proxy.
 
 Replace the self-signed cert with an internal-CA certificate to avoid the browser
 warning. Notes below apply analogously (backend not published; DB in the volume).

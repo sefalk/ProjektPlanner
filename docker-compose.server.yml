@@ -9,17 +9,28 @@
 # Host-side secrets (NOT in the repo), created once at /home/sfalkner/pp-secrets:
 #   cert.pem, key.pem   — TLS certificate + key (self-signed or internal CA)
 #   htpasswd            — login credentials (create with `htpasswd`, password is yours)
+#   server.env          — app secrets: first-admin bootstrap + AUTH_SECRET
+#                         (copy from deploy/server-secrets.env.example, then edit)
 services:
   backend:
     build:
       context: ./backend
       target: prod
     restart: unless-stopped
+    # App secrets (first-admin bootstrap, AUTH_SECRET, domain allowlist). Absolute
+    # host path so it lives with the other secrets and survives redeploys. Compose
+    # errors if the file is missing → you cannot deploy without deciding the admin
+    # credentials (better than a silent invite-only lockout on an empty DB).
+    env_file:
+      - /home/sfalkner/pp-secrets/server.env
     environment:
       - DATABASE_URL=sqlite:///./data/projektplanner.db
       - DEFAULT_HOLIDAY_COUNTRY=DE
       - DEFAULT_HOLIDAY_STATE=BY
       - DEBUG=false
+      # Behind the TLS-terminating proxy (all traffic is forced to HTTPS), so the
+      # session cookie is marked Secure. Not a secret → kept inline.
+      - AUTH_COOKIE_SECURE=true
     volumes:
       - backend_data:/app/data
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
