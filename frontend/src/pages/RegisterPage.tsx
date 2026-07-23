@@ -11,6 +11,8 @@ import { Loader2 } from 'lucide-react'
 import { auth, ApiError } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import AuthLayout from '../auth/AuthLayout'
+import PasswordChecklist from '../components/PasswordChecklist'
+import { isPasswordValid } from '../lib/passwordPolicy'
 
 /** Turn a fastapi-users / invite 400 body into a German message. */
 function messageFor(err: unknown): string {
@@ -85,6 +87,7 @@ export default function RegisterPage() {
             value={password} onChange={(e) => setPassword(e.target.value)}
             className="w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          <PasswordChecklist password={password} />
         </div>
         <div>
           <label htmlFor="reg-token" className="mb-1 block text-xs font-medium text-gray-600">Einladungs-Token</label>
@@ -100,7 +103,7 @@ export default function RegisterPage() {
         )}
 
         <button
-          type="submit" disabled={busy}
+          type="submit" disabled={busy || !isPasswordValid(password)}
           className="flex w-full items-center justify-center gap-2 rounded bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {busy && <Loader2 size={14} className="animate-spin" />}

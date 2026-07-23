@@ -18,6 +18,9 @@ from app.models.user import User
 
 _PW = PasswordHelper()
 
+# A password that satisfies the policy (#53): >=12 chars, upper+lower, digit, special.
+_GOOD_PW = "Pw123456789!"
+
 
 def _make_invite(session, token="invite-abc", expires_in_days=14, used_by=None):
     inv = InviteToken(
@@ -67,7 +70,7 @@ def test_register_with_valid_invite_succeeds_and_consumes_token(client, session)
     _make_invite(session, token="good-token")
     r = client.post(
         "/auth/register",
-        json={"email": "new@example.com", "password": "pw12345678", "invite_token": "good-token"},
+        json={"email": "new@example.com", "password": _GOOD_PW, "invite_token": "good-token"},
     )
     assert r.status_code == 201, r.text
     assert r.json()["email"] == "new@example.com"
@@ -76,7 +79,7 @@ def test_register_with_valid_invite_succeeds_and_consumes_token(client, session)
     # Token is now used → second attempt fails.
     r2 = client.post(
         "/auth/register",
-        json={"email": "other@example.com", "password": "pw12345678", "invite_token": "good-token"},
+        json={"email": "other@example.com", "password": _GOOD_PW, "invite_token": "good-token"},
     )
     assert r2.status_code == 400
 
@@ -95,12 +98,48 @@ def test_self_register_cannot_set_superuser(client, session):
     r = client.post(
         "/auth/register",
         json={
-            "email": "sneaky@example.com", "password": "pw12345678",
+            "email": "sneaky@example.com", "password": _GOOD_PW,
             "invite_token": "t2", "is_superuser": True,
         },
     )
     assert r.status_code == 201
     assert r.json()["is_superuser"] is False
+
+
+# ── password policy + domain allowlist + consume-last regression (#53) ─────────
+
+def test_register_weak_password_rejected_and_keeps_token(client, session):
+    """A weak password is rejected AND must not burn the invite token."""
+    _make_invite(session, token="weak-token")
+    r = client.post(
+        "/auth/register",
+        json={"email": "weak@example.com", "password": "short", "invite_token": "weak-token"},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "REGISTER_INVALID_PASSWORD"
+    # Token was NOT consumed → the same token now works with a strong password.
+    r2 = client.post(
+        "/auth/register",
+        json={"email": "weak@example.com", "password": _GOOD_PW, "invite_token": "weak-token"},
+    )
+    assert r2.status_code == 201, r2.text
+
+
+def test_register_disallowed_domain_rejected_and_keeps_token(client, session, monkeypatch):
+    from app.config import settings as app_settings
+    monkeypatch.setattr(app_settings, "auth_allowed_email_domains", "infoteam.de")
+    _make_invite(session, token="dom-token")
+    r = client.post(
+        "/auth/register",
+        json={"email": "x@example.com", "password": _GOOD_PW, "invite_token": "dom-token"},
+    )
+    assert r.status_code == 400
+    # Token survives the rejection → an allowed domain can still use it.
+    r2 = client.post(
+        "/auth/register",
+        json={"email": "y@infoteam.de", "password": _GOOD_PW, "invite_token": "dom-token"},
+    )
+    assert r2.status_code == 201, r2.text
 
 
 # ── login / session ──────────────────────────────────────────────────────────

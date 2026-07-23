@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # to disable. Never commit real values.
     admin_email: str = ""
     admin_password: str = ""
+    # Optional registration domain allowlist (#53). Comma-separated list of allowed
+    # e-mail domains, e.g. "infoteam.de,infoteam.com". Empty = any domain allowed.
+    # Defense-in-depth on top of the invite token; case-insensitive.
+    auth_allowed_email_domains: str = ""
 
 
 # Module-level singleton — import this where settings are needed.

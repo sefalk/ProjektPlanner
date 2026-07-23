@@ -74,12 +74,13 @@ def test_update_setting_not_found(client):
 
 
 # ---------------------------------------------------------------------------
-# GET /settings/database-path
+# GET /settings/database-path — admin-only (#53)
 # ---------------------------------------------------------------------------
 
 
-def test_get_database_path_returns_info(client):
-    r = client.get("/settings/database-path")
+def test_get_database_path_returns_info(client_for):
+    admin = client_for(is_superuser=True)
+    r = admin.get("/settings/database-path")
     assert r.status_code == 200
     data = r.json()
     assert "path" in data
@@ -88,17 +89,26 @@ def test_get_database_path_returns_info(client):
     assert isinstance(data["cloud_warning"], bool)
 
 
-def test_get_database_path_url_is_sqlite(client):
-    r = client.get("/settings/database-path")
+def test_get_database_path_url_is_sqlite(client_for):
+    admin = client_for(is_superuser=True)
+    r = admin.get("/settings/database-path")
     assert r.json()["url"].startswith("sqlite:///")
 
 
+def test_database_path_forbidden_for_non_admin(client_for):
+    """A regular (non-admin) user must not reach the instance-wide DB-path routes."""
+    member = client_for(is_superuser=False)
+    assert member.get("/settings/database-path").status_code == 403
+    assert member.put("/settings/database-path", json={"directory": "/tmp/x"}).status_code == 403
+
+
 # ---------------------------------------------------------------------------
-# PUT /settings/database-path
+# PUT /settings/database-path — admin-only (#53)
 # ---------------------------------------------------------------------------
 
 
-def test_set_database_path_copies_and_updates(client, tmp_path):
+def test_set_database_path_copies_and_updates(client_for, tmp_path):
+    admin = client_for(is_superuser=True)
     # Create a fake source DB file so shutil.copy2 has something to copy
     fake_db = tmp_path / "source" / "projektplanner.db"
     fake_db.parent.mkdir()
@@ -111,7 +121,7 @@ def test_set_database_path_copies_and_updates(client, tmp_path):
         patch("app.services.db_management._CONFIG_FILE", config_file),
         patch("app.services.db_management._live_db_path", return_value=fake_db),
     ):
-        r = client.put("/settings/database-path", json={"directory": str(target_dir)})
+        r = admin.put("/settings/database-path", json={"directory": str(target_dir)})
 
     assert r.status_code == 200
     data = r.json()
@@ -123,12 +133,14 @@ def test_set_database_path_copies_and_updates(client, tmp_path):
     assert "database_url" in cfg
 
 
-def test_set_database_path_empty_dir_returns_422(client):
-    r = client.put("/settings/database-path", json={"directory": "   "})
+def test_set_database_path_empty_dir_returns_422(client_for):
+    admin = client_for(is_superuser=True)
+    r = admin.put("/settings/database-path", json={"directory": "   "})
     assert r.status_code == 422
 
 
-def test_set_database_path_same_dir_returns_422(client, tmp_path):
+def test_set_database_path_same_dir_returns_422(client_for, tmp_path):
+    admin = client_for(is_superuser=True)
     fake_db = tmp_path / "projektplanner.db"
     fake_db.write_bytes(b"SQLite format 3\x00")
     config_file = tmp_path / "data_config.json"
@@ -137,12 +149,13 @@ def test_set_database_path_same_dir_returns_422(client, tmp_path):
         patch("app.services.db_management._CONFIG_FILE", config_file),
         patch("app.services.db_management._live_db_path", return_value=fake_db),
     ):
-        r = client.put("/settings/database-path", json={"directory": str(tmp_path)})
+        r = admin.put("/settings/database-path", json={"directory": str(tmp_path)})
 
     assert r.status_code == 422
 
 
-def test_set_database_path_cloud_warning(client, tmp_path):
+def test_set_database_path_cloud_warning(client_for, tmp_path):
+    admin = client_for(is_superuser=True)
     fake_db = tmp_path / "projektplanner.db"
     fake_db.write_bytes(b"SQLite format 3\x00")
     config_file = tmp_path / "data_config.json"
@@ -152,7 +165,7 @@ def test_set_database_path_cloud_warning(client, tmp_path):
         patch("app.services.db_management._CONFIG_FILE", config_file),
         patch("app.services.db_management._live_db_path", return_value=fake_db),
     ):
-        r = client.put("/settings/database-path", json={"directory": str(onedrive_dir)})
+        r = admin.put("/settings/database-path", json={"directory": str(onedrive_dir)})
 
     assert r.status_code == 200
     assert r.json()["cloud_warning"] is True

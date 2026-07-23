@@ -162,6 +162,16 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 - **Tests:** `frontend/src/auth/__tests__/auth.test.tsx` (API-Formkodierung, `me()`-401-ohne-Event, Auth-/Admin-Guard-Redirects, Login-Erfolg/Fehlbedienung, Session-Ablauf per Event). Suite: **36 grün**. Browser-verifiziert: Guard-Redirect, echter UI-Login mit Ziel-Redirect, Admin-Token → Registrierung → Auto-Login als Nicht-Admin, Nicht-Admin von `/invites` abgewiesen, Logout.
 - **Noch offen (WP5+):** Datenexport/-löschung im Account-Menü; Passwort-Reset-UI; ggf. „Angemeldet bleiben".
 
+### Nacharbeit: Account-Selbstverwaltung & Härtung (#53, auf `dev`)
+Kleine Härtungs-/Selbstverwaltungs-Punkte aus dem WP4-Review:
+- **Passwort-Policy** (geteilte Regeln): `backend/app/auth/password_policy.py` ist Single Source of Truth (≥12 Zeichen, Groß-/Kleinbuchstaben, Ziffer, Sonderzeichen); autoritativ via `UserManager.validate_password`. Frontend spiegelt die Regeln in `frontend/src/lib/passwordPolicy.ts` + `PasswordChecklist` → **Live-Checkliste** in Registrierung und Konto-Seite (Submit gesperrt bis erfüllt).
+- **E-Mail-Domain-Allowlist:** `AUTH_ALLOWED_EMAIL_DOMAINS` (Env, kommasepariert, leer = alle). Prüfung in `UserManager.create()` **vor** Token-Verbrauch. Defense-in-depth über dem Invite-Token.
+- **DB-Pfad admin-only:** `/settings/database-path` (GET+PUT) jetzt hinter `require_superuser` (instanzweite Aktion). Frontend blendet den Datenbankpfad-Abschnitt für Nicht-Admins aus.
+- **Konto-Seite** (`/account`, `AccountPage`): E-Mail und Passwort ändern via `PATCH /users/me`; aktuelles Passwort wird per Re-Login verifiziert, bevor die Änderung greift.
+- **Invite-Consume-Regression:** bestätigt/getestet, dass ein fehlgeschlagener Register-Versuch (schwaches Passwort, unerlaubte Domain, Dublette) den Token **nicht** verbraucht (validate-first / consume-last).
+- **Tests:** Backend `test_password_policy.py`, erweiterte `test_auth.py` (Policy/Domain/Consume-last) und `test_routers_settings.py` (DB-Pfad 403 für Nicht-Admin); Frontend `passwordPolicy.test.ts` + `AccountPage.test.tsx`. Backend **582 grün / 91 % Coverage**, Frontend **43 grün**. Browser-verifiziert.
+- **Bewusst nicht umgesetzt:** echte E-Mail-Verifikation (kein SMTP im LAN → Invite+Domain als Gate) und frei gewählter Username-Login (E-Mail bleibt Identität).
+
 ---
 
 ## 8. Offene Punkte für die Umsetzungsphase
