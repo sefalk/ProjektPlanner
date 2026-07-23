@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     default_holiday_state: str = "BY"
 
     # Application
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     debug: bool = False
 
     # Auth (multi-user, doc 25 WP2). Session-cookie carrying a signed JWT.
