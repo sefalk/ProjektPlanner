@@ -161,18 +161,18 @@ docker compose -f docker-compose.prod.yml down      # stop (data volume is kept)
 
 ### With login + HTTPS (server variant)
 
-`docker-compose.server.yml` puts a reverse proxy (TLS + HTTP Basic Auth) in front;
-the app itself is not published, only the proxy (ports 80/443). One shared login,
-one DB (see issue #45). Host-side secrets live outside the repo at
+`docker-compose.server.yml` puts a reverse proxy (TLS) in front; the app itself is
+not published, only the proxy (ports 80/443). Authentication is handled by the app
+(multi-user session login, v0.3.0+) — the earlier nginx Basic-Auth gate (#45) has
+been removed (WP6, #51). Host-side secrets live outside the repo at
 `/home/<user>/pp-secrets/`:
 
 ```bash
-# once: create the secrets dir, a self-signed cert, and the (nginx) login
+# once: create the secrets dir and a self-signed cert
 mkdir -p ~/pp-secrets
 openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
   -keyout ~/pp-secrets/key.pem -out ~/pp-secrets/cert.pem \
   -subj "/CN=$(hostname)" -addext "subjectAltName=IP:<host-ip>,DNS:$(hostname)"
-htpasswd -cB ~/pp-secrets/htpasswd <login-name>     # prompts for the password
 
 # once: app secrets — first-admin bootstrap + session signing key (see below)
 cp deploy/server-secrets.env.example ~/pp-secrets/server.env
