@@ -10,15 +10,19 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import tenancy  # noqa: F401 — registers the owner-filter ORM event listeners
+from app.auth.bootstrap import seed_admin_user
 from app.config import settings
-from app.db import create_db_and_tables, seed_default_settings
-from app.routers import calendar, imports, invoices, milestones, persons, programs, projects, settings as settings_router
+from app.db import create_db_and_tables
+from app.routers import auth, calendar, imports, invoices, milestones, persons, programs, projects, settings as settings_router
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     create_db_and_tables()
-    seed_default_settings()
+    # Default settings are seeded per owner on first access (doc 25, WP3), not
+    # globally at startup — settings are per-user now.
+    seed_admin_user()
     yield
 
 
@@ -37,6 +41,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(programs.router)
 app.include_router(projects.router)
 app.include_router(persons.router)

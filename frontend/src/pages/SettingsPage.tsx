@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Database, AlertTriangle, CheckCircle, RefreshCw, FolderOpen, CalendarDays } from 'lucide-react'
 import { settings, type DbPathInfo } from '../api'
 import PageHeader from '../components/PageHeader'
+import { useAuth } from '../auth/AuthContext'
 import { GERMAN_STATES, EXTRA_HOLIDAYS } from '../lib/holidayRegions'
 
 const HOLIDAY_KEYS = ['holiday_country', 'holiday_state', 'holiday_extra']
@@ -261,6 +262,7 @@ function DbPathSection() {
 
 export default function SettingsPage() {
   const qc = useQueryClient()
+  const { user } = useAuth()
   const [error, setError] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
@@ -334,8 +336,8 @@ export default function SettingsPage() {
           />
         )}
 
-        {/* Database path */}
-        <DbPathSection />
+        {/* Database path — instance-wide setting, admin only (#53) */}
+        {user?.is_superuser && <DbPathSection />}
 
       </div>
     </div>

@@ -13,13 +13,13 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.config import settings as config
 from app.models.person import Person
 from app.models.setting import Setting
 
-# Setting keys (seeded in db.seed_default_settings)
+# Setting keys (seeded per owner in db.ensure_owner_settings)
 KEY_COUNTRY = "holiday_country"
 KEY_STATE = "holiday_state"
 KEY_EXTRA = "holiday_extra"  # CSV of activated catalog keys below
@@ -35,7 +35,9 @@ EXTRA_HOLIDAY_CATALOG: dict[str, dict] = {
 
 
 def _get(session: Session, key: str, default: str) -> str:
-    row = session.get(Setting, key)
+    # Per-owner setting (doc 25): key is no longer the PK; the query is auto-scoped
+    # to the current owner by the central filter.
+    row = session.exec(select(Setting).where(Setting.key == key)).first()
     return row.value if row and row.value else default
 
 

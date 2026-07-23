@@ -18,6 +18,8 @@ class ImportBatch(ValidatedSQLModel, table=True):
     __tablename__ = "import_batch"
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     project_id: int = Field(foreign_key="project.id", index=True)
     imported_at: datetime
     source_filename: str | None = None  # null when data was pasted
@@ -32,9 +34,15 @@ class SageProjectMapping(ValidatedSQLModel, table=True):
     """
 
     __tablename__ = "sage_project_mapping"
+    # Multi-user (doc 25): sage_project_name is unique PER OWNER, not globally.
+    __table_args__ = (
+        UniqueConstraint("owner_id", "sage_project_name", name="uq_sage_mapping_owner_name"),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
-    sage_project_name: str = Field(unique=True, index=True, min_length=1)
+    # owner_id (doc 25): denormalised owner of the parent project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
+    sage_project_name: str = Field(index=True, min_length=1)
     project_id: int = Field(foreign_key="project.id", index=True)
 
 
@@ -48,6 +56,8 @@ class SagePositionMapping(ValidatedSQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent project.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     project_id: int = Field(foreign_key="project.id", index=True)
     sage_project_level: str = Field(min_length=1)
     billing_position_id: int = Field(foreign_key="billing_position.id", index=True)
@@ -72,6 +82,8 @@ class TimeBooking(ValidatedSQLModel, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    # owner_id (doc 25): denormalised owner of the parent project/person.
+    owner_id: int | None = Field(default=None, foreign_key="user.id", index=True)
     booking_date: date = Field(index=True)
     person_id: int = Field(foreign_key="person.id", index=True)
     project_id: int = Field(foreign_key="project.id", index=True)

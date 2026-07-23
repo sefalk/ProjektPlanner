@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Field, Session, SQLModel, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.enums import InvoiceStatus
 from app.models.invoice import InvoicePersonEntry, MonthlyInvoice
@@ -18,7 +19,7 @@ from app.services.invoices import (
     update_invoice_status,
 )
 
-router = APIRouter(tags=["invoices"])
+router = APIRouter(tags=["invoices"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 

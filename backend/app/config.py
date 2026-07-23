@@ -34,8 +34,29 @@ class Settings(BaseSettings):
     default_holiday_state: str = "BY"
 
     # Application
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     debug: bool = False
+
+    # Auth (multi-user, doc 25 WP2). Session-cookie carrying a signed JWT.
+    # auth_secret MUST be overridden in production (used to sign session tokens
+    # and password-reset/verify tokens). A fixed dev default keeps local runs and
+    # tests working without configuration.
+    auth_secret: str = "dev-insecure-secret-change-me-0123456789abcdef"
+    # Session lifetime in seconds (default 12h). No refresh tokens by design.
+    auth_session_lifetime: int = 60 * 60 * 12
+    # Cookie flags. Secure=True requires HTTPS; disabled by default for local http
+    # dev and flipped on in the server deployment (behind TLS).
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
+    # First-admin bootstrap: when both are set and NO user exists yet, a superuser
+    # is created on startup (breaks the invite-token chicken-and-egg). Leave empty
+    # to disable. Never commit real values.
+    admin_email: str = ""
+    admin_password: str = ""
+    # Optional registration domain allowlist (#53). Comma-separated list of allowed
+    # e-mail domains, e.g. "infoteam.de,infoteam.com". Empty = any domain allowed.
+    # Defense-in-depth on top of the invite token; case-insensitive.
+    auth_allowed_email_domains: str = ""
 
 
 # Module-level singleton — import this where settings are needed.

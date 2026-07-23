@@ -82,7 +82,9 @@ Diese Constraints sind heute **global** und würden Isolation brechen (User2 kö
 | `Project.project_number` | `models/project.py:17` `unique=True` | `(owner_id, project_number)` |
 | `SageProjectMapping.sage_project_name` | `models/timebooking.py:37` `unique=True` | `(owner_id, sage_project_name)` |
 
-**Bleibt global** (Referenzdatum, kein Nutzerbesitz): `Holiday` `(holiday_date, country, state)` (`models/holiday.py:20`). Kandidat für „bleibt global": der Feiertags-Cache und ggf. globale Defaults in `settings` — als eigene Entscheidung im WP1 zu fixieren.
+**Bleibt global** (Referenzdatum, kein Nutzerbesitz): `Holiday` `(holiday_date, country, state)` (`models/holiday.py:20`).
+
+**`Setting`:** **pro Owner** (Nutzerentscheidung 2026-07-22) — umgesetzt in **WP3 (Schritt 3b)**: Surrogat-`id`-PK + `owner_id` + `UNIQUE(owner_id, key)` (eine `(owner_id, key)`-Composite-PK scheidet aus, da `owner_id` nullable). Kein globales Startup-Seeding mehr; `db.ensure_owner_settings` seedet die Defaults pro Owner beim ersten Zugriff (owner-gescoped + `before_flush`-Stempel, race-safe). Die Lesepfade (milestones/persons/holiday_region) fallen bei fehlendem Key auf dieselben Defaults zurück, daher Verhalten vor/nach Seeding identisch.
 
 Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — auf `project_id`/`person_id` gekeyt) sind bereits über ihren Eltern-Owner geschützt und brauchen i. d. R. **keinen** eigenen `owner_id`, solange der Filter über den Join greift. Ob `owner_id` dennoch denormalisiert wird (einfacherer Filter, mehr Speicher), ist eine WP1-Abwägung.
 
@@ -114,18 +116,68 @@ Transitiv besessene Constraints (`membership`, `milestone`, `timebooking` — au
 
 | WP | Inhalt | Kern-Artefakte |
 |---|---|---|
-| **WP1** | Datenmodell: `user`, `invite_token`; `owner_id` auf besitzbaren Entitäten; Unique-Constraints pro Owner; Referenzdaten-Grenze fixieren; Alembic-Migration (frische DB) | `models/*`, Alembic |
-| **WP2** | Auth-Backend: `fastapi-users`, Session-Cookie, Invite-Token-Flow, Admin-Flag | `routers/auth.py`, `main.py` |
-| **WP3** | Zentraler Owner-Filter (ContextVar + `do_orm_execute`), Auto-Set von `owner_id` beim Insert; Admin-Bypass | `db.py` |
-| **WP4** | Frontend: Login/Registrierung (Invite), Auth-Guard/Redirect, Logout, Account-Menü | `frontend/` |
+| **WP1** ✅ | Datenmodell: `user`, `invite_token`; `owner_id` auf besitzbaren Entitäten; Unique-Constraints pro Owner; Referenzdaten-Grenze fixieren; Alembic-Migration (frische DB) | `models/*`, Alembic |
+| **WP2** ✅ | Auth-Backend: `fastapi-users`, Session-Cookie, Invite-Token-Flow, Admin-Flag | `routers/auth.py`, `main.py` |
+| **WP3** ✅ | Zentraler Owner-Filter (`session.info` + `do_orm_execute`), Auto-Set von `owner_id` beim Insert, Auth-Schutz aller CRUD-Router, `Setting` pro Owner; Admin-Bypass | `tenancy.py`, `auth/deps.py`, `routers/*` |
+| **WP4** ✅ | Frontend: Login/Registrierung (Invite), Auth-Guard/Redirect, Logout, Account-Menü, Admin-Invite-Verwaltung | `frontend/src/auth/*`, `frontend/src/pages/{Login,Register,Invites}Page.tsx`, `api.ts`, `App.tsx` |
 | **WP5** | Datenexport/-löschung pro User; DSGVO-Export pro `Person` (separat) | `routers/account.py`, `frontend/` |
 | **WP6** | Deployment: verschlüsseltes Volume + verschlüsselte Backups; Proxy-Basic-Auth durch App-Login ersetzen | `docker-compose.server.yml`, `deploy/` |
 | **später** | Übergang Modell A: Teams/Rollen/Sichtbarkeit als ACL-Schicht über `owner_id` (Filter aufweichen) | — |
 
+### Umsetzungsstand WP1 (auf `dev`)
+- **Neue Modelle:** `models/user.py` (`User`, fastapi-users-kompatible Felder, int-PK, `is_superuser` = Admin/Filter-Bypass), `models/invite_token.py` (`InviteToken`).
+- **`owner_id`** (nullable FK → `user.id`, indiziert) auf allen 15 besitzbaren Tabellen (Root + Kinder **denormalisiert**, s. §8-Entscheidung). Referenzdaten `holiday` bleibt global; `user`/`invite_token` tragen kein `owner_id`.
+- **Composite-Uniques** `(owner_id, feld)` für `program_number`, `project_number`, `sage_employee_name`, `sage_project_name`.
+- **App-Level-Duplikatprüfung** in den vier CRUD-Routern (create+update) statt Verlass auf den DB-Constraint — verhält sich in WP1 (owner NULL) korrekt und wird in WP3 automatisch owner-gescoped.
+- **Alembic** `e7a1c9d2f3b4` (batch-Mode, Guards, Up-/Downgrade gegen Wegwerf-DB validiert). Prod baut per `alembic upgrade head`, daher vollständige Migration.
+- **Tests:** `tests/unit/test_models_owner_tenancy.py` (owner_id-Präsenz, Per-Owner-Eindeutigkeit, Auth-Tabellen). Suite: 554 grün.
+
+### Umsetzungsstand WP2 (auf `dev`)
+- **Bibliothek:** `fastapi-users` 15 (pwdlib argon2/bcrypt, pyjwt). Neue Dependency in `pyproject.toml`.
+- **Sync-Adapter:** `app/auth/user_db.py` implementiert die `BaseUserDatabase` synchron auf der bestehenden sync-`Session` — vermeidet eine zweite async-Engine (aiosqlite) auf derselben SQLite-Datei (Locking-Risiko). Methoden sind `async def`, führen aber sync-Queries aus (für diese Last unkritisch).
+- **Transport/Strategy:** httpOnly-**Session-Cookie** (`projektplannerauth`, secure/samesite konfigurierbar) mit **JWT** (HS256, 12 h, kein Refresh). Logout löscht das Cookie; das kurzlebige JWT läuft dann aus. Bewusst gewählt statt DB-Sessions (keine Extra-Tabelle) und statt Bearer/localStorage (XSS-sicher).
+- **Registrierungs-Gate:** `UserManager.create` validiert & verbraucht das Einmal-Invite-Token (`app/auth/manager.py`), erst nach erfolgreicher Erstellung wird es als benutzt markiert. Selbst-Registrierung kann sich **nicht** zum Admin machen (`safe=True`).
+- **Admin:** `is_superuser`. Invite-Verwaltung nur für Admins (`POST/GET /auth/invites`). **First-Admin-Bootstrap** (`app/auth/bootstrap.py`): via `ADMIN_EMAIL`/`ADMIN_PASSWORD` bei leerer User-Tabelle beim Start — löst die Henne-Ei-Situation.
+- **Routen:** `routers/auth.py` mountet `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET/PATCH /users/me`, `GET/…/users/{id}`, plus `/auth/invites`. Passwort-Reset/Verify-Router bewusst noch weggelassen (Admin-gestützter Reset später).
+- **Noch nicht:** Der Owner-Filter greift erst in **WP3** — die CRUD-Endpunkte sind aktuell noch nicht auth-geschützt/gefiltert. Config: `AUTH_SECRET` (in Prod setzen!), Cookie-/Session-Flags, Admin-Bootstrap in `.env.example`.
+- **Tests:** `tests/unit/test_auth.py` (Invite-Gate, Login/Session, /users/me, Admin-only Invites, Bootstrap-Idempotenz). Suite: 567 grün, Coverage 91%.
+
+### Umsetzungsstand WP3 (auf `dev`)
+- **Bindung an die Session, nicht ContextVar:** Der Owner wird **einmal** an die `Session` gebunden (`session.info["owner"]`, `app/tenancy.py`). Grund: FastAPI fährt sync-Endpunkte und `yield`-Dependencies im Threadpool — ein dort gesetzter `ContextVar` propagiert nicht zuverlässig in den Endpunkt. Die Session ist dagegen exakt das Objekt, auf dem jede Query läuft → leck-sicher by construction.
+- **Zwei globale ORM-Event-Listener** (`tenancy.py`):
+  - `do_orm_execute` hängt für jede der `OWNABLE_MODELS` ein `with_loader_criteria(owner_id == uid, include_aliases=True)` an **jedes SELECT** (Relationship-/Column-Lazy-Loads ausgenommen). Superuser & unbound-Sessions: kein Filter.
+  - `before_flush` erzwingt die Owner-Invariante: neue Zeilen werden gestempelt (Client-gesendetes `owner_id` ignoriert), und bei Updates wird `owner_id` aus der History wiederhergestellt (per CRUD **nicht** änderbar). Fixt u. a. das Blanking durch `model_dump(exclude_unset)` auf `ValidatedSQLModel`.
+- **Auth-Schutz:** `owner_context`-Dependency (`app/auth/deps.py`) hängt an allen **acht** CRUD-Routern (`dependencies=[…]`) → 401 ohne Login, Daten pro Owner isoliert. `/auth`, `/users`, `/health` bleiben ungeschützt.
+- **App-Level-Duplikatprüfung** in den Update-Handlern (program/project/person/mapping) **vor** die Mutation gezogen: sonst schreibt der von der Prüf-Query ausgelöste Autoflush den Konfliktwert und der per-Owner-UNIQUE kippt (500 statt 409).
+- **`Setting` pro Owner (Schritt 3b):** Surrogat-`id`-PK + `owner_id` + `UNIQUE(owner_id, key)`; kein globales Startup-Seeding mehr — `db.ensure_owner_settings` seedet die Defaults pro Owner beim ersten Zugriff (`GET/PUT /settings`, race-safe). Alle `session.get(Setting, key)`-Lesepfade (holiday_region, milestones, persons) auf owner-gescopte Query umgestellt; Fallback-Defaults dort unverändert. Migration `a1b2c3d4e5f6` (Rebuild, reversibel validiert).
+- **Tests:** `tests/unit/test_tenancy.py` (Auth-Pflicht, Lese-Isolation, Auto-Stempel, owner_id nicht schmuggel-/änderbar, per-Owner-Eindeutigkeit, Admin-Bypass, Settings pro Owner), `test_db_seeding.py` neu auf per-Owner. `conftest`: `client` (Owner 1), `client_for` (header-getaggte Mehr-Owner-Clients gegen eine DB). Suite: 576 grün, Coverage 91%.
+- **Noch offen (WP4+):** Frontend hat noch keinen Login/Guard; `owner_id` bleibt nullable (spätere NOT-NULL-Verschärfung möglich); `AUTH_SECRET` vor Prod setzen.
+
+### Umsetzungsstand WP4 (auf `dev`)
+- **Auth-State im Client:** `frontend/src/auth/AuthContext.tsx` bootstrappt den User einmal aus `GET /users/me` (httpOnly-Cookie, der Client sieht nie ein Token). Ein globales `auth:unauthorized`-Event (im API-Layer bei **jedem** 401 gefeuert, außer beim Bootstrap-`me()`) setzt den User zurück → der Guard leitet bei abgelaufener Session zur Anmeldung.
+- **Guards:** `RequireAuth` (Spinner während Bootstrap, sonst Redirect nach `/login` mit gemerktem Ziel) und `RequireAdmin` (Superuser-only, sonst zurück auf `/calendar`). Öffentliche Routen `/login` und `/register` liegen außerhalb des Guards; die gesamte App-Shell dahinter.
+- **Login/Registrierung:** `LoginPage` (form-kodierter OAuth2-Login, dann `refresh()` + Redirect aufs Ziel), `RegisterPage` (E-Mail/Passwort/Invite-Token; nach Erfolg direkt Auto-Login, da `register` keine Session öffnet; Backend-400 → sprechende deutsche Meldungen für ungültiges/verbrauchtes/abgelaufenes Token, schwaches Passwort, Dublette).
+- **Account-Menü** in der Sidebar: E-Mail, Administrator-Badge (nur Superuser), Abmelden. **Einladungen-Nav + `InvitesPage`** nur für Admins (Token erzeugen, Liste mit Status offen/verwendet/abgelaufen, Copy-to-Clipboard).
+- **API-Layer** (`api.ts`): neuer `auth`-Namespace (`me/login/logout/register/invites`); `me()` nutzt bare-fetch (401 = ausgeloggt, kein Event); alle anderen 401 → `AUTH_UNAUTHORIZED_EVENT`.
+- **Tests:** `frontend/src/auth/__tests__/auth.test.tsx` (API-Formkodierung, `me()`-401-ohne-Event, Auth-/Admin-Guard-Redirects, Login-Erfolg/Fehlbedienung, Session-Ablauf per Event). Suite: **36 grün**. Browser-verifiziert: Guard-Redirect, echter UI-Login mit Ziel-Redirect, Admin-Token → Registrierung → Auto-Login als Nicht-Admin, Nicht-Admin von `/invites` abgewiesen, Logout.
+- **Noch offen (WP5+):** Datenexport/-löschung im Account-Menü; Passwort-Reset-UI; ggf. „Angemeldet bleiben".
+
+### Nacharbeit: Account-Selbstverwaltung & Härtung (#53, auf `dev`)
+Kleine Härtungs-/Selbstverwaltungs-Punkte aus dem WP4-Review:
+- **Passwort-Policy** (geteilte Regeln): `backend/app/auth/password_policy.py` ist Single Source of Truth (≥12 Zeichen, Groß-/Kleinbuchstaben, Ziffer, Sonderzeichen); autoritativ via `UserManager.validate_password`. Frontend spiegelt die Regeln in `frontend/src/lib/passwordPolicy.ts` + `PasswordChecklist` → **Live-Checkliste** in Registrierung und Konto-Seite (Submit gesperrt bis erfüllt).
+- **E-Mail-Domain-Allowlist:** `AUTH_ALLOWED_EMAIL_DOMAINS` (Env, kommasepariert, leer = alle). Prüfung in `UserManager.create()` **vor** Token-Verbrauch. Defense-in-depth über dem Invite-Token.
+- **DB-Pfad admin-only:** `/settings/database-path` (GET+PUT) jetzt hinter `require_superuser` (instanzweite Aktion). Frontend blendet den Datenbankpfad-Abschnitt für Nicht-Admins aus.
+- **Konto-Seite** (`/account`, `AccountPage`): E-Mail und Passwort ändern via `PATCH /users/me`; aktuelles Passwort wird per Re-Login verifiziert, bevor die Änderung greift.
+- **Invite-Consume-Regression:** bestätigt/getestet, dass ein fehlgeschlagener Register-Versuch (schwaches Passwort, unerlaubte Domain, Dublette) den Token **nicht** verbraucht (validate-first / consume-last).
+- **Tests:** Backend `test_password_policy.py`, erweiterte `test_auth.py` (Policy/Domain/Consume-last) und `test_routers_settings.py` (DB-Pfad 403 für Nicht-Admin); Frontend `passwordPolicy.test.ts` + `AccountPage.test.tsx`. Backend **582 grün / 91 % Coverage**, Frontend **43 grün**. Browser-verifiziert.
+- **Bewusst nicht umgesetzt:** echte E-Mail-Verifikation (kein SMTP im LAN → Invite+Domain als Gate) und frei gewählter Username-Login (E-Mail bleibt Identität).
+
 ---
 
 ## 8. Offene Punkte für die Umsetzungsphase
-- Referenzdaten-Grenze endgültig festlegen (Feiertags-Cache & welche `settings` global bleiben).
-- `owner_id` denormalisiert auf Kind-Tabellen vs. Filter über Join (Performance vs. Einfachheit).
-- Invite-Token: Ablaufzeit, Mehrfach-Kontingent (1 Token = 1 Account) — Default: einmalig, mit Ablauf.
-- Passwort-Policy / Reset-Weg ohne SMTP (Admin-gestützter Reset?).
+- ~~`owner_id` denormalisiert auf Kind-Tabellen vs. Filter über Join.~~ **Entschieden (WP1): denormalisiert** — jede besitzbare Tabelle trägt `owner_id`, damit der zentrale Filter (`with_loader_criteria`) uniform ohne Join greift und keine Route ihn „vergessen" kann. Speicher-Overhead bei dieser App-Größe vernachlässigbar.
+- ~~Referenzdaten-Grenze.~~ **Entschieden:** `holiday` bleibt global; `setting` ist ab WP3 pro-Owner (s. §5.1).
+- ~~`owner_id` ist in WP1 **nullable**; WP3 setzt es beim Insert automatisch und erzwingt den Filter.~~ **Umgesetzt (WP3):** Auto-Set + zentraler Filter aktiv. `owner_id` bleibt vorerst nullable; eine spätere Migration kann auf NOT NULL verschärfen, sobald jede Zeile nachweislich einen Owner hat.
+- Invite-Token: Ablaufzeit, Mehrfach-Kontingent (1 Token = 1 Account) — Default: einmalig, mit Ablauf (WP2).
+- Passwort-Policy / Reset-Weg ohne SMTP (Admin-gestützter Reset?) (WP2).
+- **Bestehende Dev-DBs migrieren (bei WP4-Browserverifikation entdeckt):** Der Startup nutzt `create_db_and_tables()` (`create_all`) — legt **neue Tabellen** an (`user`, `invite_token`), ergänzt aber **keine Spalten** auf bestehenden Tabellen. Eine Dev-DB, die vor WP1 angelegt wurde (Alembic-Stand vor `e7a1c9d2f3b4`), hat daher **kein `owner_id`** → für Nicht-Admins schlägt jede gefilterte Query fehl (500), Superuser (Bypass) merken es nicht. Fix: `alembic upgrade head` auf die Dev-DB (bzw. frische DB, da die gehostete Instanz ohnehin leer startet, §1). Prod ist nicht betroffen (baut per `alembic upgrade head`).

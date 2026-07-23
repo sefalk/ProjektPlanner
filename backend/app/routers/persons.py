@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Field, Session, SQLModel, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.enums import AbsenceDaySegment, AbsenceStatus, AbsenceType
 from app.models.person import Person, PersonAbsence, VacationContingent
@@ -13,7 +14,7 @@ from app.models.project import Project
 from app.models.setting import Setting
 from app.services.planning import absence_booking, absence_summary
 
-router = APIRouter(prefix="/persons", tags=["persons"])
+router = APIRouter(prefix="/persons", tags=["persons"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -122,11 +123,19 @@ def batch_absence_summary(session: SessionDep, year: int | None = None):
 def create_person(person: Person, session: SessionDep):
     from datetime import date as _date
     person.id = None
+    # App-level duplicate check (doc 25): sage_employee_name is unique per-owner. This
+    # query is auto-scoped to the current owner by WP3's filter; IntegrityError stays
+    # as a race backstop.
+    if session.exec(select(Person).where(Person.sage_employee_name == person.sage_employee_name)).first():
+        raise HTTPException(409, "sage_employee_name already exists.")
     try:
         session.add(person)
         session.flush()
         # Auto-create vacation contingent for the current year using default_vacation_days setting.
-        setting = session.get(Setting, "default_vacation_days")
+        # Per-owner setting (doc 25): auto-scoped to the current owner by the central filter.
+        setting = session.exec(
+            select(Setting).where(Setting.key == "default_vacation_days")
+        ).first()
         default_days = float(setting.value) if setting else 30.0
         current_year = _date.today().year
         contingent = VacationContingent(
@@ -157,6 +166,16 @@ def update_person(person_id: int, data: Person, session: SessionDep):
     if not person:
         raise HTTPException(404, "Person not found.")
     update = data.model_dump(exclude_unset=True, exclude={"id"})
+    # App-level duplicate check (doc 25): reject a sage_employee_name already used by
+    # another of this owner's persons. Auto-scoped to the owner by WP3's filter. Run
+    # BEFORE mutating `person`, else the autoflush the query triggers would write the
+    # conflicting value and trip the per-owner UNIQUE constraint (500 instead of 409).
+    new_name = update.get("sage_employee_name", person.sage_employee_name)
+    dup = session.exec(
+        select(Person).where(Person.sage_employee_name == new_name, Person.id != person_id)
+    ).first()
+    if dup:
+        raise HTTPException(409, "sage_employee_name already exists.")
     for field, value in update.items():
         setattr(person, field, value)
     try:

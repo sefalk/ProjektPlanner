@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from app.auth.deps import owner_context
 from app.db import get_session
 from app.models.program import Program
 from app.models.project import Project
 
-router = APIRouter(prefix="/programs", tags=["programs"])
+router = APIRouter(prefix="/programs", tags=["programs"], dependencies=[Depends(owner_context)])
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
@@ -21,6 +22,11 @@ def list_programs(session: SessionDep, skip: int = 0, limit: int = 100):
 @router.post("", response_model=Program, status_code=201)
 def create_program(program: Program, session: SessionDep):
     program.id = None
+    # App-level duplicate check (doc 25): program_number is unique per-owner. This
+    # query is auto-scoped to the current owner by WP3's filter; IntegrityError stays
+    # as a race backstop.
+    if session.exec(select(Program).where(Program.program_number == program.program_number)).first():
+        raise HTTPException(409, "Program number already exists.")
     try:
         session.add(program)
         session.commit()
@@ -52,6 +58,16 @@ def update_program(program_id: int, data: Program, session: SessionDep):
     if not program:
         raise HTTPException(404, "Program not found.")
     update = data.model_dump(exclude_unset=True, exclude={"id"})
+    # App-level duplicate check (doc 25): reject a program_number already used by
+    # another of this owner's programs. Auto-scoped to the owner by WP3's filter. Run
+    # BEFORE mutating `program`, else the autoflush the query triggers would write the
+    # conflicting value and trip the per-owner UNIQUE constraint (500 instead of 409).
+    new_number = update.get("program_number", program.program_number)
+    dup = session.exec(
+        select(Program).where(Program.program_number == new_number, Program.id != program_id)
+    ).first()
+    if dup:
+        raise HTTPException(409, "Program number already exists.")
     for field, value in update.items():
         setattr(program, field, value)
     try:
