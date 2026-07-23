@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, SQLModel, select
 
-from app.auth.deps import owner_context
+from app.auth.deps import owner_context, require_superuser
 from app.db import ensure_owner_settings, get_session
 from app.models.setting import Setting
 from app.services import db_management
@@ -49,18 +49,20 @@ def get_settings(session: SessionDep):
 # ---------------------------------------------------------------------------
 
 
-@router.get("/database-path", response_model=DbPathInfo)
+@router.get("/database-path", response_model=DbPathInfo, dependencies=[Depends(require_superuser)])
 def get_database_path():
-    """Return the current database file location."""
+    """Return the current database file location. Admin-only (#53)."""
     return db_management.get_db_info()
 
 
-@router.put("/database-path", response_model=DbPathResult)
+@router.put("/database-path", response_model=DbPathResult, dependencies=[Depends(require_superuser)])
 def set_database_path(body: DbPathUpdate):
     """Copy the database to a new directory and update the path pointer.
 
-    The backend must be restarted for the change to take full effect.
-    Returns restart_required=True and a cloud_warning flag when the target
+    Admin-only (#53): the database path is an instance-wide setting — the copy
+    affects every tenant and needs a backend restart, so it must not be reachable
+    by a regular user. The backend must be restarted for the change to take full
+    effect. Returns restart_required=True and a cloud_warning flag when the target
     path looks like a cloud-sync folder (OneDrive, Dropbox, etc.).
     """
     try:

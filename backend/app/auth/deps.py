@@ -15,7 +15,7 @@ filter (see ``app/tenancy.py``).
 
 from __future__ import annotations
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from sqlmodel import Session
 
 from app.auth.backend import current_active_user
@@ -30,4 +30,16 @@ def owner_context(
 ) -> User:
     """Authenticate the caller and bind them as the session's owner."""
     bind_owner(session, user_id=user.id, is_superuser=user.is_superuser)  # type: ignore[arg-type]
+    return user
+
+
+def require_superuser(user: User = Depends(owner_context)) -> User:
+    """Guard for instance-wide, admin-only actions (#53).
+
+    Builds on ``owner_context`` (so it also binds the owner and is covered by the
+    test suite's single dependency override) and additionally requires the admin
+    flag. Use as a per-route dependency on routers already bound to owner_context.
+    """
+    if not user.is_superuser:
+        raise HTTPException(status_code=403, detail="Diese Aktion ist Administratoren vorbehalten.")
     return user

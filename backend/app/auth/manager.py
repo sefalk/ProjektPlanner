@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, Request
 from fastapi_users import BaseUserManager, IntegerIDMixin
+from fastapi_users.exceptions import InvalidPasswordException
 from sqlmodel import select
 
+from app.auth.password_policy import password_problems
 from app.auth.user_db import SQLModelUserDatabase, get_user_db
 from app.config import settings
 from app.models.invite_token import InviteToken
@@ -28,10 +30,13 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
     async def create(self, user_create, safe: bool = False, request: Request | None = None) -> User:
         """Consume a valid one-time invite token, then create the user.
 
-        The token is validated BEFORE creating the user and marked used only
-        after the user is successfully created, so a failed registration does
-        not burn the token.
+        Validation order matters: the e-mail domain and invite token are checked,
+        then ``super().create`` validates the password and inserts the user. The
+        token is marked used only AFTER the user is successfully created, so a
+        rejected registration (bad domain, weak password, duplicate e-mail) does
+        NOT burn the token (#53, regression-tested).
         """
+        self._require_allowed_domain(getattr(user_create, "email", ""))
         invite = self._require_valid_invite(getattr(user_create, "invite_token", ""))
         user = await super().create(user_create, safe=safe, request=request)
         invite.used_by = user.id
@@ -39,6 +44,27 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
         self.user_db.session.add(invite)
         self.user_db.session.commit()
         return user
+
+    async def validate_password(self, password: str, user) -> None:
+        """Enforce the shared password policy (app/auth/password_policy.py, #53)."""
+        problems = password_problems(password)
+        if problems:
+            raise InvalidPasswordException(reason="Passwort benötigt: " + ", ".join(problems) + ".")
+
+    @staticmethod
+    def _require_allowed_domain(email: str) -> None:
+        """Reject e-mail domains outside the configured allowlist (#53).
+
+        Empty allowlist = every domain allowed. Comparison is case-insensitive.
+        """
+        raw = (settings.auth_allowed_email_domains or "").strip()
+        if not raw:
+            return
+        allowed = {d.strip().lower() for d in raw.split(",") if d.strip()}
+        domain = email.rsplit("@", 1)[-1].strip().lower() if "@" in email else ""
+        if domain not in allowed:
+            pretty = ", ".join(sorted(allowed))
+            raise HTTPException(400, f"Registrierung nur mit E-Mail-Adressen dieser Domains: {pretty}.")
 
     def _require_valid_invite(self, token: str) -> InviteToken:
         token = (token or "").strip()

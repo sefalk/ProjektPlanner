@@ -1,5 +1,5 @@
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { FolderOpen, Users, Briefcase, Map, LayoutDashboard, CalendarDays, ArrowDownToLine, Settings, Ticket, LogOut, ShieldCheck } from 'lucide-react'
+import { FolderOpen, Users, Briefcase, Map, LayoutDashboard, CalendarDays, ArrowDownToLine, Settings, Ticket, LogOut, ShieldCheck, UserCog } from 'lucide-react'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectDetailPage from './pages/ProjectDetailPage'
 import PersonsPage from './pages/PersonsPage'
@@ -9,6 +9,7 @@ import CalendarPage from './pages/CalendarPage'
 import ImportPage from './pages/ImportPage'
 import PersonDetailPage from './pages/PersonDetailPage'
 import SettingsPage from './pages/SettingsPage'
+import AccountPage from './pages/AccountPage'
 import InvitesPage from './pages/InvitesPage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
@@ -42,6 +43,10 @@ function AccountMenu() {
           </span>
         )}
       </div>
+      <NavLink to="/account" className={navLinkClass}>
+        <UserCog size={15} />
+        Konto
+      </NavLink>
       <button
         onClick={() => { void logout() }}
         className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
@@ -106,6 +111,7 @@ function AppShell() {
           <Route path="/programs" element={<ProgramsPage />} />
           <Route path="/mappings" element={<MappingsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/account" element={<AccountPage />} />
           <Route element={<RequireAdmin />}>
             <Route path="/invites" element={<InvitesPage />} />
           </Route>

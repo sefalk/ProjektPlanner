@@ -670,6 +670,9 @@ export const auth = {
   register: (d: { email: string; password: string; invite_token: string }) =>
     req<User>('POST', '/auth/register', d),
 
+  /** Update the current account (self-service). Send only the fields that change. */
+  updateMe: (d: { email?: string; password?: string }) => req<User>('PATCH', '/users/me', d),
+
   invites: {
     list: () => req<Invite[]>('GET', '/auth/invites'),
     create: (expiresInDays: number | null = 14) =>
